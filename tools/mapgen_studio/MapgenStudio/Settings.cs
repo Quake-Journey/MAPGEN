@@ -110,6 +110,8 @@ public sealed class Settings
                 case "opt_new_water": s.Options = s.Options with { NewWater = Clamp(value, -1, 100, -1) }; break;
                 case "opt_new_slime": s.Options = s.Options with { NewSlime = Clamp(value, -1, 100, -1) }; break;
                 case "opt_new_lava": s.Options = s.Options with { NewLava = Clamp(value, -1, 100, -1) }; break;
+                case "opt_stairways": s.Options = s.Options with { Stairways = Clamp(value, 0, 10, 0) }; break;
+                case "opt_destruction": s.Options = s.Options with { Destruction = Clamp(value, 0, 100, 0) }; break;
                 case "cpu_day": s.CpuDayShare = Clamp(value, 5, 100, 60); break;
                 case "cpu_night": s.CpuNightShare = Clamp(value, 5, 100, 30); break;
                 case "day_from": s.DayFrom = Clamp(value, 0, 23, 9); break;
@@ -163,6 +165,8 @@ public sealed class Settings
         b.AppendLine($"opt_new_water={Options.NewWater}");
         b.AppendLine($"opt_new_slime={Options.NewSlime}");
         b.AppendLine($"opt_new_lava={Options.NewLava}");
+        b.AppendLine($"opt_stairways={Options.Stairways}");
+        b.AppendLine($"opt_destruction={Options.Destruction}");
         b.AppendLine("[cpu]");
         b.AppendLine($"cpu_day={CpuDayShare}");
         b.AppendLine($"cpu_night={CpuNightShare}");

@@ -225,6 +225,9 @@ int main(int argc, char **argv)
             MapGenGeometryEdit_DigStoreys((uint32_t)strtoul(argv[++a], NULL, 10));
         else if (!strcmp(argv[a], "--spans") && a + 1 < argc)
             MapGenGeometryEdit_DigSpans((uint32_t)strtoul(argv[++a], NULL, 10));
+        /* brief 11 D1: stairways up the rooms' walls, 0..10 */
+        else if (!strcmp(argv[a], "--stairways") && a + 1 < argc)
+            MapGenGeometryEdit_DigStairways((uint32_t)strtoul(argv[++a], NULL, 10));
         else if (!strcmp(argv[a], "--lost"))
             do_lost = true;
         else if (!strcmp(argv[a], "--step") && a + 1 < argc)
@@ -498,6 +501,14 @@ int main(int argc, char **argv)
              * A PIT, with the hollow it cuts and what fills it: the line a
              * script applies by index and a reader walks to by coordinate.
              */
+            /* brief 11 D1: a STAIRWAY by its box - applied by index, read against the plan's own lines */
+            if (e->kind == MAPGEN_EDIT_STAIRWAY) {
+                float plo[3] = { 0, 0, 0 }, phi[3] = { 0, 0, 0 };
+                if (MapGenGeometryEdit_BoxOf(plan, bsp, donor, i, plo, phi))
+                    printf("  edit %u  stairway  %.0f %.0f %.0f .. %.0f %.0f %.0f  %d high\n", i, (double)plo[0],
+                           (double)plo[1], (double)plo[2], (double)phi[0], (double)phi[1], (double)phi[2], e->amount);
+                continue;
+            }
             if (e->kind == MAPGEN_EDIT_PIT) {
                 float plo[3] = { 0, 0, 0 }, phi[3] = { 0, 0, 0 };
                 if (MapGenGeometryEdit_BoxOf(plan, bsp, donor, i, plo, phi))

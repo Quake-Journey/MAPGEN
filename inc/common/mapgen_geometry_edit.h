@@ -367,6 +367,14 @@ typedef enum {
      * edit per pool, judged like any edit - a swap that strands a place or cuts a way is refused.
      */
     MAPGEN_EDIT_RELIQUID,
+    /*
+     * A STAIRWAY (brief 11 D1, the PO 06.10 with his picture of new stairs climbing q2dm1's courtyard walls): a
+     * flight of solid steps up one of a room's walls to a landing 128..192 over its floor - a pickup of the room on
+     * it, or a ledge of the room it meets. Added solid only, so it cannot leak; every site is the donor's own wall as
+     * the compiled donor stands, probed - nothing is named by a map («должны быть универсальны»). Dealt only when the
+     * run asks for it (`MapGenGeometryEdit_DigStairways`), 0 by default.
+     */
+    MAPGEN_EDIT_STAIRWAY,
     MAPGEN_EDIT_KINDS
 } mapgen_edit_kind_t;
 
@@ -1068,6 +1076,35 @@ void MapGenGeometryEdit_DigStoreys(uint32_t count);
  * this. `tools/mapgen_recut_driver --spans N` and the donors guard's span fixture do.
  */
 void MapGenGeometryEdit_DigSpans(uint32_t count);
+
+/* Brief 11 D1: how many STAIRWAYS a plan wants, 0..10 - the Studio's «Пристройки-лестницы»; 0 (the default)
+   deals none and draws nothing from any stream. Fewer sites, fewer stairways - said in the plan. */
+void MapGenGeometryEdit_DigStairways(uint32_t count);
+
+/*
+ * Brief 11 D2: DESTRUCTION of a finished map, D percent 1..100 (0 does nothing): cracks (its own textures cracked),
+ * rubble, craters, breaches and gouges, broken edges, collapses, ruin - a ladder of kinds by D, from the seed's own
+ * substream, nothing within reach of a start or on a pickup, every carve sealed by the map's own brushes. `pack` is
+ * the texture pack as `name material variant r g b` lines; the cracked copies the map now wears are written to
+ * `needs_path` as `new original mask` lines for tools/mapgen_textures.py to draw.
+ */
+typedef struct {
+    uint32_t cracks, rubble, craters, breaches, gouges, broken, collapses, ruins;
+    uint32_t refused;           /* carves refused: they would have reached the outside, or the carve declined */
+    uint32_t pack, rooms, needs;
+    uint32_t wanted[6];         /* rubble, craters, breaches, broken, collapses, ruins the ladder asked for */
+    float    start_nearest;     /* the least distance from a start to anything built or carved (1e9: nothing) */
+} mapgen_destroy_report_t;
+
+mapgen_geometry_result_t MapGenGeometryEdit_Destroy(struct mapgen_geometry_s *g, const struct mapgen_bsp_s *bsp,
+                                                    uint32_t percent, uint64_t seed, const char *pack,
+                                                    const char *needs_path, mapgen_destroy_report_t *rep);
+/* A guard's seam: the kinds to leave out, by bit (1 cracks, 2 rubble, 4 craters, 8 breaches, 16 broken, 32
+   collapses, 64 ruin). */
+void MapGenGeometryEdit_DestroySkip(uint32_t kinds);
+/* Brief 11 D2: the cracked copies a destroyed map wears, drawn from the game's own textures and the pack's masks
+   (MASKS/<mask>.raw) into INTO/textures/<new>.wal; returns how many, `missing` those without an original. */
+uint32_t MapGenGeometryEdit_DrawCracks(const char *needs, const char *masks, const char *into, uint32_t *missing);
 
 /*
  * Row 410: which liquids the plan turns into which - "water-lava", "water-slime", "lava-water", "slime-water",

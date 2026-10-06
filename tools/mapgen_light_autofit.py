@@ -16,7 +16,12 @@ A donor already calibrated - by its sha256 in `tools/mapgen_donor_light.json`, o
   secant on log B/R against the donor's (mg_20u from q2dm1, no coloured light in either: saturation 0.5 -> B/R 3.3 of
   q2dm1's, 1 -> 1.3, 2 -> 0.5; its ceilings stay bluer at every one);
 * burn - when ours burns more than the donor (decision 1), `-maxlight` at the donor's own brightest luxel (the old
-  qrad's default 196 on q2dm1 and q3t2; q2tools-220 clips at 255).
+  qrad's default 196 on q2dm1 and q3t2; q2tools-220 clips at 255);
+* balance - when the ceilings lag the walls (ceilings over sides under BALANCE), `-direct`, the surface lights' share:
+  measured on q2dm1's first map (brief 11 step 1, ledger row 412h), its ceilings stood at 0.60..0.72 of q2dm1's
+  under every scale while sides and floors matched - a balance one multiplier cannot move; `-bounce` 2..16 moved
+  nothing, `-direct 2` took the ceilings 0.60 -> 1.04 and the sides 0.95 -> 1.34 (the ceilings over the sides about
+  as `-direct` to the power 0.31); `-scale 1.85 -direct 1.8` put all three in the band (1.17 / 1.12 / 0.82).
 
 The fit (flags, keys, FAITHFUL or not, every round's line) goes to DONOR.light_fit.json beside the donor, and the
 Studio's DONOR.light.txt / DONOR.light_keys.txt with it; prints FITTED. Not faithful after N rounds is said - the best
@@ -41,15 +46,20 @@ from mapgen_light_profile import BURNT_SLACK, lit_faces  # noqa: E402
 
 LEVEL_POWER = 0.85          # ratio ~ scale ** 0.85, measured (above)
 SCALE_RANGE = (0.3, 4.0)
+BALANCE = 0.74              # darkest orientation over brightest under this: too near the band's width (0.8/1.25 = 0.64)
+BALANCE_AIM = 0.82
+BALANCE_POWER = 0.31        # ceilings over sides ~ direct ** 0.31, measured (above)
+DIRECT_RANGE = (1.0, 4.0)
 
 
 def fit_path(donor: Path) -> Path:
     return donor.with_suffix(".light_fit.json")
 
 
-def flags_of(scale: float, maxlight: int | None, saturate: float | None) -> str:
+def flags_of(scale: float, maxlight: int | None, saturate: float | None, direct: float | None = None) -> str:
     return (f"-scale {scale:.3f}" + (f" -maxlight {maxlight}" if maxlight else "")
-            + (f" -saturation {saturate:.2f}" if saturate is not None else ""))
+            + (f" -saturation {saturate:.2f}" if saturate is not None else "")
+            + (f" -direct {direct:.2f}" if direct else ""))
 
 
 def main() -> int:
@@ -73,13 +83,13 @@ def main() -> int:
     if sunny and not re.search(r'"_sun_color"\s', world):
         colour = [1.0, 1.0, 1.0]
     top = max((max(f["tops"]) for f in lit_faces(a.donor) if f["tops"]), default=255)
-    scale, maxlight, saturate = 1.0, None, None
+    scale, maxlight, saturate, direct = 1.0, None, None, None
     raw = a.lit.read_bytes()
     own = entity_text(raw)
     table, best, tint = [], None, []
     for rnd in range(a.rounds):
         keys = {"_sun_color": " ".join(f"{c:.2f}" for c in colour)} if colour else {}
-        fl = flags_of(scale, maxlight, saturate)
+        fl = flags_of(scale, maxlight, saturate, direct)
         code, ok, rows = light_only(raw, own, keys, fl, a.work / f"r{rnd}", a.donor)
         s = score(rows) if code == 0 else 99.0
         al = next((r for r in rows if r["kind"] == "all"), None)
@@ -93,8 +103,23 @@ def main() -> int:
             best = (s, fl, keys, ok)
         if ok or not al or code:
             break
-        g = math.exp(sum(math.log(max(x, 1e-3)) for x in al["ratio"]) / 3)
+        gm = lambda r: math.exp(sum(math.log(max(x, 1e-3)) for x in r["ratio"]) / 3)  # noqa: E731
+        kinds = [r for r in rows if r["kind"] in ("sides", "floors", "ceilings")]
+        # the level centres the darkest and the brightest orientation in the band (brief 11 step 1: the mean of all
+        # let q2dm1's walls run over 1.25 while its ceilings sat under 0.8)
+        g = math.sqrt(max(gm(r) for r in kinds) * min(gm(r) for r in kinds)) if kinds else             math.exp(sum(math.log(max(x, 1e-3)) for x in al["ratio"]) / 3)
         scale = min(SCALE_RANGE[1], max(SCALE_RANGE[0], scale * (1.0 / g) ** (1.0 / LEVEL_POWER)))
+        # the balance: ceilings that lag the walls past what the band holds get more of the surface lights
+        sides = next((r for r in rows if r["kind"] == "sides"), None)
+        ceils = next((r for r in rows if r["kind"] == "ceilings"), None)
+        inside = kinds and all(0.8 <= gm(r) <= 1.25 for r in kinds)
+        if sides and ceils and not inside:          # every orientation in the band: the balance is kept as it is
+            bal = gm(ceils) / gm(sides)
+            if bal < BALANCE or (direct and bal > 1.0 / BALANCE):
+                was = direct or 1.0
+                direct = min(DIRECT_RANGE[1], max(DIRECT_RANGE[0], was * (BALANCE_AIM / bal) ** (1.0 / BALANCE_POWER)))
+                # what the surface lights add the scale need not: the level step shares the change
+                scale = min(SCALE_RANGE[1], max(SCALE_RANGE[0], scale * (was / direct) ** 0.35))
         if colour:
             colour = [c * g / max(al["ratio"][i], 1e-3) for i, c in enumerate(colour)]
             colour = [c / max(colour) for c in colour]

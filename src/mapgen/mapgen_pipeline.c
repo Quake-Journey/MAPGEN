@@ -1437,12 +1437,13 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
                       (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_GRAFT_BUNDLE) : 0u));
     }
     progress_line("stage=plan offered=%u budget=%u target=%u digs=%u annexes=%u storeys=%u spans=%u floods=%u"
-                  " windows=%u reliquids=%u", (unsigned)offered, (unsigned)budget, (unsigned)target, (unsigned)tunnels,
-                  (unsigned)annexes, (unsigned)storeys,
+                  " windows=%u reliquids=%u stairways=%u", (unsigned)offered, (unsigned)budget, (unsigned)target,
+                  (unsigned)tunnels, (unsigned)annexes, (unsigned)storeys,
                   (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_SPAN) : 0u),
                   (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_FLOOD) : 0u),
                   (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_WINDOW) : 0u),
-                  (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_RELIQUID) : 0u));
+                  (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_RELIQUID) : 0u),
+                  (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_STAIRWAY) : 0u));
     {   /* row 412: the real rooms of the base itself the plan dealt (rooms of the second map are said above) */
         uint32_t tally[8];
         MapGenGeometryEdit_SecondTally(plan, tally);
@@ -1496,6 +1497,9 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
         fprintf(ledger, "# %s fidelity %u seed %llu\n", map_name,
                 (unsigned)request->generate.fidelity,
                 (unsigned long long)request->generate.seed);
+        /* brief 11: the options that change the plan, so the gates re-deal the plan this run dealt */
+        if (request->plan_options[0])
+            fprintf(ledger, "# plan-options %s\n", request->plan_options);
         fprintf(ledger, "# index family verdict divergence"
                         " box-lo box-hi\n");
     }

@@ -208,6 +208,34 @@ public sealed partial class MainWindow : Window
         LiquidRow("gen.opt.new_water", o.NewWater, v => S.Options = S.Options with { NewWater = v });
         LiquidRow("gen.opt.new_slime", o.NewSlime, v => S.Options = S.Options with { NewSlime = v });
         LiquidRow("gen.opt.new_lava", o.NewLava, v => S.Options = S.Options with { NewLava = v });
+        // brief 11 D1, the PO: «пристройки-лестницы», 0..10, default 0 - «Нет», not «По умолчанию»
+        Row("gen.opt.stairways", Enumerable.Range(0, 11).Select(n => n == 0 ? Loc.T("gen.stairways.none") : n.ToString()).ToArray(),
+            o.Stairways, i => S.Options = S.Options with { Stairways = i });
+        // brief 11 D2, the PO: «разрушаемость» 0..100, default 0 - a slider, no «По умолчанию»: 0 is the default
+        {
+            var slider = new Slider
+            {
+                Minimum = 0, Maximum = 100, Value = o.Destruction, Width = 260, SmallChange = 5, LargeChange = 25,
+                IsSnapToTickEnabled = true, TickFrequency = 5, VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 0),
+            };
+            var said = new TextBlock { MinWidth = 120, VerticalAlignment = VerticalAlignment.Center };
+            void Show() => said.Text = (int)slider.Value == 0 ? Loc.T("gen.destruction.none") : $"{(int)slider.Value} %";
+            slider.PropertyChanged += (_, e) =>
+            {
+                if (e.Property != Avalonia.Controls.Primitives.RangeBase.ValueProperty)
+                    return;
+                S.Options = S.Options with { Destruction = (int)slider.Value };
+                Show();
+                KeepForm();
+            };
+            Show();
+            ex.Items.Add(new FASettingsExpanderItem
+            {
+                Content = Loc.T("gen.opt.destruction"), Description = Loc.T("gen.opt.destruction.tip"),
+                Footer = new StackPanel { Orientation = Orientation.Horizontal, Children = { slider, said } },
+            }.Tip("gen.opt.destruction.tip"));
+        }
         return ex;
     }
 

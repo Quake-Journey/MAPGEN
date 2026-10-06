@@ -20,9 +20,12 @@ public sealed record GenerationRequest(string Name, string Donor, int Fidelity, 
 /// NewWater / NewSlime / NewLava (row 412, the PO: «А добавление новых жидкостей можно регулировать? ... вообще
 /// выключать или менять количество», «аналогичные параметры для заливки лавой и кислотой»): the share of the rooms the
 /// floods may take that each liquid fills, 0..100 - or -1, «По умолчанию», the generator's own say.
+/// Stairways (brief 11 D1): stairways up the rooms' walls, 0..10 - 0 «Нет», the default.
+/// Destruction (brief 11 D2): the finished map D percent in ruins, 0..100 - 0 (the default) nothing; a step after the
+/// map's checks (tools/mapgen_destroy.py), not a word of the pipeline's.
 public sealed record GenerationOptions(int Digs = 0, int Annexes = 0, int AnnexSize = 0, int Storeys = 0, int Spans = 0,
                                        int Halls = 0, string Liquids = "", int Decor = 0, int NewWater = -1,
-                                       int NewSlime = -1, int NewLava = -1)
+                                       int NewSlime = -1, int NewLava = -1, int Stairways = 0, int Destruction = 0)
 {
     /// <summary>The engine's percent of its rule for each Decor level.</summary>
     public static readonly int[] DecorPercent = { 100, 0, 50, 150, 200 };
@@ -72,6 +75,11 @@ public sealed record GenerationOptions(int Digs = 0, int Annexes = 0, int AnnexS
         {
             yield return "--decor";
             yield return DecorPercent[Decor].ToString(CultureInfo.InvariantCulture);
+        }
+        if (Stairways > 0)
+        {
+            yield return "--stairways";
+            yield return Math.Min(Stairways, 10).ToString(CultureInfo.InvariantCulture);
         }
         foreach (var (flag, value) in new[] { ("--new-water", NewWater), ("--new-slime", NewSlime), ("--new-lava", NewLava) })
             if (value >= 0)
@@ -186,6 +194,7 @@ public sealed class Generation
         "flood" => "floods",
         "window" => "windows",
         "reliquid" => "reliquids",
+        "stairway" => "stairways",
         _ => "",
     };
 
@@ -193,7 +202,7 @@ public sealed class Generation
     public string PlanDone()
     {
         var parts = new List<string>();
-        foreach (var k in new[] { "digs", "annexes", "storeys", "spans", "floods", "windows", "reliquids", "rooms_from", "rooms_copy", "skins_from" })
+        foreach (var k in new[] { "digs", "annexes", "storeys", "spans", "floods", "windows", "reliquids", "stairways", "rooms_from", "rooms_copy", "skins_from" })
             if (Planned.GetValueOrDefault(k) > 0)
                 parts.Add(Loc.F($"plan.cat.{k}", Done.GetValueOrDefault(k), Planned[k], SecondName));
         return parts.Count > 0 ? Loc.F("run.plan.done", string.Join(", ", parts)) : "";
@@ -289,6 +298,7 @@ public sealed class Generation
             $"liquids={r.Options?.Liquids ?? ""}", $"decor={r.Options?.Decor ?? 0}",
             $"new_water={r.Options?.NewWater ?? -1}", $"new_slime={r.Options?.NewSlime ?? -1}",
             $"new_lava={r.Options?.NewLava ?? -1}",
+            $"stairways={r.Options?.Stairways ?? 0}", $"destruction={r.Options?.Destruction ?? 0}",
             // row 411: whether the run's accepted steps reach the disk - without them it cannot be resumed
             $"checkpoints={(_s.KeepCheckpoints ? 1 : 0)}",
             $"began={DateTime.Now:O}",
@@ -312,7 +322,8 @@ public sealed class Generation
                                      kv.GetValueOrDefault("cover", "1") != "0",
                                      new GenerationOptions(I("digs"), I("annexes"), I("annex_size"), I("storeys"), I("spans"),
                                                            I("halls"), kv.GetValueOrDefault("liquids", ""), I("decor"),
-                                                           L("new_water"), L("new_slime"), L("new_lava")));
+                                                           L("new_water"), L("new_slime"), L("new_lava"), I("stairways"),
+                                                           I("destruction")));
     }
 
     /// <summary>
@@ -738,12 +749,13 @@ public sealed class Generation
                 Target = I("target");
                 break;
             case "plan":
-                foreach (var k in new[] { "digs", "annexes", "storeys", "spans", "floods", "windows", "reliquids" })
+                foreach (var k in new[] { "digs", "annexes", "storeys", "spans", "floods", "windows", "reliquids", "stairways" })
                     Planned[k] = I(k);
                 // row 410: what the plan holds (the creative options change these)
                 PlanMade = f.ContainsKey("digs")
                     ? Loc.F("run.plan.made", I("digs"), I("annexes"), I("storeys"), I("spans"), I("floods"), I("windows"))
                       + (I("reliquids") > 0 ? Loc.F("run.plan.reliquids", I("reliquids")) : "")
+                      + (I("stairways") > 0 ? Loc.F("run.plan.stairways", I("stairways")) : "")
                     : "";
                 Offered = I("offered");
                 Budget = I("budget");
@@ -865,7 +877,22 @@ public sealed class Generation
         var helpers = Path.Combine(Engine.Dir, "helpers");
         var env = "import os;" +
                   (Directory.Exists(helpers) ? $"os.environ['MAPGEN_HELPERS']=r'{helpers}';" : "") +
-                  $"os.environ['MAPGEN_Q2TOOL']=r'{Path.Combine(Engine.Dir, "q2tool.exe")}';";
+                  $"os.environ['MAPGEN_Q2TOOL']=r'{Path.Combine(Engine.Dir, "q2tool.exe")}';" +
+                  // brief 11 D2: the released Studio's texture pack (engine/textures/mapgen)
+                  (File.Exists(Path.Combine(Engine.Dir, "textures", "mapgen", "catalogue.json"))
+                      ? $"os.environ['MAPGEN_TEXTURE_PACK']=r'{Engine.Dir}';" : "");
+        // brief 11 D2: the finished map in ruins, after its checks - then the checks a ruin still answers to, asked
+        // again of it (lit, visible, its textures, its water, its starts standing), named apart
+        var destroy = Path.Combine(repo, "tools", "mapgen_destroy.py");
+        var pct = Request.Options?.Destruction ?? 0;
+        var game = Path.Combine(_s.ClientDir, "baseq2");
+        var after = pct > 0
+            ? $"d=subprocess.run([sys.executable,r'{destroy}',r'{candidate}','--donor',r'{donor}','--destruction','{pct}'," +
+              $"'--seed','{Request.Seed}','--game',r'{game}'],capture_output=True,text=True);" +
+              "os.environ['MAPGEN_GATE_PREFIX']='after destruction: ';" +
+              $"r2=subprocess.run([sys.executable,r'{script}',r'{candidate}','--job',r'{JobDir}','--donor',r'{donor}'," +
+              "'--only','finished,axes,water,starts'],capture_output=True,text=True);"
+            : "d=None;r2=None;";
         var code = env + "import subprocess,sys;" +
                    $"f=subprocess.run([sys.executable,r'{fit}',r'{candidate}',r'{donor}',r'{fitWork}']," +
                    "capture_output=True,text=True);" +
@@ -874,8 +901,10 @@ public sealed class Generation
                    $"'--donor',r'{donor}'{second}]+x,capture_output=True,text=True);" +
                    $"r=subprocess.run([sys.executable,r'{script}',r'{candidate}','--job',r'{JobDir}'," +
                    $"'--donor',r'{donor}'{second}],capture_output=True,text=True);" +
-                   $"open(r'{_gatesOut}','w',encoding='utf-8').write(r.stdout+r.stderr+'\\nLIGHT FIT\\n'+f.stdout+f.stderr+'\\nROOM LIGHT\\n'+l.stdout+l.stderr);" +
-                   "sys.exit(r.returncode)";
+                   after +
+                   $"open(r'{_gatesOut}','w',encoding='utf-8').write(r.stdout+r.stderr+'\\nLIGHT FIT\\n'+f.stdout+f.stderr+'\\nROOM LIGHT\\n'+l.stdout+l.stderr" +
+                   "+('\\nDESTRUCTION\\n'+d.stdout+d.stderr+'\\n'+r2.stdout+r2.stderr if d else ''));" +
+                   "sys.exit(r.returncode or (d.returncode if d else 0) or (r2.returncode if r2 else 0))";
         _gatesJob.Start(python, new[] { "-c", code }, RunDir);
     }
 
@@ -1040,6 +1069,10 @@ public sealed class Generation
             var checkedCopy = Path.Combine(RunDir, "candidate.bsp");
             File.Copy(File.Exists(checkedCopy) ? checkedCopy : Artifact, Path.Combine(_s.BspPath, LibraryName + ".bsp"), true);
             var source = Path.ChangeExtension(Artifact, ".map");
+            // brief 11 D2: a map put in ruins keeps the source it was compiled from
+            var ruined = Path.Combine(RunDir, "destroy", "q2mg.map");
+            if ((Request.Options?.Destruction ?? 0) > 0 && File.Exists(ruined))
+                source = ruined;
             if (Request.SaveMapSource && File.Exists(source))
             {
                 Directory.CreateDirectory(_s.MapsPath);

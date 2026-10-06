@@ -11,6 +11,21 @@ public static class Versions
 
     public static readonly Entry[] All =
     {
+        new("2.3", "06.10.2026",
+            new[]
+            {
+                "«Пристройки-лестницы» (0–10): пролёты ступеней вдоль стен комнат к новым площадкам, на площадке предмет или выход на уступ; места ищутся на любой основе",
+                "«Разрушения» (0–100 %): трещины, обломки, воронки, проломы, отбитые края, обвалы потолка, завалы — по нарастающей; точки появления всегда свободны",
+                "Набор текстур генератора: поверхности из присланных картинок, образцы из интернета и сгенерированные трещины и воронки, в формате игры",
+                "Свет: комната, перенесённая целиком со своими светильниками, больше не подсвечивается второй раз; в тоннелях с висящими светильниками меньше заливающего света; карта первой генерации на новой основе освещается верно",
+            },
+            new[]
+            {
+                "«Stairway annexes» (0-10): flights of steps along rooms' walls to new landings, a pickup on each or a ledge it meets; sites found on any base",
+                "«Destruction» (0-100 %): cracks, rubble, craters, breaches, broken edges, fallen ceilings, blocked places - more with the percent; the starts are always free",
+                "The generator's texture pack: surfaces made from the supplied pictures, samples from the web and generated cracks and craters, in the game's format",
+                "Light: a room carried whole with its own lamps is no longer lit twice; tunnels with hung lamps get less fill light; the first map of a new base is lit right",
+            }),
         new("2.2", "06.10.2026",
             new[]
             {

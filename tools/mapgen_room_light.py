@@ -35,6 +35,40 @@ GAME = r"O:\Claude2\q2pro-release\baseq2"
 LIGHT = re.compile(r'\{[^{}]*"classname" "light"[^{}]*\}')
 ORIGIN = re.compile(r'"origin" "(\S+) (\S+) (\S+)"')
 VALUE = re.compile(r'"light" "(\d+(?:\.\d+)?)"')
+VALUED = re.compile(r'"_mapgen_scale" "([\d.]+)(?: ([\d.]+))?"')
+
+
+def flags_scale(flags: str) -> float:
+    """The light pass's multiplier on a point light, as the generator reads it (`MapGenGeometryEdit_SetLightFlags`):
+    `-scale` times `-entity`."""
+    s = 1.0
+    for word in ("-scale", "-entity"):
+        m = re.search(rf"(?:^|\s){word}\s+([\d.]+)", flags or "")
+        if m and 0.05 < float(m.group(1)) < 20.0:
+            s *= float(m.group(1))
+    return s
+
+
+def revalue(text: str, flags: str) -> tuple[str, int]:
+    """Row 412h (brief 11 step 1): the lights the generator valued for one light pass (`_mapgen_scale`, its fill and
+    stairs' lights) brought to the pass that lights the map now - a donor fitted for the first time AFTER its first map
+    was generated (q2dm1's fit, -scale 2.289, relit lights valued at 1.0: tunnels x2.0..x2.6 their doors)."""
+    now = flags_scale(flags)
+    changed = 0
+
+    def one(m):
+        nonlocal changed
+        e = m.group(0)
+        v = VALUED.search(e)
+        if not v or abs(float(v.group(1)) - now) < 1e-3:
+            return e
+        k = float(v.group(1)) / now
+        reach = float(v.group(2) or 0)      # the part of the value that is distance, not level: not scaled
+        changed += 1
+        e = VALUE.sub(lambda x: f'"light" "{max(1, round((float(x.group(1)) - reach) * k + reach))}"', e)
+        return VALUED.sub(f'"_mapgen_scale" "{now:.4f} {reach:.0f}"', e)
+
+    return LIGHT.sub(one, text), changed
 
 
 def donor_lights(donor: Path) -> set:
@@ -62,7 +96,8 @@ def measure(bsp: Path, donor: Path, digs: list) -> list:
     return out
 
 
-def relight(bsp: Path, text: str, flags: str, work: Path, keys: dict | None = None) -> None:
+def relight(bsp: Path, text: str, flags: str, work: Path, keys: dict | None = None, moddir: Path | None = None,
+            basedir: Path | None = None) -> None:
     raw = bsp.read_bytes()
     lit = work / "relight"
     if lit.exists():
@@ -71,8 +106,9 @@ def relight(bsp: Path, text: str, flags: str, work: Path, keys: dict | None = No
     lit_text = with_keys(text, keys)     # row 410: the donor's sun as the tool must be told it
     sunny = with_sun(lit_text)
     threads = str(bin(guard.affinity_mask()).count("1"))
+    # brief 11 D2: a destroyed map's own textures may lie in another folder than the game's (a guard's scratch)
     words = ["-rad", "-maxdata", "8388608", "-threads", threads, *flags.split(),
-             "-moddir", GAME, "-basedir", GAME, "-gamedir", GAME]
+             "-moddir", str(moddir or GAME), "-basedir", str(basedir or GAME), "-gamedir", str(basedir or GAME)]
     # row 411 (Fable's brief 8 D): the light pass in memory - the map relit is written once, over itself
     runs, out = compile_bsp_in_memory(pinned_compiler()[0], [words], with_entities(raw, sunny or lit_text),
                                       label="relight")
@@ -121,8 +157,10 @@ def main() -> int:
     theirs = donor_lights(a.donor)
     recoloured = 0
     if a.relight_first:
-        print(f"relighting under the donor's calibration: flags '{flags}', keys {keys}", flush=True)
-        relight(a.map, entity_text(a.map.read_bytes()), flags, work, keys)
+        text, moved = revalue(entity_text(a.map.read_bytes()), flags)
+        print(f"relighting under the donor's calibration: flags '{flags}', keys {keys}; {moved} lights the generator"
+              f" valued for another pass revalued", flush=True)
+        relight(a.map, text, flags, work, keys)
     for rnd in range(a.rounds + 1):
         found = measure(a.map, a.donor, digs)
         for d, ok, said, *_ in found:

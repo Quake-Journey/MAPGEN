@@ -86,8 +86,8 @@ ROUND47_42 = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\round47\s3_42
 STOREY_RED = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\round39\storeys_red_dryrun")
 STOREY_GREEN = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\round39\storeys_dryrun")
 ROUND38 = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\round38\s3")
-GATES = ["pickups", "glass", "hall", "annex", "storeys", "clips", "digwalls", "sky", "eye", "stair", "finished",
-         "light", "water", "reach", "axes", "static"]
+GATES = ["pickups", "glass", "hall", "annex", "storeys", "stairways", "clips", "digwalls", "sky", "eye", "stair",
+         "finished", "light", "water", "reach", "axes", "static", "starts"]
 LIGHT_BAND = (0.8, 1.25)        # row 405 (L4): a shared face's light per orientation, against the donor's
 EYE = ["920", "65", "718"]
 STAIR_BOX = ["700", "-60", "630", "1120", "300", "900"]
@@ -113,6 +113,7 @@ NUM = r"(-?\d+)"
 DIG = re.compile(r"^\s*\d+\s+dig\s+ACCEPTED\s+\d+\s+(-?\d+) (-?\d+) (-?\d+)\s+(-?\d+) (-?\d+) (-?\d+)"
                  r"\s+from (-?\d+) (-?\d+) (-?\d+) to (-?\d+) (-?\d+) (-?\d+)(?: shape (\S+))?( air)?", re.M)
 HEAD = re.compile(r"^# \S+ fidelity (\d+) seed (\d+)", re.M)
+PLAN_OPTIONS = re.compile(r"^# plan-options (.+)$", re.M)    # brief 11: the run's options that change the plan
 OFFERED = re.compile(r"^  dig offered: (-?\d+) (-?\d+) (-?\d+) \(.*?\) -> (-?\d+) (-?\d+) (-?\d+) \(")
 HALL_LINE = re.compile(r"^  dig hall: segment \d+ (-?\d+) (-?\d+) (-?\d+) \.\. (-?\d+) (-?\d+) (-?\d+)$")
 ANNEX_LINE = re.compile(r"^  dig annex: room " + " ".join([NUM] * 3) + r" \.\. " + " ".join([NUM] * 3)
@@ -126,6 +127,12 @@ STOREY_PARTS = re.compile(r"^  dig storeys terrace: " + T3 + r" \.\. " + T3 + ";
                           + r", (\d+) treads$", re.M)
 STOREY_MOVE = re.compile(r"^  dig storeys moves: (\S+) from " + T3 + " to " + T3 + "$", re.M)
 LOST = re.compile(r"(\d+) eyes, (\d+) pairs LOST")
+# brief 11 D1: the stairways the plan dealt (`deal_stairways`), and the ledger's accepted ones by their box
+STAIRWAY_LINE = re.compile(r"^  stairway (\d+): foot " + T3 + " top " + T3 + r", (\d+) steps (\d+) wide, "
+                           r"(meets a ledge|holds a pickup)$", re.M)
+STAIRWAY_LANDING = re.compile(r"^  stairway (\d+) landing: " + T3 + r" \.\. " + T3 + "$", re.M)
+STAIRWAY_MOVE = re.compile(r"^  stairway (\d+) moves: (\S+) from " + T3 + " to " + T3 + "$", re.M)
+STAIRWAY_ACCEPTED = re.compile(r"^\s*\d+\s+stairway\s+ACCEPTED\s+\d+\s+" + T3 + r"\s+" + T3, re.M)
 
 SECOND: Path | None = None      # brief 9: the run's second map, for the plan re-dealt here
 CASES = 0
@@ -136,7 +143,9 @@ _LISTINGS: dict = {}
 def check(name: str, ok: bool, detail: str = "") -> bool:
     global CASES, FAILED
     CASES += 1
-    print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  -- {detail}" if detail else ""), flush=True)
+    # brief 11 D2: the checks asked again of a map put in ruins are named apart (MAPGEN_GATE_PREFIX)
+    print(f"  {'PASS' if ok else 'FAIL'}  {os.environ.get('MAPGEN_GATE_PREFIX', '')}{name}"
+          + (f"  -- {detail}" if detail else ""), flush=True)
     if not ok:
         FAILED += 1
     return ok
@@ -350,7 +359,9 @@ def plan_listing(job: Path, work: Path, tree: Path = REPO) -> tuple[str, str]:
     key = (str(job), str(work), str(tree))
     if key in _LISTINGS:
         return _LISTINGS[key]
-    head = HEAD.search((job / "ledger.txt").read_text(encoding="utf-8", errors="replace"))
+    ledger = (job / "ledger.txt").read_text(encoding="utf-8", errors="replace")
+    head = HEAD.search(ledger)
+    opts = PLAN_OPTIONS.search(ledger)
     base = sorted((job / "baseline").glob("*.bsp"))
     if not head or not base:
         return "", f"no fidelity and seed in {job / 'ledger.txt'}, or no map in {job / 'baseline'}"
@@ -363,7 +374,7 @@ def plan_listing(job: Path, work: Path, tree: Path = REPO) -> tuple[str, str]:
     except SystemExit as e:
         return "", str(e)
     rc, out = run([exe, base[0], "--seed", head.group(2), "--ambition", str(100 - int(head.group(1))), "--list"]
-                  + (["--second", str(SECOND)] if SECOND else []))
+                  + (["--second", str(SECOND)] if SECOND else []) + (opts.group(1).split() if opts else []))
     (work / "plan_list.txt").write_text(out, encoding="utf-8")
     _LISTINGS[key] = (out, "" if rc == 0 else f"the recut driver exited {rc}: {tail(out)}")
     return _LISTINGS[key]
@@ -604,6 +615,117 @@ def ask_storeys(bsp: Path, job: Path, donor: Path, work: Path, accepted_only: bo
     return (len(mine) >= STOREYS_MIN and built == len(mine),
             f"{len(storeys)} storeys in the plan, {len(mine)} {'on accepted digs' if accepted_only else 'asked'},"
             f" {built} built: " + "; ".join(said[:4]))
+
+
+def plan_stairways(text: str) -> list:
+    """Each stairway the plan dealt: its foot, its top, its steps, its landing box and its pickup's move."""
+    out = {}
+    for m in STAIRWAY_LINE.finditer(text):
+        v = [float(x) for x in m.groups()[1:7]]
+        out[m.group(1)] = {"foot": v[:3], "top": v[3:], "steps": int(m.group(8)), "wide": float(m.group(9)),
+                           "ledge": m.group(10) == "meets a ledge"}
+    for m in STAIRWAY_LANDING.finditer(text):
+        if m.group(1) in out:
+            out[m.group(1)]["landing"] = [float(x) for x in m.groups()[1:]]
+    for m in STAIRWAY_MOVE.finditer(text):
+        if m.group(1) in out:
+            v = [float(x) for x in m.groups()[2:]]
+            out[m.group(1)]["move"] = (m.group(2), v[:3], v[3:])
+    return [s for s in out.values() if "landing" in s]
+
+
+def stairway_built(cand: Bsp, don: Bsp, s: dict) -> tuple[bool, str]:
+    """Built, and nothing of it floats: the landing solid from its top to the floor at its middle and its four inner
+    corners (rock in the map where the donor had air), the flight solid under its middle line, STAIR_HEAD of air over
+    the landing's middle, and the foot standing air."""
+    lo, hi = s["landing"][:3], s["landing"][3:]
+    floor = s["foot"][2]
+    pts = [[(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2]] + [[x, y] for x in (lo[0] + 6, hi[0] - 6)
+                                                            for y in (lo[1] + 6, hi[1] - 6)]
+    for x, y in pts:
+        for z in range(int(floor) + 4, int(hi[2]) - 2, 12):
+            if not cand.solid([x, y, z]):
+                return False, f"the landing is not solid down to the floor at {x:.0f} {y:.0f} {z} - it floats"
+    if not any(not don.solid([x, y, (floor + hi[2]) / 2]) for x, y in pts):
+        return False, "the donor had rock where the landing stands - nothing new was built"
+    top = s["top"]
+    for h in (8, 40, 64):
+        if cand.solid([top[0], top[1], top[2] + h]):
+            return False, f"no headroom over the landing at {h}"
+    if cand.solid([s["foot"][0], s["foot"][1], floor + 32]):
+        return False, "its foot is buried"
+    # the flight: under the line from the foot to the landing, solid from the floor to each tread
+    fx, fy = s["foot"][0], s["foot"][1]
+    tx, ty = top[0], top[1]
+    n = s["steps"]
+    run = max(1.0, ((tx - fx) ** 2 + (ty - fy) ** 2) ** 0.5)
+    for i in range(n):
+        f = (24.0 + 32.0 * (i + 0.5)) / run          # the flight starts 24 past the foot, a tread is 32
+        x, y = fx + (tx - fx) * f, fy + (ty - fy) * f
+        if not cand.solid([x, y, floor + 6]):
+            return False, f"step {i + 1} missing at {x:.0f} {y:.0f}"
+    return True, "built, solid to the floor"
+
+
+def ask_stairways(bsp: Path, job: Path, donor: Path, work: Path) -> tuple[bool, str]:
+    """Brief 11 D1: every stairway the plan dealt and the ledger accepted is built, stands on the floor, and holds the
+    pickup it was dealt for at its place (or meets its ledge); none dealt - nothing to build."""
+    text, err = plan_listing(job, work)
+    if err:
+        return False, err
+    planned = plan_stairways(text)
+    if not planned:
+        return True, "no stairway in the plan"
+    ledger = (job / "ledger.txt").read_text(encoding="utf-8", errors="replace")
+    boxes = [[float(v) for v in m.groups()] for m in STAIRWAY_ACCEPTED.finditer(ledger)]
+
+    def accepted(s: dict) -> bool:
+        L = s["landing"]
+        return any(b[0] - 1 <= L[0] and L[3] <= b[3] + 1 and b[1] - 1 <= L[1] and L[4] <= b[4] + 1 for b in boxes)
+
+    mine = [s for s in planned if accepted(s)]
+    cand, don = Bsp(bsp), Bsp(donor)
+    built, said = 0, []
+    for s in mine:
+        ok, how = stairway_built(cand, don, s)
+        held = "a ledge"
+        if not s["ledge"]:
+            cls, _, to = s.get("move", ("?", None, s["top"]))
+            got = [e.get("classname") for e in cand.ents if e.get("classname") == cls
+                   and len(e.get("origin", "").split()) == 3
+                   and all(abs(float(e["origin"].split()[i]) - to[i]) <= 1.0 for i in range(3))]
+            held = got[0] if got else f"NO {cls} at its place"
+            ok = ok and bool(got)
+        built += 1 if ok else 0
+        said.append(f"{coords(s['foot'])} up to {coords(s['top'])}, {s['steps']} steps: "
+                    f"{'built' if ok else 'NOT BUILT'} ({how}; {held})")
+    return (built == len(mine), f"{len(planned)} stairways in the plan, {len(mine)} accepted, {built} built"
+            + (": " + "; ".join(said[:4]) if said else ""))
+
+
+def ask_starts(bsp: Path) -> tuple[bool, str]:
+    """Brief 11 D2 (kept at every destruction): every start stands - its body in air (a player's box, 32 x 32 x 56,
+    sampled), floor within 32 under its feet - and can move: a free step 32 off it at least one way."""
+    cand = Bsp(bsp)
+    starts = [e for e in cand.ents if e.get("classname") == "info_player_deathmatch"
+              and len(e.get("origin", "").split()) == 3]
+    bad = []
+    for e in starts:
+        o = [float(v) for v in e["origin"].split()]
+        body = [[o[0] + dx, o[1] + dy, o[2] + dz] for dx in (-15, 0, 15) for dy in (-15, 0, 15) for dz in (-20, 0, 28)]
+        if any(cand.solid(p) for p in body):
+            bad.append(f"{coords(o)} buried")
+            continue
+        if not any(cand.solid([o[0], o[1], o[2] - 24 - dz]) for dz in range(2, 34, 4)):
+            bad.append(f"{coords(o)} over no floor")
+            continue
+        free = any(all(not cand.solid([o[0] + sx * 32 + dx, o[1] + sy * 32 + dy, o[2] + dz])
+                       for dx in (-15, 15) for dy in (-15, 15) for dz in (-6, 28))
+                   for sx, sy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+        if not free:
+            bad.append(f"{coords(o)} cannot move")
+    return (bool(starts) and not bad, f"{len(starts)} starts, {len(bad)} not standing free"
+            + (": " + "; ".join(bad[:4]) if bad else ""))
 
 
 # ---- visibility ----------------------------------------------------------------------------------------------------
@@ -967,6 +1089,9 @@ def main() -> int:
     if "annex" in want:
         check(f"annex: every annex the plan dealt on an accepted dig is built and holds a pickup worth the walk,"
               f" at least {ANNEX_MIN}", *ask_annex(bsp, a.job, donor, work))
+    if "stairways" in want:
+        check("stairways: every stairway the plan dealt and the ledger accepted is built, stands on the floor and"
+              " holds its pickup", *ask_stairways(bsp, a.job, donor, work))
     if "sky" in want:
         check("sky: nothing new is seen through the sky", *ask_sky(bsp, a.job, donor))
     if "digwalls" in want:
@@ -1002,6 +1127,8 @@ def main() -> int:
         gate_axes(bsp, work)
     if "static" in want:
         gate_static(bsp, a.job, work, donor)
+    if "starts" in want:
+        check("starts: every start stands in air on a floor and can step off", *ask_starts(bsp))
     print(f"SUMMARY {CASES} cases asserted, {FAILED} failures", flush=True)
     return 1 if FAILED else 0
 

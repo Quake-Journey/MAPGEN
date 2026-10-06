@@ -293,6 +293,13 @@ static mapcompile_result_t run_stage(void *ctx,
     return MAPCOMPILE_OK;
 }
 
+/* Brief 11: an option that changes the plan, recorded as given - the ledger's head carries them for the gates. */
+static void plan_option(mapgen_pipeline_request_t *r, const char *name, const char *value)
+{
+    const size_t used = strlen(r->plan_options);
+    snprintf(r->plan_options + used, sizeof(r->plan_options) - used, "%s%s %s", used ? " " : "", name, value);
+}
+
 int main(int argc, char **argv)
 {
     /*
@@ -410,16 +417,25 @@ int main(int argc, char **argv)
             MapGenGeometryEdit_DigStoreys((uint32_t)strtoul(argv[++a], NULL, 10));
         else if (!strcmp(argv[a], "--spans") && a + 1 < argc)
             MapGenGeometryEdit_DigSpans((uint32_t)strtoul(argv[++a], NULL, 10));
+        /* brief 11 D1: stairways up the rooms' walls, 0..10 */
+        else if (!strcmp(argv[a], "--stairways") && a + 1 < argc) {
+            plan_option(&request, argv[a], argv[a + 1]);
+            MapGenGeometryEdit_DigStairways((uint32_t)strtoul(argv[++a], NULL, 10));
+        }
         /* row 410: the map's own pools made another liquid - look and harm («water-lava», «mix» ...) */
         else if (!strcmp(argv[a], "--liquids") && a + 1 < argc)
             MapGenGeometryEdit_SetLiquids(argv[++a]);
         /* row 412: how much new water, slime and lava the floods lay, percent of the rooms they may take */
-        else if (!strcmp(argv[a], "--new-water") && a + 1 < argc)
+        else if (!strcmp(argv[a], "--new-water") && a + 1 < argc) {
+            plan_option(&request, argv[a], argv[a + 1]);
             MapGenGeometryEdit_SetNewLiquid(0u, (int32_t)strtol(argv[++a], NULL, 10));
-        else if (!strcmp(argv[a], "--new-slime") && a + 1 < argc)
+        } else if (!strcmp(argv[a], "--new-slime") && a + 1 < argc) {
+            plan_option(&request, argv[a], argv[a + 1]);
             MapGenGeometryEdit_SetNewLiquid(1u, (int32_t)strtol(argv[++a], NULL, 10));
-        else if (!strcmp(argv[a], "--new-lava") && a + 1 < argc)
+        } else if (!strcmp(argv[a], "--new-lava") && a + 1 < argc) {
+            plan_option(&request, argv[a], argv[a + 1]);
             MapGenGeometryEdit_SetNewLiquid(2u, (int32_t)strtol(argv[++a], NULL, 10));
+        }
         /* row 412: how many of the base's wall pieces the digs hang, percent of the rule's */
         else if (!strcmp(argv[a], "--decor") && a + 1 < argc)
             MapGenGeometryEdit_SetWallDecor((uint32_t)strtoul(argv[++a], NULL, 10));

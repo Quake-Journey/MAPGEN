@@ -79,7 +79,9 @@ public sealed partial class MainWindow
                                     creative = ex;
                             }
                             await Task.Delay(300);
-                            creative?.BringIntoView();
+                            // brief 11: its last rows in view (the stairways and the destruction below the liquids)
+                            if (creative != null)
+                                creative.BringIntoView(new Avalonia.Rect(0, Math.Max(0, creative.Bounds.Height - 8), 8, 8));
                         }
                         await Task.Delay(350);
                         var file = Path.Combine(into, page + ".png");

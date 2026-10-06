@@ -75,6 +75,7 @@ public static class Describe
         Add(shapes.GetValueOrDefault("tunnel") + shapes.GetValueOrDefault("corridor"), "новый проход", "новых прохода", "новых проходов", "new passage(s)");
         Add(shapes.GetValueOrDefault("tunnel+lift"), "проход с лифтом", "прохода с лифтами", "проходов с лифтами", "passage(s) with a lift");
         Add(families.GetValueOrDefault("span"), "мост над ареной", "моста над ареной", "мостов над ареной", "bridge(s) over the arena");
+        Add(families.GetValueOrDefault("stairway"), "лестница к новой площадке", "лестницы к новым площадкам", "лестниц к новым площадкам", "stairway(s) up to a new landing");
         Add(families.GetValueOrDefault("flood"), "место с водой", "места с водой", "мест с водой", "flooded place(s)");
         Add(families.GetValueOrDefault("window"), "окно", "окна", "окон", "window(s)");
         Add(families.GetValueOrDefault("stairs-to-lift"), "лестница заменена лифтом", "лестницы заменены лифтами", "лестниц заменено лифтами", "stair(s) replaced by a lift");
@@ -90,6 +91,34 @@ public static class Describe
                                     : ru ? "  ничего — карта совпадает с основой." : "  nothing - the map is the base.");
         if (pickups.Count > 0)
             b.AppendLine(ru ? $"В новых комнатах: {string.Join(", ", pickups)}." : $"In the new rooms: {string.Join(", ", pickups)}.");
+        // brief 11: the stairways asked and the places the map had for them
+        var asked = g.Request.Options?.Stairways ?? 0;
+        if (asked > 0 && families.GetValueOrDefault("stairway") < asked)
+            b.AppendLine(ru ? $"Лестниц {families.GetValueOrDefault("stairway")} из {asked}: больше подходящих стен на этой основе не нашлось."
+                            : $"Stairways {families.GetValueOrDefault("stairway")} of {asked}: this base had no more walls for them.");
+        // brief 11 D2: what was destroyed, by kind, and that passage is not guaranteed
+        var ruin = Path.Combine(g.RunDir, "candidate.destroyed.json");
+        if ((g.Request.Options?.Destruction ?? 0) > 0 && File.Exists(ruin))
+        {
+            var j = System.Text.Json.JsonDocument.Parse(File.ReadAllText(ruin)).RootElement;
+            int N(string k) => j.TryGetProperty(k, out var v) && int.TryParse(v.GetString(), out var n) ? n : 0;
+            var parts = new List<string>();
+            void P(int n, string r1, string r2, string r5, string en)
+            {
+                if (n > 0)
+                    parts.Add(ru ? $"{RuForm(n, r1, r2, r5)} {n}" : $"{en} {n}");
+            }
+            P(N("cracks"), "трещина", "трещины", "трещин", "cracked faces");
+            P(N("rubble"), "куча обломков", "кучи обломков", "куч обломков", "rubble piles");
+            P(N("craters"), "воронка", "воронки", "воронок", "craters");
+            P(N("breaches"), "пролом", "пролома", "проломов", "breaches");
+            P(N("gouges"), "выбоина в стене", "выбоины в стенах", "выбоин в стенах", "gouges");
+            P(N("broken"), "отбитый край", "отбитых края", "отбитых краёв", "broken edges");
+            P(N("collapses"), "обвал потолка", "обвала потолка", "обвалов потолка", "fallen ceilings");
+            P(N("ruins"), "завал", "завала", "завалов", "blocked or sunken places");
+            b.AppendLine(ru ? $"Разрушения {g.Request.Options!.Destruction}%: {string.Join(", ", parts)}; проходимость не гарантируется, точки появления свободны."
+                            : $"Destruction {g.Request.Options!.Destruction}%: {string.Join(", ", parts)}; passage is not guaranteed, the starts are free.");
+        }
         if (g.Gates.Count > 0)
             b.AppendLine(ru ? $"Проверки карты: пройдено {g.Gates.Count(x => x.pass)} из {g.Gates.Count}."
                             : $"The map's checks: {g.Gates.Count(x => x.pass)} of {g.Gates.Count} passed.");

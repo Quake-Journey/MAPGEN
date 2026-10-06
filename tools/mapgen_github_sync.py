@@ -41,6 +41,8 @@ INCLUDE = [
     "tools/build_pinned_compiler.py", "tools/validate_q2prox_docx.py",
     "tools/mapgen_studio/**",
     "doc/mapgen_studio/**",
+    # brief 11 D3: the texture pack's record - its catalogue and contact sheets (the pack itself is a release asset)
+    "tools/mapgen_textures_*.json", "doc/mapgen_textures/**",
 ]
 EXCLUDE = ["**/bin/**", "**/obj/**", "**/*.bsp", "**/*.bak", "**/__pycache__/**", "**/*.pyc", "**/.vs/**",
            "**/*.user", "**/*.ini", "**/*.exe", "**/*.dll", "**/*.pdb"]

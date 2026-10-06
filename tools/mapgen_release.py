@@ -6,8 +6,9 @@ r"""A MAPGEN Studio release (Fable's brief 10, D2): a zip that works on its own 
 `MapgenStudio-<version>-win-x64.zip` holds:
 * `MapgenStudio.exe` - the Studio, self-contained;
 * `engine/` - `pipeline.exe` (the generator), `q2tool.exe` (the pinned map compiler), `helpers/` (the five programs the
-  map checks run, BUILT here - a user has no C compiler), an empty `donors/` (no map is ours to give: the user adds
-  any Quake II .bsp of his game);
+  map checks run and the destroy driver, BUILT here - a user has no C compiler), `textures/mapgen` (the generator's
+  texture pack, brief 11 D3: game-format pairs, catalogue, masks), an empty `donors/` (no map is ours to give: the
+  user adds any Quake II .bsp of his game);
 * `tools/` - the Python scripts the map checks run and the data they read, nothing else of the tree;
 * the guide (RU/EN, Markdown + DOCX + HTML, its pictures), `CHANGELOG.ru.md` / `CHANGELOG.en.md`, LICENSE,
   THIRD_PARTY.md.
@@ -19,6 +20,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -32,7 +34,7 @@ REPO = TOOLS.parent
 sys.path.insert(0, str(TOOLS))
 STUDIO = TOOLS / "mapgen_studio" / "MapgenStudio"
 OUT = Path(r"O:\Claude2\_agent_temp\claude\mapgen_release")
-ROOTS = ["mapgen_delivery_gates.py", "mapgen_room_light.py", "mapgen_light_autofit.py"]
+ROOTS = ["mapgen_delivery_gates.py", "mapgen_room_light.py", "mapgen_light_autofit.py", "mapgen_destroy.py"]
 
 
 def version() -> str:
@@ -53,6 +55,11 @@ def script_closure() -> list[str]:
             mod = m.group(1) or m.group(2)
             if (TOOLS / f"{mod}.py").is_file():
                 todo.append(f"{mod}.py")
+        # and the scripts they RUN by name (`TOOLS / "check_mapgen_delivery.py"`): the first fresh unpacking failed
+        # «finished» and «axes» on exactly these two, missing
+        for m in re.finditer(r'"((?:check_)?mapgen_\w+\.py)"', text):
+            if (TOOLS / m.group(1)).is_file():
+                todo.append(m.group(1))
         for m in re.finditer(r'"([\w.-]+\.json)"', text):
             if (TOOLS / m.group(1)).is_file():
                 seen.add(m.group(1))
@@ -76,6 +83,14 @@ def helpers(into: Path) -> None:
     shutil.copy2(build_driver(REPO, work), into / "recut_driver.exe")
     shutil.copy2(build_water(REPO, work, "water_probe", PROBE_SRC), into / "water_probe.exe")
     shutil.copy2(build_gate(work), into / "reach_gate.exe")
+    # brief 11 D2: the destruction driver (it also draws the cracked textures - no numpy or Pillow at the user's)
+    from mapgen_destroy import driver as build_destroy
+    saved = os.environ.pop("MAPGEN_HELPERS", None)
+    try:
+        shutil.copy2(build_destroy(work), into / "destroy_driver.exe")
+    finally:
+        if saved is not None:
+            os.environ["MAPGEN_HELPERS"] = saved
     shutil.rmtree(work, ignore_errors=True)
 
 
@@ -104,6 +119,13 @@ def build(out: Path) -> Path:
         "Base maps go here. MAPGEN Studio ships no map: on the Generate page press «Choose maps…» (Выбрать карты…) and\n"
         "pick any Quake II .bsp of your game - it is copied here.\n", encoding="utf-8")
     helpers(stage / "engine" / "helpers")
+    # brief 11 D3: the texture pack, as built (tools/mapgen_textures.py build): the destroyed maps wear it
+    from mapgen_destroy import PACK
+    pack = PACK / "textures" / "mapgen"
+    if not (pack / "catalogue.json").is_file():
+        raise SystemExit(f"no texture pack at {pack}: python tools/mapgen_textures.py build")
+    shutil.copytree(pack, stage / "engine" / "textures" / "mapgen",
+                    ignore=shutil.ignore_patterns("*.png"))       # the masks' pictures: their .raw is what is drawn
     (stage / "tools").mkdir()
     for n in script_closure():
         shutil.copy2(TOOLS / n, stage / "tools" / n)

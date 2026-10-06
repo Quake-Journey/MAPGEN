@@ -1,5 +1,12 @@
 # MAPGEN Studio by ly — change log
 
+## 2.3 — 06.10.2026
+
+- «Stairway annexes» (0-10): flights of steps along rooms' walls to new landings, a pickup on each or a ledge it meets; sites found on any base
+- «Destruction» (0-100 %): cracks, rubble, craters, breaches, broken edges, fallen ceilings, blocked places - more with the percent; the starts are always free
+- The generator's texture pack: surfaces made from the supplied pictures, samples from the web and generated cracks and craters, in the game's format
+- Light: a room carried whole with its own lamps is no longer lit twice; tunnels with hung lamps get less fill light; the first map of a new base is lit right
+
 ## 2.2 — 06.10.2026
 
 - Updates: «Check for updates automatically» (on) and «Check for updates» in the settings and in About; the new version and the whole change log from GitHub in the Studio's language; «Yes» downloads, checks, replaces the program and restarts it, your maps and settings stay
