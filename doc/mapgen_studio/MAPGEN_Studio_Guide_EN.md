@@ -163,13 +163,18 @@ A click on a tile opens the map:
   and whether to «Keep the accepted steps on the disk» — without them an interrupted run cannot be resumed.
 - **Shoot covers automatically** — after every finished map the program starts the game itself and takes a cover.
 
+- **Updates** — «Check for updates automatically» (on) and «Check for updates». When GitHub has a newer version, the
+  program shows its number and all the changes (newest on top) and asks: «Yes» downloads, checks and installs it
+  (your maps and settings stay; the program restarts and shows «What's new»), «Cancel» — not now, and it asks again
+  at the next start.
+
 The settings are kept in a file beside the program; where exactly is written at the bottom of the page.
 
 ## About
 
 ![About](screens/en/about.png)
 
-The program's version and the version history: what changed in each, the newest on top.
+The program's version, «Check for updates» and the version history: what changed in each, the newest on top.
 
 ## When something is wrong
 

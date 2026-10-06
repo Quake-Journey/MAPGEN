@@ -21,6 +21,9 @@ public sealed class Settings
     public string ClientDir { get; set; } = "";
     /* the PO, 06.10: «предложить указать к нему путь» - a python.exe chosen by the user, first before any other */
     public string PythonPath { get; set; } = "";
+    /* Fable's brief 10 (D3): the update check at start, on unless switched off; the hidden update_url is a test's server */
+    public bool AutoUpdateCheck { get; set; } = true;
+    public string UpdateUrl { get; set; } = "";
     public bool SaveMapSource { get; set; } = true;
     public bool AutoCovers { get; set; } = true;          // S-4: a cover launch after every generation
     public bool Scheme { get; set; } = true;              // row 410: the run's plan drawn as it is built
@@ -86,6 +89,8 @@ public sealed class Settings
                 case "temp": s.TempDir = value; break;
                 case "client": s.ClientDir = value; break;
                 case "python": s.PythonPath = value; break;
+                case "update_check": s.AutoUpdateCheck = value is not ("0" or "false" or "no"); break;
+                case "update_url": s.UpdateUrl = value; break;
                 case "save_map_source": s.SaveMapSource = value is "1" or "true" or "yes"; break;
                 case "auto_covers": s.AutoCovers = value is "1" or "true" or "yes"; break;
                 case "scheme": s.Scheme = value is "1" or "true" or "yes"; break;
@@ -136,6 +141,9 @@ public sealed class Settings
         b.AppendLine($"temp={TempDir}");
         b.AppendLine($"client={ClientDir}");
         b.AppendLine($"python={PythonPath}");
+        b.AppendLine($"update_check={(AutoUpdateCheck ? 1 : 0)}");
+        if (UpdateUrl.Length > 0)
+            b.AppendLine($"update_url={UpdateUrl}");
         b.AppendLine($"save_map_source={(SaveMapSource ? 1 : 0)}");
         b.AppendLine($"auto_covers={(AutoCovers ? 1 : 0)}");
         b.AppendLine($"scheme={(Scheme ? 1 : 0)}");

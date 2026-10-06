@@ -84,6 +84,38 @@ public sealed class App : Application
             }
             // row 410: the plan in a real window for a few seconds - what a picture cannot catch (the render pass's own
             // rules: the PO's first resume with the plan closed the Studio)
+            // brief 10 (D3): `--update-test` - the check and «Да» without a window, the answer in update_test.txt
+            if (Environment.GetCommandLineArgs().Contains("--update-test"))
+            {
+                var said = new System.Text.StringBuilder();
+                var code = Task.Run(async () =>
+                {
+                    var found = await Update.Check();
+                    if (found == null)
+                    {
+                        said.AppendLine("UNREACHABLE");
+                        return 2;
+                    }
+                    said.AppendLine($"FOUND {found.Version} CURRENT {Versions.Current}");
+                    if (!Update.Newer(found.Version))
+                    {
+                        said.AppendLine("LATEST");
+                        return 0;
+                    }
+                    var why = await Update.Fetch(found.Version, t => said.AppendLine("SAY " + t));
+                    said.AppendLine(why == null ? "HANDED OVER" : "REFUSED " + why);
+                    return why == null ? 0 : 3;
+                }).GetAwaiter().GetResult();
+                File.WriteAllText(Path.Combine(Settings.ProgramDir, "update_test.txt"), said.ToString());
+                Environment.Exit(code);
+            }
+            // brief 10 (D3): the NEW Studio, from its unpacked folder, puts itself in place of the old one
+            if (Array.IndexOf(Environment.GetCommandLineArgs(), "--apply-update") is var upAt and >= 0
+                && upAt + 4 < Environment.GetCommandLineArgs().Length)
+            {
+                var a = Environment.GetCommandLineArgs();
+                Environment.Exit(Update.Apply(a[upAt + 1], a[upAt + 2], int.TryParse(a[upAt + 3], out var pid) ? pid : 0, a[upAt + 4]));
+            }
             // brief 10 (D1): the map on the whole screen for the guide - `--shots-full DIR JOB LANG`
             if (Array.IndexOf(Environment.GetCommandLineArgs(), "--shots-full") is var fullAt and >= 0
                 && fullAt + 3 < Environment.GetCommandLineArgs().Length)

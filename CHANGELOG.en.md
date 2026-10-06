@@ -1,5 +1,14 @@
 # MAPGEN Studio by ly — change log
 
+## 2.2 — 06.10.2026
+
+- Updates: «Check for updates automatically» (on) and «Check for updates» in the settings and in About; the new version and the whole change log from GitHub in the Studio's language; «Yes» downloads, checks, replaces the program and restarts it, your maps and settings stay
+- After an update, a «What's new» window with this version's changes and the whole log
+
+## 2.1 — 06.10.2026
+
+- The first release on GitHub: the zip works on its own - the generator, the map compiler and the checks' programs are inside, no C compiler needed
+
 ## 2.0 — 06.10.2026
 
 - The author's credit «by ly» in About, in the guide and on GitHub - as Q2PRO-X has it

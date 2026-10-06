@@ -64,6 +64,7 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -255,13 +256,23 @@ def dealt_on(accepted: list, ends: list) -> bool:
 
 
 # ---- pickups -------------------------------------------------------------------------------------------------------
+def prebuilt(name: str) -> Path | None:
+    """Brief 10 (D2): a helper the released Studio ships built (engine/helpers, named by MAPGEN_HELPERS) - a user has
+    no C compiler; on the authors' machine the helper is built from this tree as before."""
+    folder = os.environ.get("MAPGEN_HELPERS", "")
+    exe = Path(folder) / name if folder else None
+    return exe if exe and exe.is_file() else None
+
+
 def gate_pickups(bsp: Path, work: Path, donor: Path | None = None) -> None:
     chain = [e.get("origin") for e in Bsp(bsp).ents if e.get("classname") == "weapon_chaingun"]
     check("pickups: the chaingun is in the map", bool(chain), f"at {chain}" if chain else "none")
     from check_mapgen_lost_pickup import build, ask
-    exe = work / "lost_pickup_oracle.exe"
-    exe.unlink(missing_ok=True)
-    err = build(REPO, exe)
+    exe = prebuilt("lost_pickup_oracle.exe") or work / "lost_pickup_oracle.exe"
+    err = ""
+    if not prebuilt("lost_pickup_oracle.exe"):
+        exe.unlink(missing_ok=True)
+        err = build(REPO, exe)
     if err:
         check("pickups: the lost-pickup oracle builds", False, err[:220])
         return
@@ -348,7 +359,7 @@ def plan_listing(job: Path, work: Path, tree: Path = REPO) -> tuple[str, str]:
         work = work / tree.name
         work.mkdir(parents=True, exist_ok=True)
     try:
-        exe = build_driver(tree, work)
+        exe = (prebuilt("recut_driver.exe") if tree == REPO else None) or build_driver(tree, work)
     except SystemExit as e:
         return "", str(e)
     rc, out = run([exe, base[0], "--seed", head.group(2), "--ambition", str(100 - int(head.group(1))), "--list"]
@@ -598,6 +609,8 @@ def ask_storeys(bsp: Path, job: Path, donor: Path, work: Path, accepted_only: bo
 # ---- visibility ----------------------------------------------------------------------------------------------------
 def visgate_oracle(work: Path) -> tuple[Path, str]:
     from check_mapgen_visgate import build
+    if prebuilt("visgate_oracle.exe"):
+        return prebuilt("visgate_oracle.exe"), ""
     exe = work / "visgate_oracle.exe"
     exe.unlink(missing_ok=True)
     return exe, build(REPO, exe)
@@ -657,7 +670,7 @@ def _same_finding(mine: str, theirs: set) -> bool:
 def gate_water(bsp: Path, work: Path, donor: Path | None = None) -> None:
     from check_mapgen_standing_water import build, PROBE_SRC
     try:
-        exe = build(REPO, work, "water_probe", PROBE_SRC)
+        exe = prebuilt("water_probe.exe") or build(REPO, work, "water_probe", PROBE_SRC)
     except SystemExit as e:
         check("water: the probe builds", False, str(e))
         return
@@ -703,7 +716,7 @@ def gate_water(bsp: Path, work: Path, donor: Path | None = None) -> None:
 
 def gate_reach(bsp: Path, work: Path, donor: Path | None = None) -> None:
     from check_mapgen_reach_gate import build_gate
-    exe = build_gate(work)
+    exe = prebuilt("reach_gate.exe") or build_gate(work)
     # row 404: held to the donor where the donor itself fails (the generator's own rule since row 400), and the
     # teleporters and pads a player crosses named on the line
     argv = [exe, bsp, "40000"] + (["--donor", donor] if donor and donor.is_file() else [])

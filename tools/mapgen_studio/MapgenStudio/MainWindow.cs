@@ -60,6 +60,7 @@ public sealed partial class MainWindow : Window
         timer.Tick += (_, _) => Tick();
         timer.Start();
         Closing += OnClosing;
+        Opened += OnFirstOpened;            // brief 10 (D3): «what's new» after an update, the update check
         // a cover launch still open when the window goes: that one client closed, the map copies taken back
         Closed += (_, _) =>
         {
@@ -1308,6 +1309,7 @@ public sealed partial class MainWindow : Window
         };
         p.Children.Add(Ui.Setting("set.keep_checkpoints", "set.keep_checkpoints.desc", FASymbol.Save, keep,
                                   "set.keep_checkpoints.tip"));
+        UpdateRows(p);
         p.Children.Add(Ui.Text(Loc.F("set.saved", Settings.IniPath), 12, 0.6));
         return Ui.Page(p);
     }
@@ -1376,6 +1378,7 @@ public sealed partial class MainWindow : Window
         var version = Versions.Said(typeof(MainWindow).Assembly.GetName().Version);
         p.Children.Add(Ui.Text(Loc.F("about.version", version), 15, 0.8));
         p.Children.Add(Ui.Text(Loc.T("about.what"), 14));
+        p.Children.Add(UpdateButton());     // brief 10 (D3)
         // the PO, 05.10: the versions with what each brought, newest first
         p.Children.Add(Ui.Section(Loc.T("about.history")));
         foreach (var v in Versions.All)

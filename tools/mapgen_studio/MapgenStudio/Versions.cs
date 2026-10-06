@@ -11,6 +11,26 @@ public static class Versions
 
     public static readonly Entry[] All =
     {
+        new("2.2", "06.10.2026",
+            new[]
+            {
+                "Обновления: «Автоматическая проверка обновлений» (включена) и кнопка «Проверить обновления» в настройках и в «О программе»; новая версия и весь лог изменений с GitHub на языке студии; «Да» — скачать, проверить, заменить программу и перезапустить, ваши карты и настройки остаются",
+                "После обновления — окно «Что нового» с изменениями этой версии и всем логом",
+            },
+            new[]
+            {
+                "Updates: «Check for updates automatically» (on) and «Check for updates» in the settings and in About; the new version and the whole change log from GitHub in the Studio's language; «Yes» downloads, checks, replaces the program and restarts it, your maps and settings stay",
+                "After an update, a «What's new» window with this version's changes and the whole log",
+            }),
+        new("2.1", "06.10.2026",
+            new[]
+            {
+                "Первый выпуск на GitHub: архив работает сам — генератор, компилятор карт и готовые программы проверок внутри, компилятор C не нужен",
+            },
+            new[]
+            {
+                "The first release on GitHub: the zip works on its own - the generator, the map compiler and the checks' programs are inside, no C compiler needed",
+            }),
         new("2.0", "06.10.2026",
             new[]
             {

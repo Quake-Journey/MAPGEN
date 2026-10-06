@@ -108,6 +108,9 @@ README = """# MAPGEN by ly
 another map, floods low ground, changes the finish, moves items — and checks that the new map can be walked, is lit
 and has nothing broken. **MAPGEN Studio** is its Windows program.
 
+Today it makes new maps out of existing ones. **Building a new map from scratch**, with no base map, will come in a
+future version; it is not offered yet.
+
 - Download: the latest build is in [Releases](https://github.com/Quake-Journey/MAPGEN/releases) — unpack the zip and
   start `MapgenStudio.exe`. You need Quake II (any client with its `baseq2`); Python 3.10+ for the map checks (the
   Studio offers to install it). No maps are shipped: add any Quake II `.bsp` of your game as a base.
@@ -120,6 +123,9 @@ and has nothing broken. **MAPGEN Studio** is its Windows program.
 **MAPGEN** переделывает готовую карту Quake II в новую: прокладывает проходы в скале, переносит комнаты из другой
 карты, заливает низины, меняет отделку, переставляет предметы — и проверяет, что по новой карте можно пройти, что
 она освещена и в ней ничего не сломано. **MAPGEN Studio** — программа для Windows.
+
+Сейчас программа делает новые карты из уже готовых. **Сборка новой карты с нуля**, без карты-основы, появится в
+будущих версиях; пока эта возможность не предоставляется.
 
 - Скачать: свежая сборка в [Releases](https://github.com/Quake-Journey/MAPGEN/releases) — распакуйте архив и
   запустите `MapgenStudio.exe`. Нужен Quake II (любой клиент с папкой `baseq2`) и Python 3.10+ для проверок карт

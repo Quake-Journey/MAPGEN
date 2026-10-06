@@ -40,6 +40,15 @@ def _sha256(path: Path) -> str:
 
 def pinned_compiler(quiet: bool = True) -> tuple[Path, str]:
     """(binary, thread policy as a string). Raises when nothing qualifies."""
+    # brief 10 (D2): the released Studio names its own engine/q2tool.exe (the pinned build it ships) - a user's machine
+    # has none of the authors' paths
+    import os
+    shipped = os.environ.get("MAPGEN_Q2TOOL", "")
+    if shipped and Path(shipped).is_file():
+        threads = "1"
+        if PIN.is_file():
+            threads = str(json.loads(PIN.read_text(encoding="utf-8"))["thread_policy"]["value"])
+        return Path(shipped), threads
     pin = json.loads(PIN.read_text(encoding="utf-8"))
     build = pin["build"]
     threads = str(pin["thread_policy"]["value"])

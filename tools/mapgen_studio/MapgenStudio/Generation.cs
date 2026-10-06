@@ -861,7 +861,12 @@ public sealed class Generation
         var fitWork = Path.Combine(RunDir, "light_fit");
         // brief 9: the second map the run was given - the checks re-deal the plan with it
         var second = Request.Grafts is { Count: > 0 } gr ? $",'--second',r'{Engine.DonorPath(gr[0])}'" : "";
-        var code = "import subprocess,sys;" +
+        // brief 10 (D2): the released Studio's own compiler and built helpers, for the checks (a user has no compiler)
+        var helpers = Path.Combine(Engine.Dir, "helpers");
+        var env = "import os;" +
+                  (Directory.Exists(helpers) ? $"os.environ['MAPGEN_HELPERS']=r'{helpers}';" : "") +
+                  $"os.environ['MAPGEN_Q2TOOL']=r'{Path.Combine(Engine.Dir, "q2tool.exe")}';";
+        var code = env + "import subprocess,sys;" +
                    $"f=subprocess.run([sys.executable,r'{fit}',r'{candidate}',r'{donor}',r'{fitWork}']," +
                    "capture_output=True,text=True);" +
                    "x=['--relight-first'] if 'FITTED' in f.stdout else [];" +
