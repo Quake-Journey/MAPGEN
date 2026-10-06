@@ -1,0 +1,20 @@
+gates for O:\Claude2\_agent_temp\claude\mapgen1-20260918\mg_20u_fix\candidate.bsp (job O:\Claude2\_agent_temp\claude\mapgen_studio\MapgenStudio\temp\mg_20u_20261003_040703\job, donor q2dm1.bsp): pickups, glass, hall, annex, storeys, clips, digwalls, sky, eye, stair, finished, water, reach, axes, static
+  PASS  pickups: the chaingun is in the map  -- at ['1760 1640 784']
+  PASS  pickups: none lost at spawn, no spawn in a mover's column  -- 0 lost, 0 blocked
+  PASS  glass: shot panes, panes on a plate, fixed glass beyond the donor's  -- 3 shot, 1 on a plate (1 func_button), 0 other moving panes; 6 fixed glass faces in the world, the donor 0
+  PASS  hall: every hall the plan dealt on an accepted dig is built  -- 1 halls in the plan, 0 on accepted digs, 0 built - no hall dealt, nothing to build
+  PASS  annex: every annex the plan dealt on an accepted dig is built and holds a pickup worth the walk, at least 2  -- 3 annexes in the plan, 3 on accepted digs, 3 built, 3 worth the walk: 464 1824 768 .. 1232 2592 1088 built (768 of 768 new across x, 768 of 768 new across y; moved weapon_hyperblaster, holds weapon_hyperblaster, worth 7); 1952 -336 896 .. 2720 432 1216 built (768 of 768 new across x, 768 of 768 new across y; moved weapon_rocketlauncher, holds weapon_rocketlauncher, worth 8); 1952 592 1024 .. 2464 1104 1312 built (512 of 512 new across x, 512 of 512 new across y; moved item_armor_jacket, holds item_armor_jacket, worth 6)
+  PASS  sky: nothing new is seen through the sky  -- 8 digs, 2123 viewers under the sky, 19409 points of new space, 0 seen through it
+  PASS  digwalls: every accepted dig is dug - no new space open high to the old map, nothing standing in its air  -- 8 digs: 0 points open high; 0 points standing in the old air
+  PASS  clips: no player-clip brush beside space the generator opened  -- 0 found
+  PASS  storeys: every storey the plan dealt on an accepted dig is built - its hall, its terrace, its flight - and holds its pickup, at least 1  -- 1 storeys in the plan, 1 on accepted digs, 1 built: 1552 1312 768 .. 2096 1840 1312 from 1424 1584 768 below and 1840 1200 1024 above built (544 of 544 new across x, 528 of 528 new across y; terrace solid at 1824 1376 (1606 1376 top foot; 1715 1376 top foot; 1824 1376 top foot; 1933 1376 top foot; 2042 1376 top foot); tread 8 of 16 at 2032 1652 top 880 solid under, rock over it at none; moved weapon_chaingun, holds weapon_chaingun)
+  PASS  visibility: the oracle builds
+  PASS  eye: from the PO's eye 920 65 718 no pair the donor showed is lost  -- 1 eyes, 0 pairs LOST in plain sight
+  PASS  stair: from the oracle's own eyes round the stair no pair is lost  -- 2100 eyes, 0 pairs LOST in plain sight
+  PASS  finished: lit, with visibility data  -- SUMMARY 1 cases asserted, 0 failures
+  PASS  light: the map is lit like its donor - shared faces per orientation, every dug room lit  -- shared faces sides 1.00, floors 1.00, ceilings 1.00 (0.8..1.25); donor mean 43.9, dark 6.0 %; 0 dug rooms
+  PASS  water: no vertical liquid face  -- vertical liquid faces 0 area 0
+  PASS  reach: every start, pickup and landmark reachable  -- component 8745, reachable 8745, one-way 0 (0 lethal) / 14 movers, 4 opened, 0 that nothing can fire; 2 explorations
+  PASS  axes: every drawn face wears its texture  -- SUMMARY 1 cases asserted, 0 failures
+  PASS  static: panes, lifts, sounds and the digs' mouths  -- 10 cases asserted, 0 failures
+SUMMARY 17 cases asserted, 0 failures

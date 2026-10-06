@@ -1,0 +1,7 @@
+bin/
+obj/
+*.user
+*.bsp
+*.exe
+*.dll
+__pycache__/

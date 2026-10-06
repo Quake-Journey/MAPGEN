@@ -1,0 +1,11 @@
+<Project>
+  <!--
+    MAPGEN Studio builds outside the repository and outside the VS Code workspace (ledger rows 376, 381: a watched
+    tree full of build output stalls the editor). Override with -p:StudioBuildRoot=... when needed.
+  -->
+  <PropertyGroup>
+    <StudioBuildRoot Condition="'$(StudioBuildRoot)' == ''">O:\Claude2\_agent_temp\claude\mapgen_studio\build\</StudioBuildRoot>
+    <BaseIntermediateOutputPath>$(StudioBuildRoot)obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(StudioBuildRoot)bin\$(MSBuildProjectName)\</BaseOutputPath>
+  </PropertyGroup>
+</Project>
