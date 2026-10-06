@@ -11,6 +11,19 @@ public static class Versions
 
     public static readonly Entry[] All =
     {
+        new("2.0", "06.10.2026",
+            new[]
+            {
+                "Подпись автора «by ly» в «О программе», в руководстве и на GitHub — как у Q2PRO-X",
+                "Исходники генератора и студии опубликованы на GitHub: github.com/Quake-Journey/MAPGEN",
+                "В руководстве сказано, что сборка карты с нуля появится в будущих версиях",
+            },
+            new[]
+            {
+                "The author's credit «by ly» in About, in the guide and on GitHub - as Q2PRO-X has it",
+                "The generator's and the Studio's sources are published on GitHub: github.com/Quake-Journey/MAPGEN",
+                "The guide says that a map from scratch will come in a future version",
+            }),
         new("1.9", "06.10.2026",
             new[]
             {

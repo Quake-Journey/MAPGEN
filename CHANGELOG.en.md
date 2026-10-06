@@ -1,4 +1,10 @@
-# MAPGEN Studio — change log
+# MAPGEN Studio by ly — change log
+
+## 2.0 — 06.10.2026
+
+- The author's credit «by ly» in About, in the guide and on GitHub - as Q2PRO-X has it
+- The generator's and the Studio's sources are published on GitHub: github.com/Quake-Journey/MAPGEN
+- The guide says that a map from scratch will come in a future version
 
 ## 1.9 — 06.10.2026
 

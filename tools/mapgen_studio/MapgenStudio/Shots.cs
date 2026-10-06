@@ -48,7 +48,11 @@ public sealed partial class MainWindow
                     var maps = Library.Scan(App.Settings);     // each language's descriptions
                     var into = Path.Combine(dir, lang);
                     Directory.CreateDirectory(into);
-                    foreach (var page in ShotPages)
+                    // only the pages asked for, when MAPGEN_SHOT_PAGES names them (the PO, 06.10: «нафига все скриншоты
+                    // то переснимать?» - a change to «О программе» retakes about.png and nothing else)
+                    var wanted = (Environment.GetEnvironmentVariable("MAPGEN_SHOT_PAGES") ?? "")
+                                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    foreach (var page in ShotPages.Where(p => wanted.Length == 0 || wanted.Contains(p)))
                     {
                         w._chosen.Clear();
                         if (donors.Count > 0)
@@ -85,7 +89,8 @@ public sealed partial class MainWindow
                 }
                 Loc.Language = keepLang;
                 App.ApplyTheme(keepTheme);
-                File.WriteAllText(Path.Combine(dir, "build.txt"), Versions.Current + "\n");
+                if (Environment.GetEnvironmentVariable("MAPGEN_SHOT_PAGES") is not { Length: > 0 })
+                    File.WriteAllText(Path.Combine(dir, "build.txt"), Versions.Current + "\n");
             }
             catch (Exception ex)
             {

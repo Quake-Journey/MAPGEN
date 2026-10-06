@@ -559,7 +559,7 @@ public static class Loc
         ["set.saved"] = "Настройки сохранены в {0}",
 
         ["about.title"] = "О программе",
-        ["about.version"] = "Версия {0}",
+        ["about.version"] = "Версия {0} by ly",
         ["about.history"] = "История версий",
         ["about.history.version"] = "{0} — {1}",
         ["about.what"] = "MAPGEN Studio — внешняя программа к генератору карт MAPGEN. Генерация идёт отдельным процессом: " +
@@ -1095,7 +1095,7 @@ public static class Loc
         ["set.saved"] = "Settings saved in {0}",
 
         ["about.title"] = "About",
-        ["about.version"] = "Version {0}",
+        ["about.version"] = "Version {0} by ly",
         ["about.history"] = "Version history",
         ["about.history.version"] = "{0} - {1}",
         ["about.what"] = "MAPGEN Studio is the external program of the MAPGEN map generator. Generation runs as its own process: " +

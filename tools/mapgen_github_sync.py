@@ -31,7 +31,7 @@ OWNER, NAME = "Quake-Journey", "MAPGEN"
 URL = f"https://github.com/{OWNER}/{NAME}.git"
 EXPORT = Path(r"O:\Claude2\_agent_temp\claude\mapgen_github\MAPGEN")
 GITLEAKS = Path(r"O:\Claude2\_agent_temp\codex\github-beta11-20261004\tools\gitleaks.exe")
-GITLEAKS_RULES = REPO / "tools" / "cloud_backup" / "gitleaks.toml"
+GITLEAKS_RULES = Path(r"O:\Claude2\q2pro\tools\cloud_backup\gitleaks.toml")     # Codex's rules, in the main checkout
 STUDIO = REPO / "tools" / "mapgen_studio" / "MapgenStudio"
 
 # what goes out (globs from the tree's root); the generator's own include closure is added by `scope()`
@@ -86,7 +86,7 @@ def changelog(lang: str) -> str:
     """The Studio's history (Versions.cs) as Markdown, the newest on top - one `## <version> — <date>` per version."""
     text = (STUDIO / "Versions.cs").read_text(encoding="utf-8")
     entries = re.findall(r'new\("([\d.]+)", "([\d.]+)",\s*new\[\]\s*\{(.*?)\},\s*new\[\]\s*\{(.*?)\}\)', text, re.S)
-    title = "# MAPGEN Studio — история версий" if lang == "ru" else "# MAPGEN Studio — change log"
+    title = "# MAPGEN Studio by ly — история версий" if lang == "ru" else "# MAPGEN Studio by ly — change log"
     lines = [title, ""]
     for number, date, ru, en in entries:
         lines.append(f"## {number} — {date}")
@@ -102,7 +102,7 @@ def current_version() -> str:
     return m.group(1) if m else "0.0"
 
 
-README = """# MAPGEN
+README = """# MAPGEN by ly
 
 **MAPGEN** remakes an existing Quake II map into a new one: it digs passages through the rock, carries rooms over from
 another map, floods low ground, changes the finish, moves items — and checks that the new map can be walked, is lit
@@ -246,7 +246,7 @@ def prepare(export: Path) -> dict:
             f"MAPGEN Studio {version} (source {head})\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
             cwd=export)
     said = {"version": version, "source": head, "files": len(files), "changed": bool(changed),
-            "scanned_with_gitleaks": GITLEAKS.is_file()}
+            "scanned_with_gitleaks": GITLEAKS.is_file() and GITLEAKS_RULES.is_file()}
     print(json.dumps(said))
     return said
 
@@ -275,11 +275,12 @@ def push(export: Path) -> None:
     if repo.get("_status") == 404:
         repo = api("POST", f"/orgs/{OWNER}/repos", {
             "name": NAME, "private": False, "has_wiki": False, "has_projects": False,
-            "description": "MAPGEN: remakes Quake II maps - the generator and MAPGEN Studio",
+            "description": "MAPGEN by ly: remakes Quake II maps - the generator and MAPGEN Studio",
         })
         print("created", repo.get("html_url"))
     if repo.get("private"):
         raise SystemExit("the repository is private - this tool publishes the public one only")
+    api("PATCH", f"/repos/{OWNER}/{NAME}", {"description": "MAPGEN by ly: remakes Quake II maps - the generator and MAPGEN Studio"})
     api("PUT", f"/repos/{OWNER}/{NAME}/actions/permissions", {"enabled": False})
     git("push", "origin", "main", cwd=export)       # never --force
     print("pushed", git("rev-parse", "--short", "HEAD", cwd=export).strip(), "to", URL)

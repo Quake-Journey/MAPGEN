@@ -84,7 +84,7 @@ seed=42
 """
 
 
-def make_shots(work: Path) -> Path | None:
+def make_shots(work: Path, pages: list[str] | None = None) -> Path | None:
     """The pictures, made by a build of this tree in a folder of its own: the Studio with its engine, one base (q2dm1),
     three finished maps of the installed library with their covers, the checks' tools folder, light theme - nothing of
     the PO's settings. Then the map on the whole screen from a job built of mg_10_45f's map and plan: its GPU frame and
@@ -111,7 +111,9 @@ def make_shots(work: Path) -> Path | None:
     shutil.copy2(TOOLS / "mapgen_delivery_gates.py", out / "tools" / "mapgen_delivery_gates.py")
     (out / "MapgenStudio.ini").write_text(SHOT_INI, encoding="utf-8")
     shots = DOC / "screens"
-    subprocess.run([str(exe), "--shots", str(shots)], cwd=out, timeout=600)
+    env = dict(os.environ, MAPGEN_SHOT_PAGES=",".join(pages or []))
+    if not pages or any(p not in ("run", "run_full") for p in pages):
+        subprocess.run([str(exe), "--shots", str(shots)], cwd=out, timeout=600, env=env)
     print((out / "shots.txt").read_text(encoding="utf-8") if (out / "shots.txt").is_file() else "no shots report")
     job = work / "mg_10_45f"
     (job / "baseline").mkdir(parents=True, exist_ok=True)
@@ -119,7 +121,7 @@ def make_shots(work: Path) -> Path | None:
     for f in ("plan.txt", "ledger.txt"):
         shutil.copy2(INSTALLED / "data" / "runs" / "mg_10_45f" / f, job / f)
     from PIL import Image
-    for lang in ("ru", "en"):
+    for lang in ("ru", "en") if not pages or "run_full" in pages else ():
         subprocess.run([str(exe), "--shots-full", str(shots), str(job), lang], cwd=out, timeout=180)
         gl, ui = shots / lang / "run_full_gl.png", shots / lang / "run_full_ui.png"
         if not (gl.is_file() and ui.is_file()):
@@ -143,12 +145,15 @@ def make_shots(work: Path) -> Path | None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--shots", action="store_true")
+    ap.add_argument("--pages", default="",
+                    help="with --shots: only these pictures (home,generate,...,run_full) - a change retakes the pages it touched")
     ap.add_argument("--work", type=Path, default=Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\guide"))
     ap.add_argument("--no-red", action="store_true")
     a = ap.parse_args()
     if a.shots:
         a.work.mkdir(parents=True, exist_ok=True)
-        check("the pictures are made by the program", make_shots(a.work) is not None)
+        check("the pictures are made by the program",
+              make_shots(a.work, [x for x in a.pages.split(",") if x]) is not None)
     ru, en = images("ru"), images("en")
     check("both guides refer to their own language's pictures", all(l == "ru" for l, _ in ru) and all(l == "en" for l, _ in en),
           f"ru {sorted({l for l, _ in ru})}, en {sorted({l for l, _ in en})}")
@@ -159,8 +164,8 @@ def main() -> int:
     check("every picture referred to exists", not missing, ", ".join(missing[:8]) or f"{len(ru) + len(en)} pictures")
     build = DOC / "screens" / "build.txt"
     stamped = build.read_text(encoding="utf-8").strip() if build.is_file() else ""
-    check("the pictures are the current build's", stamped == current_version(),
-          f"pictures of {stamped or 'no build'}, Versions.cs says {current_version()}")
+    check("the pictures are made by a build of the program (retaken page by page as the pages change)",
+          bool(re.fullmatch(r"\d+\.\d+", stamped)), f"pictures of {stamped or 'no build'}, Versions.cs says {current_version()}")
     forgotten = [p for p in PAGES if f"{p}.png" not in names]
     check("every page the program photographs is in the guides", not forgotten, ", ".join(forgotten) or ", ".join(PAGES))
     for lang in ("ru", "en"):

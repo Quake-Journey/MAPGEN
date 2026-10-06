@@ -1,4 +1,4 @@
-# MAPGEN Studio — user guide
+# MAPGEN Studio by ly — user guide
 
 MAPGEN Studio turns an existing Quake II map into a new one: it digs passages through the rock, carries rooms over
 from another map, floods low ground with water, lava or slime, changes the finish, moves items — and checks that the

@@ -1,4 +1,4 @@
-# MAPGEN
+# MAPGEN by ly
 
 **MAPGEN** remakes an existing Quake II map into a new one: it digs passages through the rock, carries rooms over from
 another map, floods low ground, changes the finish, moves items — and checks that the new map can be walked, is lit
