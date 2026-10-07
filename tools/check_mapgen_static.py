@@ -468,7 +468,10 @@ def judge(path: Path, digs=None) -> dict:
                 f"{tag}: {len(mouths)} open patch(es) on its faces")
         dark = 0
         names = set()
-        for fi in b.model_faces(0):
+        # brief 11: a room CARRIED whole keeps its original's faces - a lamp texture the original draws dark is drawn
+        # dark in the copy as in the original (q3t2's ceil1_1 in its room 5), not a lamp the generator tiled
+        carried = dig.get("shape") in ("room-copy", "room-of")
+        for fi in (b.model_faces(0) if not carried else ()):
             flags, name = b.texinfo[b.faces[fi][4]]
             # SURF_SKY (0x4) is drawn with and without SURF_LIGHT in the same
             # map - q2dm1 has both - and a passage's bounding box takes in the

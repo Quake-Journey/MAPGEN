@@ -80,11 +80,16 @@ def rooms_of(job: Path, work: Path) -> list:
     return gates.static_digs(job, work)
 
 
-def measure(bsp: Path, donor: Path, digs: list) -> list:
+def measure(bsp: Path, donor: Path, digs: list, sources: list | None = None) -> list:
+    import mapgen_delivery_gates as gates
+    from mapgen_light_profile import room_against_source
     out = []
     for d in digs:
         doors = [d["from"]] if d.get("own_room_end") == "to" else [d["from"], d["to"]]
-        ok, said = room_against_door(bsp, donor, d["box"], doors)
+        # brief 11 step 1: a carried room is brought to its original's light, not its door's
+        src = gates.source_of(d, sources or [], donor)
+        ok, said = room_against_source(bsp, src[0], d["box"], src[1]) if src else \
+            room_against_door(bsp, donor, d["box"], doors)
         m = re.search(r"all (\d+)/(\d+)", said)
         ref, room = profile.LAST.get("ref"), profile.LAST.get("room")
         tint_off = bool(ref and room and (abs(room["gr"] - ref["gr"]) > TINT_BAND or abs(room["br"] - ref["br"]) > TINT_BAND))
@@ -94,6 +99,62 @@ def measure(bsp: Path, donor: Path, digs: list) -> list:
             colour = " ".join(f"{c / top:.3f}" for c in ref["rgb"][3])
         out.append((d, ok, said, (int(m.group(1)), int(m.group(2))) if m else None, tint_off, colour))
     return out
+
+
+def scale_panels(bsp: Path, boxes: list, factors: list) -> int:
+    """Brief 11 step 1: the glowing faces (SURF_LIGHT) a room's own panels are - their light value scaled by the room's
+    factor, through a copy of their texture record so the same texture elsewhere keeps its value. Measured on q2dm1's
+    first map: a tunnel lit by its lamp panels stood at x1.8 its door after three rounds that could only scale lamp
+    entities. Returns how many faces took a new value. The light pass that follows reads the values from the file."""
+    import struct
+    d = bytearray(bsp.read_bytes())
+
+    def lump(i):
+        return struct.unpack_from("<ii", d, 8 + 8 * i)
+
+    tio, til = lump(5)
+    fo, fl = lump(6)
+    vo, _ = lump(2)
+    eo, _ = lump(11)
+    so, _ = lump(12)
+    texinfo = [bytes(d[tio + 76 * i: tio + 76 * (i + 1)]) for i in range(til // 76)]
+    added: dict = {}
+    changed = 0
+    for f in range(fl // 20):
+        at = fo + 20 * f
+        _, _, firstedge, numedges, ti = struct.unpack_from("<HHiHH", d, at)
+        flags, value = struct.unpack_from("<ii", texinfo[ti], 32) if ti < len(texinfo) else (0, 0)
+        if not (flags & 1) or value <= 0 or numedges <= 0:
+            continue
+        c = [0.0, 0.0, 0.0]
+        for k in range(numedges):
+            se = struct.unpack_from("<i", d, so + 4 * (firstedge + k))[0]
+            v0, v1 = struct.unpack_from("<HH", d, eo + 4 * abs(se))
+            v = v1 if se < 0 else v0
+            x = struct.unpack_from("<fff", d, vo + 12 * v)
+            for a in range(3):
+                c[a] += x[a] / numedges
+        for box, k in zip(boxes, factors):
+            if all(box[a] - 1 <= c[a] <= box[a + 3] + 1 for a in range(3)):
+                key = (ti, round(k, 3))
+                if key not in added:
+                    rec = bytearray(texinfo[ti])
+                    struct.pack_into("<i", rec, 36, max(1, int(round(value * k))))
+                    struct.pack_into("<i", rec, 72, -1)          # no animation chain for the copy
+                    added[key] = len(texinfo)
+                    texinfo.append(bytes(rec))
+                struct.pack_into("<H", d, at + 10, added[key])
+                changed += 1
+                break
+    if added:
+        # the texture records grown: the lump moved to the file's end, the header pointed at it
+        new = b"".join(texinfo)
+        while len(d) % 4:
+            d.append(0)
+        struct.pack_into("<ii", d, 8 + 8 * 5, len(d), len(new))
+        d += new
+        bsp.write_bytes(bytes(d))
+    return changed
 
 
 def relight(bsp: Path, text: str, flags: str, work: Path, keys: dict | None = None, moddir: Path | None = None,
@@ -134,7 +195,7 @@ def main() -> int:
     ap.add_argument("--second", type=Path, help="brief 9: the second map the run was given (the plan is dealt with it)")
     ap.add_argument("--work", type=Path)
     ap.add_argument("--flags")
-    ap.add_argument("--rounds", type=int, default=3)
+    ap.add_argument("--rounds", type=int, default=8)       # brief 11: a lamp-panel tunnel converges by ~6 % a round
     ap.add_argument("--relight-first", action="store_true",
                     help="row 410: relight the map under its donor's current calibration before measuring - a map "
                          "already built, lit by an older one, brought up to date without generating it again")
@@ -156,13 +217,19 @@ def main() -> int:
         digs = rooms_of(a.job, work)
     theirs = donor_lights(a.donor)
     recoloured = 0
+    sources = []
+    if a.job:
+        import mapgen_delivery_gates as gates
+        text, err = gates.plan_listing(a.job, work)
+        sources = gates.job_sources(a.job, text if not err else "")
+    tinted: set = set()
     if a.relight_first:
         text, moved = revalue(entity_text(a.map.read_bytes()), flags)
         print(f"relighting under the donor's calibration: flags '{flags}', keys {keys}; {moved} lights the generator"
               f" valued for another pass revalued", flush=True)
         relight(a.map, text, flags, work, keys)
     for rnd in range(a.rounds + 1):
-        found = measure(a.map, a.donor, digs)
+        found = measure(a.map, a.donor, digs, sources)
         for d, ok, said, *_ in found:
             print(f"round {rnd} {'PASS' if ok else 'FAIL'} {d.get('shape')} {[round(v) for v in d['box'][:3]]}: {said}",
                   flush=True)
@@ -199,8 +266,31 @@ def main() -> int:
             return e
 
         text = LIGHT.sub(scale, text)
-        print(f"round {rnd}: {changed} lights rescaled in {len(off)} rooms; relighting", flush=True)
-        if not changed:
+        # a carried room whose colour stays off its original's (an original lit by its sky - orange q3t2, q2dm1's
+        # courtyard rooms - copied underground under white lamps): one light of the original's colour in its middle,
+        # its own panels dimmed, once (brief 11 step 1)
+        extra = []
+        for d, (room, ref), colour in off:
+            key = tuple(round(v) for v in d["box"])
+            src = gates.source_of(d, sources, a.donor) if sources else None
+            if not src or not colour or key in tinted or not profile.LAST:
+                continue
+            b = d["box"]
+            mid = [(b[0] + b[3]) / 2, (b[1] + b[4]) / 2, b[2] + (b[5] - b[2]) * 0.6]
+            extra.append('{\n"classname" "light"\n"origin" "%.0f %.0f %.0f"\n"light" "%d"\n"_color" "%s"\n}\n'
+                         % (mid[0], mid[1], mid[2], max(150, round(ref * 2.5)), colour))
+            tinted.add(key)
+        if extra:
+            text = text + "".join(extra)
+            scale_panels(a.map, [d["box"] for d, _, _ in off if tuple(round(v) for v in d["box"]) in tinted],
+                         [0.6] * len(extra))
+        # and the rooms' own glowing panels, by the level's own ratio (a panel's light goes about as its value)
+        panels = scale_panels(a.map, [d["box"] for d, _, _ in off],
+                              [max(0.3, min(3.0, ref * (LEVEL_BAND[0] + LEVEL_BAND[1]) / 2.0 / max(1, room)))
+                               for _, (room, ref), _ in off])
+        print(f"round {rnd}: {changed} lights and {panels} panel faces rescaled in {len(off)} rooms; relighting",
+              flush=True)
+        if not changed and not panels:
             break
         relight(a.map, text, flags, work, keys)
     # row 410 (brief 7 decision 3): recolouring now means the light pass drifted from the donor - said, not hidden

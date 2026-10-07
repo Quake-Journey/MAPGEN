@@ -116,3 +116,21 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def shared_ratios(bsp, donor) -> dict:
+    """The light gate's measure (brief 11 step 1: the fit steers by it too, so the two cannot disagree): per
+    orientation, the faces both maps draw, the map's luxel-weighted mean over the donor's."""
+    cand, don = faces(bsp), faces(donor)
+    theirs = {(f["name"], f["box"]): f for f in don}
+    out = {}
+    for kind in ("sides", "floors", "ceilings"):
+        num = den = 0.0
+        for f in cand:
+            g = theirs.get((f["name"], f["box"]))
+            if f["kind"] == kind and g:
+                num += f["mean"] * f["lux"]
+                den += g["mean"] * f["lux"]
+        if den:
+            out[kind] = num / den
+    return out

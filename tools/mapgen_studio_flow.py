@@ -42,6 +42,10 @@ def main() -> int:
     ap.add_argument("--destruction", type=int, default=0)
     ap.add_argument("--pipeline", type=Path, default=ENGINE / "pipeline.exe")
     ap.add_argument("--game", type=Path, default=GAME)
+    ap.add_argument("--relight", action="store_true",
+                    help="relight the map under the donor's calibration as it stands now (a calibration changed since)")
+    ap.add_argument("--after-generation", action="store_true",
+                    help="the generation already finished in WORK/job: only the steps after it")
     a = ap.parse_args()
     guard.pin_self()
     a.work.mkdir(parents=True, exist_ok=True)
@@ -52,9 +56,10 @@ def main() -> int:
             shutil.copy2(f, donors / f.name)
     base = donors / f"{a.donor}.bsp"
     job = a.work / "job"
-    if job.exists():
-        shutil.rmtree(job)
-    job.mkdir()
+    if not a.after_generation:
+        if job.exists():
+            shutil.rmtree(job)
+        job.mkdir()
     words = [str(a.pipeline), str(pinned_compiler()[0]), str(base), str(job), "q2mg", str(a.fidelity), str(a.seed),
              "--moddir", str(a.game), "--final", "--hold-to-donor"]
     light = base.with_suffix(".light.txt")
@@ -68,15 +73,18 @@ def main() -> int:
     words += ["--checkpoints", "0"]
     (a.work / "words.txt").write_text("\n".join(words) + "\n", encoding="utf-8")
     began = time.time()
-    with open(a.work / "pipeline_out.txt", "w", encoding="utf-8", errors="replace") as out:
-        r = guard.run(words, stdout=out, stderr=out, timeout=4 * 3600)
+    code = 0
+    if not a.after_generation:
+        with open(a.work / "pipeline_out.txt", "w", encoding="utf-8", errors="replace") as out:
+            code = guard.run(words, stdout=out, stderr=out, timeout=4 * 3600).returncode
     took = int(time.time() - began)
-    text = (a.work / "pipeline_out.txt").read_text(encoding="utf-8", errors="replace")
+    # the generator says its end in the job's progress file
+    text = (job / "progress.txt").read_text(encoding="utf-8", errors="replace") if (job / "progress.txt").is_file() else ""
     m = None
     for m in FINISH.finditer(text):
         pass
     if not m or not Path(m.group(2)).is_file():
-        print(f"FLOW FAILED: the generator gave no map (exit {r.returncode}, {took} s)")
+        print(f"FLOW FAILED: the generator gave no map (exit {code}, {took} s)")
         return 1
     cand = a.work / "candidate.bsp"
     shutil.copy2(m.group(2), cand)
@@ -88,7 +96,7 @@ def main() -> int:
 
     fit = step([TOOLS / "mapgen_light_autofit.py", cand, base, a.work / "light_fit"])
     rooms = step([TOOLS / "mapgen_room_light.py", cand, "--job", job, "--donor", base]
-                 + (["--relight-first"] if "FITTED" in fit.stdout else []))
+                 + (["--relight-first"] if "FITTED" in fit.stdout or a.relight else []))
     gates = step([TOOLS / "mapgen_delivery_gates.py", cand, "--job", job, "--donor", base])
     after = ""
     if a.destruction > 0:

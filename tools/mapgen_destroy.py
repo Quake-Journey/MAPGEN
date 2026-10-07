@@ -121,6 +121,9 @@ def compile_lit(mapfile: Path, game: Path, into: Path, flags: str, keys: dict, w
         out += r.stdout + r.stderr
         if r.returncode:
             return False, f"{stage[0]} failed ({r.returncode}): {out[-300:]}"
+        if stage[0] == "-bsp" and not mapfile.with_suffix(".bsp").is_file():
+            err = re.findall(r"\*+ ERROR \*+\s*(.+)", out)
+            return False, "the bsp stage wrote no map: " + (err[-1].strip() if err else out[-400:])
     if re.search(r"leak", out, re.I) and re.search(r"leaked|LEAK", out):
         return False, "leaked"
     bsp = mapfile.with_suffix(".bsp")

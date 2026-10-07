@@ -308,6 +308,34 @@ def room_against_door(cand: Path, donor: Path, box: list, doors: list) -> tuple[
                      + (f"; the donor's door {dref['level'][3]:.0f} tint {dref['br']:.2f}" if dref else ""))
 
 
+def room_against_source(cand: Path, source: Path, box: list, src_box: list) -> tuple[bool, str]:
+    """Brief 11 step 1: a room CARRIED whole from a map (a «room-copy» of the base, a «room-of» the second map) against
+    the same room in the map it came from - its level, tint, contrast and ceiling over floor as there. Its door's light
+    is a corridor's: measured on q2dm1's first map, copies with 0 lamps of their own came out x1.8 their door, copies
+    with 2..3 lamps x0.5 or off-tint, while each read like its original. The faces in BOX (the copy, new to the map)
+    against the faces of SOURCE within SRC_BOX."""
+    inside = [f for f in lit_faces(cand)
+              if all(box[a] - 1 <= f["box"][a] and f["box"][a + 3] <= box[a + 3] + 1 for a in range(3))]
+    there = [f for f in lit_faces(source)
+             if all(src_box[a] - 1 <= f["box"][a] and f["box"][a + 3] <= src_box[a + 3] + 1 for a in range(3))]
+    if not inside or not there:
+        return True, f"no light to compare ({len(there)} faces of the original, {len(inside)} of the copy)"
+    ref, room = summary(there), summary(inside)
+    LAST.clear()
+    LAST.update(ref=ref, room=room)
+    bad = []
+    r = room["level"][3] / ref["level"][3] if ref["level"][3] > 1 else 1.0
+    if not LEVEL_BAND[0] <= r <= LEVEL_BAND[1]:
+        bad.append(f"level x{r:.2f}")
+    if abs(room["gr"] - ref["gr"]) > TINT_BAND or abs(room["br"] - ref["br"]) > TINT_BAND:
+        bad.append(f"tint G/R {room['gr']:.2f} B/R {room['br']:.2f} against {ref['gr']:.2f} {ref['br']:.2f}")
+    if room["contrast"] < CONTRAST_SHARE * ref["contrast"]:
+        bad.append(f"flat (contrast {room['contrast']:.2f} against {ref['contrast']:.2f})")
+    return not bad, (f"all {room['level'][3]:.0f}/{ref['level'][3]:.0f} against its original; tint"
+                     f" {room['br']:.2f}/{ref['br']:.2f}; contrast {room['contrast']:.2f}/{ref['contrast']:.2f}"
+                     + (" - " + "; ".join(bad) if bad else ""))
+
+
 SPREAD_SHARE = 0.5          # brief 7 decision 4: the room's p90/p10 not under half its door's
 
 

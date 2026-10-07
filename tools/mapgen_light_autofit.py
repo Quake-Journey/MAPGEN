@@ -43,13 +43,15 @@ import mapgen_load_guard as guard  # noqa: E402
 from mapgen_light_calibrate import donor_light, entity_text  # noqa: E402
 from mapgen_light_fit import light_only, score  # noqa: E402
 from mapgen_light_profile import BURNT_SLACK, lit_faces  # noqa: E402
+from mapgen_light_ratio import shared_ratios  # noqa: E402
 
 LEVEL_POWER = 0.85          # ratio ~ scale ** 0.85, measured (above)
 SCALE_RANGE = (0.3, 4.0)
 BALANCE = 0.74              # darkest orientation over brightest under this: too near the band's width (0.8/1.25 = 0.64)
 BALANCE_AIM = 0.82
+CENTRE = 1.05              # where the darkest and brightest orientation are centred
 BALANCE_POWER = 0.31        # ceilings over sides ~ direct ** 0.31, measured (above)
-DIRECT_RANGE = (1.0, 4.0)
+DIRECT_RANGE = (0.4, 4.0)
 
 
 def fit_path(donor: Path) -> Path:
@@ -91,33 +93,41 @@ def main() -> int:
         keys = {"_sun_color": " ".join(f"{c:.2f}" for c in colour)} if colour else {}
         fl = flags_of(scale, maxlight, saturate, direct)
         code, ok, rows = light_only(raw, own, keys, fl, a.work / f"r{rnd}", a.donor)
+        # the gate's own measure: it must hold for a fit to stand
+        gate = shared_ratios(a.work / f"r{rnd}" / "q2mg.bsp", a.donor) if code == 0 else {}
+        ok = ok and bool(gate) and all(0.8 <= v <= 1.25 for v in gate.values())
         s = score(rows) if code == 0 else 99.0
         al = next((r for r in rows if r["kind"] == "all"), None)
-        line = (f"round {rnd} score {s:.3f}{' FAITHFUL' if ok else ''} flags '{fl}' keys {keys} | "
+        line = (f"round {rnd} score {s:.3f}{' FAITHFUL' if ok else ''} flags '{fl}' keys {keys} | gate "
+                + " ".join(f"{k[:4]} {v:.2f}" for k, v in gate.items()) + " | "
                 + " | ".join(f"{r['kind'][:4]} {r['ratio'][0]:.2f}/{r['ratio'][1]:.2f}/{r['ratio'][2]:.2f}"
                              f" p90 {r['p90'][0]}/{r['p90'][1]} burnt {r['burnt'][0]:.1f}/{r['burnt'][1]:.1f}"
                              for r in rows))
         print(line, flush=True)
         table.append(line)
-        if best is None or s < best[0]:
-            best = (s, fl, keys, ok)
+        off = max((max(0.8 - v, v - 1.25, 0.0) for v in gate.values()), default=9.0)
+        if best is None or (off, s) < (best[4], best[0]):
+            best = (s, fl, keys, ok, off)
         if ok or not al or code:
             break
         gm = lambda r: math.exp(sum(math.log(max(x, 1e-3)) for x in r["ratio"]) / 3)  # noqa: E731
-        kinds = [r for r in rows if r["kind"] in ("sides", "floors", "ceilings")]
-        # the level centres the darkest and the brightest orientation in the band (brief 11 step 1: the mean of all
-        # let q2dm1's walls run over 1.25 while its ceilings sat under 0.8)
-        g = math.sqrt(max(gm(r) for r in kinds) * min(gm(r) for r in kinds)) if kinds else             math.exp(sum(math.log(max(x, 1e-3)) for x in al["ratio"]) / 3)
+        # the level centres the darkest and the brightest orientation in the band, by the GATE's measure (brief 11
+        # step 1: the mean of all let q2dm1's walls run over 1.25 while its ceilings sat under 0.8, and the channel
+        # sums called -scale 2.686 faithful while the gate read the ceilings 0.69)
+        # centred a little over 1: the room-light step after the fit takes a few percent off the shared faces
+        # (q2dm1's first map: ceilings 0.88 at the fit, 0.79 after it)
+        g = math.sqrt(max(gate.values()) * min(gate.values())) / CENTRE if gate else \
+            math.exp(sum(math.log(max(x, 1e-3)) for x in al["ratio"]) / 3)
         scale = min(SCALE_RANGE[1], max(SCALE_RANGE[0], scale * (1.0 / g) ** (1.0 / LEVEL_POWER)))
         # the balance: ceilings that lag the walls past what the band holds get more of the surface lights
-        sides = next((r for r in rows if r["kind"] == "sides"), None)
-        ceils = next((r for r in rows if r["kind"] == "ceilings"), None)
-        inside = kinds and all(0.8 <= gm(r) <= 1.25 for r in kinds)
-        if sides and ceils and not inside:          # every orientation in the band: the balance is kept as it is
-            bal = gm(ceils) / gm(sides)
-            if bal < BALANCE or (direct and bal > 1.0 / BALANCE):
+        inside = bool(gate) and all(0.8 <= v <= 1.25 for v in gate.values())
+        if "sides" in gate and "ceilings" in gate and not inside:   # all three in the band: the balance stays
+            bal = gate["ceilings"] / gate["sides"]
+            # both ways: q3t2's ceilings stood at 1.30 against walls 0.92 under its fixed calibration
+            if bal < BALANCE or bal > 1.0 / BALANCE:
                 was = direct or 1.0
-                direct = min(DIRECT_RANGE[1], max(DIRECT_RANGE[0], was * (BALANCE_AIM / bal) ** (1.0 / BALANCE_POWER)))
+                aim = BALANCE_AIM if bal < 1.0 else 1.0 / BALANCE_AIM
+                direct = min(DIRECT_RANGE[1], max(DIRECT_RANGE[0], was * (aim / bal) ** (1.0 / BALANCE_POWER)))
                 # what the surface lights add the scale need not: the level step shares the change
                 scale = min(SCALE_RANGE[1], max(SCALE_RANGE[0], scale * (was / direct) ** 0.35))
         if colour:
@@ -139,7 +149,7 @@ def main() -> int:
                 saturate = math.exp(min(math.log(8.0), max(math.log(0.125), nx)))
         if maxlight is None and top < 255 and al["burnt"][0] > al["burnt"][1] + BURNT_SLACK:
             maxlight = int(top)
-    s, fl, keys, ok = best
+    s, fl, keys, ok, _ = best
     fit = {"sha256": sha, "name": a.donor.stem, "flags": fl, "keys": keys, "faithful": ok, "score": round(s, 3),
            "table": table}
     fit_path(a.donor).write_text(json.dumps(fit, indent=1), encoding="utf-8")

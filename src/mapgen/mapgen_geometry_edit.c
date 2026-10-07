@@ -20341,6 +20341,12 @@ static void deal_annexes(mapgen_geometry_edit_plan_t *plan,
                                (double)s->room_lo[0], (double)s->room_lo[1], (double)s->room_lo[2],
                                (double)s->room_hi[0], (double)s->room_hi[1], (double)s->room_hi[2],
                                (double)s->host[0], (double)s->host[1], (double)s->host[2], d.room_turns, best_class);
+                        /* brief 11 step 1: where it came from - a copied room is lit like its original, not like the
+                           corridor its door opens off (the light gate and the room light read this line) */
+                        refuse(plan, "dig room-of source: %s off %.0f %.0f %.0f from %.0f %.0f %.0f .. %.0f %.0f %.0f",
+                               is_second ? "second" : "base", (double)s->host[0], (double)s->host[1], (double)s->host[2],
+                               (double)cut_lo[0], (double)cut_lo[1], (double)cut_lo[2], (double)cut_hi[0],
+                               (double)cut_hi[1], (double)cut_hi[2]);
                     }
                 }
                 if (!placed && is_second)
@@ -21129,6 +21135,37 @@ static bool stair_site(const stair_run_t *r, int ra, float rs, float P, float ws
     return true;
 }
 
+/* A pickup's spot on the landing: its box (32 x 32, from the landing up 56) all air in the donor, the nearest to the
+   landing's middle, by 8 along and across it. move_to and top move there; false when the landing has none. */
+static bool stair_item_spot(const mapgen_bsp_t *g, stairway_t *s)
+{
+    const float lo0 = s->land_lo[0] + 16.0f, hi0 = s->land_hi[0] - 16.0f;
+    const float lo1 = s->land_lo[1] + 16.0f, hi1 = s->land_hi[1] - 16.0f;
+    const float mx = 0.5f * (s->land_lo[0] + s->land_hi[0]), my = 0.5f * (s->land_lo[1] + s->land_hi[1]);
+    const float z = s->land_hi[2];
+    float best[2] = { 0.0f, 0.0f }, bd = 1e30f;
+    for (float x = lo0; x <= hi0 + 0.1f; x += 8.0f)
+        for (float y = lo1; y <= hi1 + 0.1f; y += 8.0f) {
+            bool clear = true;
+            for (int i = 0; i < 9 && clear; i++) {
+                const float px = x + (float)(i % 3 - 1) * 16.0f, py = y + (float)(i / 3 - 1) * 16.0f;
+                for (float h = 4.0f; h <= 56.0f && clear; h += 13.0f)
+                    clear = donor_air(g, px, py, z + h);
+            }
+            const float dd = (x - mx) * (x - mx) + (y - my) * (y - my);
+            if (clear && dd < bd) {
+                bd = dd;
+                best[0] = x;
+                best[1] = y;
+            }
+        }
+    if (bd > 1e29f)
+        return false;
+    s->move_to[0] = s->top[0] = best[0];
+    s->move_to[1] = s->top[1] = best[1];
+    return true;
+}
+
 /* The ledge the landing meets: a floor at the landing's height within STAIR_LEDGE_REACH past its end, at the
    landing's middle and both its sides. The landing is lengthened to it. */
 static bool stair_ledge(const mapgen_bsp_t *g, int ra, float rs, stairway_t *s)
@@ -21400,6 +21437,13 @@ static void deal_stairways(mapgen_geometry_edit_plan_t *plan, const mapgen_geome
                 s->move_entity1 = best + 1u;
                 memcpy(s->move_to, s->top, sizeof(s->move_to));
                 s->move_to[2] = s->top[2] + (lift < 16.0f ? 16.0f : lift > 32.0f ? 32.0f : lift);
+                /* where on the landing its whole box stands in open air: q3t2's landings merge into its pilasters,
+                   and both its first stairways put the pickup's box into one - «the game frees it at spawn» */
+                if (!stair_item_spot(ground, s)) {
+                    t.no_purpose++;
+                    s->move_entity1 = UINT32_MAX;
+                    continue;
+                }
             }
             if (plan->num_edits >= ceiling)
                 break;
@@ -29435,6 +29479,10 @@ static bool build_reliquid(mapgen_geometry_t *candidate, const reliquid_t *rq)
  */
 #define DESTROY_SEAL        16.0f
 #define DESTROY_DETAIL_BIT  0x08000000      /* CONTENTS_DETAIL */
+/* the standard map format holds 65536 brush sides (MAX_MAP_BRUSHSIDES): a generated q2dm1 already has 31138, and
+   every carve splits the brushes it crosses - the ruin stops adding or splitting below this, with room for the
+   compiler's bevels (brief 11 D2, measured: q2dm1's first ruined map at 100 % failed the limit) */
+#define DESTROY_SIDES_MAX   52000u
 static uint32_t g_destroy_skip;     /* a guard's seam: kinds left out, by bit */
 #define DESTROY_STARTS_KEEP 112.0f
 #define DESTROY_ITEM_KEEP   40.0f
@@ -29469,6 +29517,7 @@ typedef struct {
     char needs_mask[DESTROY_MAX_NEEDS][16];
     uint32_t num_needs;
     float built[4096][6];          /* what this pass built or carved, for the keep-outs of later kinds */
+    uint32_t sides_cap;            /* the brush sides this kind may grow the map to (its share of the budget) */
     uint32_t num_built;
     mapgen_destroy_report_t *rep;
 } destroy_t;
@@ -29483,12 +29532,14 @@ static float destroy_between(destroy_t *d, float lo, float hi)
     return lo + (hi - lo) * destroy_rand(d);
 }
 
-/* Inside a brush of the world (a solid one), as the brushes say: the map's rock, never its outside. */
+/* Inside a brush of the world (a solid one, not the sky's), as the brushes say: the map's rock, never its outside. A
+   sky brush is the map's skin with the outside right behind it - q2dm1's first ruined map leaked through a breach
+   that counted the sky over a courtyard as rock (brief 11 D2). */
 static bool destroy_in_brush(const mapgen_geometry_t *g, const float p[3])
 {
     for (uint32_t b = 0; b < MapGenGeometry_NumBrushes(g); b++) {
         const mapgen_geometry_brush_t *br = MapGenGeometry_Brush(g, b);
-        if (!br || br->model || !(br->contents & CONTENTS_SOLID_BIT))
+        if (!br || br->model || !(br->contents & CONTENTS_SOLID_BIT) || brush_has_sky(g, br))
             continue;
         if (p[0] < br->mins[0] - 0.1f || p[0] > br->maxs[0] + 0.1f || p[1] < br->mins[1] - 0.1f
             || p[1] > br->maxs[1] + 0.1f || p[2] < br->mins[2] - 0.1f || p[2] > br->maxs[2] + 0.1f)
@@ -29523,6 +29574,16 @@ static float destroy_rock(destroy_t *d, float x, float y, float z, float r, int 
     return least;
 }
 
+/* The level's own air: not solid, and in a leaf the visibility knows (a cluster). The outside a compiler leaves is
+   air with no cluster - on our own compiles it is not filled solid as id's maps had it, and q2dm1's first ruined map
+   leaked through a carve the seal rule took for «air» (brief 11 D2). */
+static bool destroy_map_air(const destroy_t *d, float x, float y, float z)
+{
+    const float p[3] = { x, y, z };
+    const mapgen_bsp_leaf_t *leaf = MapGenBsp_PointLeaf(d->b, p);
+    return leaf && !(leaf->contents & CONTENTS_SOLID_BIT) && leaf->cluster >= 0;
+}
+
 /* May this box be carved? Every point of it grown by DESTROY_SEAL is the map's air or the map's rock - none is the
    outside - and no mover's brush is near. */
 static bool destroy_carve_safe(destroy_t *d, const float lo[3], const float hi[3])
@@ -29530,15 +29591,25 @@ static bool destroy_carve_safe(destroy_t *d, const float lo[3], const float hi[3
     for (uint32_t m = 0; m < d->num_movers; m++)
         if (span_boxes_meet(lo, hi, d->movers[m], d->movers[m] + 3, 48.0f))
             return false;
+    /* and never into the sky's brushes (their outside is the void) */
+    for (uint32_t b = 0; b < MapGenGeometry_NumBrushes(d->g); b++) {
+        const mapgen_geometry_brush_t *br = MapGenGeometry_Brush(d->g, b);
+        if (br && !br->model && span_boxes_meet(lo, hi, br->mins, br->maxs, DESTROY_SEAL) && brush_has_sky(d->g, br))
+            return false;
+    }
     const float step = 8.0f;
     for (float x = lo[0] - DESTROY_SEAL; x <= hi[0] + DESTROY_SEAL + 0.1f; x += step)
         for (float y = lo[1] - DESTROY_SEAL; y <= hi[1] + DESTROY_SEAL + 0.1f; y += step)
             for (float z = lo[2] - DESTROY_SEAL; z <= hi[2] + DESTROY_SEAL + 0.1f; z += step) {
                 const bool inside = x > lo[0] && x < hi[0] && y > lo[1] && y < hi[1] && z > lo[2] && z < hi[2];
+                const float p[3] = { x, y, z };
+                /* no liquid in or round it: a carve beside a pool opens a wall of water standing in the air
+                   (q2dm1's first ruined map at 50 %: the water gate found one) */
+                if (MapGenBsp_PointContents(d->b, p) & CONTENTS_LIQUID_BITS)
+                    return false;
                 if (inside)
                     continue;           /* carved anyway: what is round it is the question */
-                const float p[3] = { x, y, z };
-                if (donor_air(d->b, x, y, z))
+                if (destroy_map_air(d, x, y, z))
                     continue;
                 if (!destroy_in_brush(d->g, p))
                     return false;
@@ -29688,7 +29759,7 @@ static bool destroy_floor_spot(destroy_t *d, float out[3])
         const float y = destroy_between(d, r->mins[1], r->maxs[1]);
         const float top = r->maxs[2] + 32.0f;
         for (float z = top; z > r->mins[2] - 64.0f; z -= 4.0f) {
-            if (!donor_air(d->b, x, y, z) && donor_air(d->b, x, y, z + 4.0f)) {
+            if (!donor_air(d->b, x, y, z) && destroy_map_air(d, x, y, z + 4.0f)) {
                 bool room = true;
                 for (float h = 8.0f; h <= DESTROY_STAND_HIGH && room; h += 16.0f)
                     room = donor_air(d->b, x, y, z + 4.0f + h);
@@ -29738,6 +29809,10 @@ static bool destroy_wall(destroy_t *d, const float at[3], float reach, int *dir,
 /* One debris piece: a box, or a wedge (its top tilted), wearing `tex`. */
 static bool destroy_piece(destroy_t *d, const float lo[3], const float hi[3], const char *tex, bool wedge)
 {
+    if (MapGenGeometry_NumSides(d->g) > d->sides_cap) {
+        d->rep->budget++;
+        return false;
+    }
     mapgen_geometry_side_t skin;
     if (!tex || !dig_skin(d->g, tex, &skin))
         return false;
@@ -29802,6 +29877,10 @@ static bool destroy_pile(destroy_t *d, float x, float y, float z, const float rg
 static bool destroy_carve(destroy_t *d, const float lo[3], const float hi[3], float (*pn)[3], const float *pd, int np,
                           const char *tex)
 {
+    if (MapGenGeometry_NumSides(d->g) > d->sides_cap) {
+        d->rep->budget++;
+        return false;
+    }
     if (!destroy_carve_safe(d, lo, hi)) {
         d->rep->refused++;
         return false;
@@ -29877,6 +29956,10 @@ static void destroy_rubble(destroy_t *d, uint32_t want)
  */
 static bool destroy_crater_patch(destroy_t *d, const float at[3], float r, const float rgb[3])
 {
+    if (MapGenGeometry_NumSides(d->g) > d->sides_cap) {
+        d->rep->budget++;
+        return false;
+    }
     static const char *const MASKS[] = { "crater1", "crater2", "crater3", "po02", "po04", "po06", "po08" };
     const char *ground = destroy_pick(d, DESTROY_GROUND, rgb, "base");
     if (!ground)
@@ -30357,19 +30440,30 @@ mapgen_geometry_result_t MapGenGeometryEdit_Destroy(mapgen_geometry_t *g, const 
     const uint32_t n_ruins = (uint32_t)(nrooms * 0.4f * DESTROY_SHARE(80) + 0.5f);
 #undef DESTROY_SHARE
     (void)D;
-    /* the carves first (they change faces), then what stands on floors, then the paint over what is left */
+    /* the carves first (they change faces), then what stands on floors, then the paint over what is left; each kind
+       may grow the map's brush sides by its share of what the format leaves (what one leaves passes on) */
+    const uint32_t start_sides = MapGenGeometry_NumSides(g);
+    const uint32_t room = start_sides < DESTROY_SIDES_MAX ? DESTROY_SIDES_MAX - start_sides : 0u;
+#define DESTROY_CAP(share) do { const uint32_t now = MapGenGeometry_NumSides(g);         d->sides_cap = now + (uint32_t)((float)room * (share));         if (d->sides_cap > DESTROY_SIDES_MAX) d->sides_cap = DESTROY_SIDES_MAX; } while (0)
+    DESTROY_CAP(0.12f);
     if (!(g_destroy_skip & 0x40u))
         destroy_ruin(d, n_ruins);
+    DESTROY_CAP(0.12f);
     if (!(g_destroy_skip & 0x20u))
         destroy_collapses(d, n_collapses);
+    DESTROY_CAP(0.22f);
     if (!(g_destroy_skip & 0x08u))
         destroy_breaches(d, n_breaches);
+    DESTROY_CAP(0.14f);
     if (!(g_destroy_skip & 0x10u))
         destroy_edges(d, n_edges);
+    DESTROY_CAP(0.16f);
     if (!(g_destroy_skip & 0x04u))
         destroy_craters(d, n_craters);
+    d->sides_cap = DESTROY_SIDES_MAX;          /* the rest of the room is the rubble's */
     if (!(g_destroy_skip & 0x02u))
         destroy_rubble(d, n_rubble);
+#undef DESTROY_CAP
     if (!(g_destroy_skip & 0x01u))
         destroy_cracks(d);
     rep->wanted[0] = n_rubble;

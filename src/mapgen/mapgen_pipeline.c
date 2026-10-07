@@ -1064,6 +1064,18 @@ static void write_plan(const char *job_dir, const mapgen_geometry_edit_plan_t *p
             fprintf(f, "%u %s %s\n", (unsigned)i, MapGenGeometryEdit_KindName(e->kind), shape);
     }
     fclose(f);
+    /* brief 11 step 1: where each carried room came from, every round's (plan.txt is the last round's alone): the
+       light gate and the room light judge a copy against its original */
+    snprintf(path, sizeof(path), "%s/sources.txt", job_dir);
+    FILE *s = fopen(path, round ? "a" : "w");
+    if (!s)
+        return;
+    for (uint32_t i = 0; i < MapGenGeometryEdit_NumRefusals(plan); i++) {
+        const char *line = MapGenGeometryEdit_Refusal(plan, i);
+        if (line && !strncmp(line, "dig room-of source:", 19))
+            fprintf(s, "  %s\n", line);
+    }
+    fclose(s);
 }
 
 /* Every file directly in a folder removed - not the folder, nothing below it (row 395). */

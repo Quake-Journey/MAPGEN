@@ -8,10 +8,15 @@ the destroy driver at D = 0, 25, 60 and 100 (seed 42), no compile:
   collapses from 65, ruin from 80) and the whole grows with D;
 * the start rule: nothing built or carved within 96 of any start at any D (the driver's own measure);
 * every cracked copy is drawn from its original in the game (none missing).
-Then once, q2dm1 at 100, the destroy tool whole - pack, driver, bsp, vis, the light pass under q2dm1's calibration:
-it compiles sealed (no leak) and lit, and the delivery gates' «starts» and «finished» pass on it.
-RED: the same driver with the start keep-out taken out (`DESTROY_STARTS_KEEP` 0, a sandbox copy): at 100 something
-stands within 96 of a start - the case above goes red.
+Then once, on a GENERATED q2dm1 map (20 %, variant 42, compiled by our own compiler - its outside reads as air,
+not solid, and it already holds 31138 brush sides) at 100, the destroy tool whole - pack, driver, bsp, vis, the light
+pass under q2dm1's calibration: it compiles sealed with every kind (no leak, under the format's brush-side limit) and
+lit, and the delivery gates' «starts» and «finished» pass on it.
+Also the generated map at 25 and 50 with every kind, its map stage sealed.
+RED, two: the start keep-out taken out (`DESTROY_STARTS_KEEP` 0): at 100 something stands within 96 of a start; the
+sky's brushes counted as rock again: at 50 a breach leaks (row 412l's first ruined q2dm1: the breach that counted the
+sky over a courtyard as rock) - each case above goes red. (The rule that only air with a visibility cluster is the
+level's own stays as a second guard of the seal; on this map, the sky's rule in place, it is not the one that holds.)
 
     python tools/check_mapgen_destruction.py [--work DIR] [--no-compile] [--no-red]
 """
@@ -32,6 +37,39 @@ from mapgen_red_sandbox import Sandbox, hash_tree  # noqa: E402
 REPO = TOOLS.parent
 DONORS = Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\MapgenStudio\engine\donors")
 WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\destruction")
+# a q2dm1 map the pipeline generated (20/42, row 412l's first run): the map the seal and the side budget are about
+GENERATED = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\fixtures\gen_q2dm1_20_42.bsp")
+
+
+def sealed_at(exe: Path, work: Path, pack: Path, d: int, tag: str) -> tuple[bool, str]:
+    """The generated map ruined at D with every kind, its map stage compiled: sealed (no leak)?"""
+    from mapgen_pinned_compiler import pinned_compiler
+    into = work / f"{tag}_into"
+    md.install(into, pack)
+    (into / "textures" / "mgd").mkdir(parents=True, exist_ok=True)
+    plist = work / "pack.txt"
+    if not plist.is_file():
+        md.pack_list(pack, plist)
+    mp = work / f"{tag}_gen_{d}.map"
+    r = subprocess.run([str(exe), str(GENERATED), str(mp), "--destruction", str(d), "--seed", "42", "--pack", str(plist),
+                        "--needs", str(work / f"{tag}_needs.txt"), "--game", str(md.GAME), "--skip", "0"],
+                       capture_output=True, text=True, errors="replace", timeout=3600)
+    said = md.DESTROYED.search(r.stdout)
+    q2tool, threads = pinned_compiler()
+    c = subprocess.run([str(q2tool), "-bsp", "-threads", threads, "-moddir", str(into), "-basedir", str(md.GAME),
+                        "-gamedir", str(md.GAME), str(mp)], capture_output=True, text=True, errors="replace", timeout=3600)
+    leaked = "leaked" in (c.stdout + c.stderr)
+    return not leaked and mp.with_suffix(".bsp").is_file(), (said.group(1).split(" wanted ")[0][:160] if said else "?")
+
+
+def ruin_whole(tools: Path, work: Path, tag: str) -> subprocess.CompletedProcess:
+    """The destroy tool, whole, on a copy of the generated map at 100 (from the tree whose tools/ it is)."""
+    bsp = work / f"{tag}_gen_100.bsp"
+    shutil.copy2(GENERATED, bsp)
+    return subprocess.run([sys.executable, str(tools / "mapgen_destroy.py"), str(bsp), "--donor",
+                           str(DONORS / "q2dm1.bsp"), "--destruction", "100", "--seed", "42", "--into",
+                           str(work / f"{tag}_into"), "--work", str(work / f"{tag}_compile")],
+                          capture_output=True, text=True, errors="replace", timeout=7200)
 CASES = ["q2dm1", "q3t2"]
 LEVELS = [0, 25, 60, 100]
 KINDS = ["cracks", "rubble", "craters", "breaches", "gouges", "broken", "collapses", "ruins"]
@@ -114,15 +152,14 @@ def main() -> int:
         check(f"{donor}: every cracked copy drawn from its original", all(m == 0 for m in miss),
               f"drawn {[int(res[(donor, d)]['drawn']) for d in LEVELS[1:]]}, missing {miss}")
     if not a.no_compile:
-        bsp = a.work / "q2dm1_100.bsp"
-        shutil.copy2(DONORS / "q2dm1.bsp", bsp)
-        into = a.work / "compile_into"
-        r = subprocess.run([sys.executable, str(TOOLS / "mapgen_destroy.py"), str(bsp), "--donor",
-                            str(DONORS / "q2dm1.bsp"), "--destruction", "100", "--seed", "42", "--into", str(into),
-                            "--work", str(a.work / "compile")], capture_output=True, text=True, errors="replace",
-                           timeout=7200)
+        # the generated map at 25 and 50: every kind, sealed (row 412l: a breach that counted the sky as rock leaked)
+        for d in (25, 50):
+            ok, how = sealed_at(exe, a.work / "green", pack, d, "green")
+            check(f"generated q2dm1 at {d}: every kind, the map stage sealed", ok, how)
+        bsp = a.work / "green_gen_100.bsp"
+        r = ruin_whole(TOOLS, a.work, "green")
         ok = "DESTRUCTION OK" in r.stdout and "left out" not in r.stdout
-        check("q2dm1 at 100, the destroy tool whole: compiled sealed with every kind, lit", ok,
+        check("generated q2dm1 at 100, the destroy tool whole: compiled sealed with every kind, lit", ok,
               (re.findall(r"^destroyed: .*$", r.stdout, re.M) or [r.stdout[-300:]])[-1][:220])
         if ok:
             g = subprocess.run([sys.executable, str(TOOLS / "check_mapgen_delivery.py"), "--finished", str(bsp)],
@@ -132,6 +169,11 @@ def main() -> int:
             from mapgen_delivery_gates import ask_starts
             ok2, why = ask_starts(bsp)
             check("q2dm1 at 100: every start stands in air on a floor and can step off", ok2, why)
+            # no carve beside a pool: no wall of water standing in the air (row 412l: one at 50 % on this map)
+            import mapgen_delivery_gates as gates
+            was = gates.FAILED
+            gates.gate_water(bsp, a.work / "water", DONORS / "q2dm1.bsp")
+            check("q2dm1 at 100: no vertical liquid face (the water gate)", gates.FAILED == was)
     if not a.no_red:
         before = hash_tree(REPO)
         box = Sandbox(REPO, "destruction")
@@ -151,6 +193,24 @@ def main() -> int:
                 near = min(drive(rexe, donor, 100, a.work / "red", pack).get("nearest", 1e9) for donor in CASES)
                 check("RED: without the keep-out the ruin comes within 96 of a start - the case above goes red",
                       near < 96.0, f"nearest {near:.0f}")
+            if not a.no_compile:
+                data = target.read_bytes().replace(b"#define DESTROY_STARTS_KEEP 0.0f", b"#define DESTROY_STARTS_KEEP 112.0f")
+                sky = b"if (!br || br->model || !(br->contents & CONTENTS_SOLID_BIT) || brush_has_sky(g, br))"
+                if check("RED: the sky's exclusion from the rock is where the mutation says", data.count(sky) == 1):
+                    cut = data.replace(sky, b"if (!br || br->model || !(br->contents & CONTENTS_SOLID_BIT))", 1)
+                    cut = cut.replace(b"&& span_boxes_meet(lo, hi, br->mins, br->maxs, DESTROY_SEAL) && brush_has_sky(d->g, br))",
+                                      b"&& false)", 1)
+                    target.write_bytes(cut)
+                    (a.work / "red_sky").mkdir(parents=True, exist_ok=True)
+                    saved = md.REPO
+                    md.REPO = box.root
+                    try:
+                        sexe = md.driver(a.work / "red_sky")
+                    finally:
+                        md.REPO = saved
+                    ok, how = sealed_at(sexe, a.work / "red_sky", pack, 50, "red")
+                    check("RED: with the sky counted as rock a breach leaks at 50 - the case above goes red", not ok,
+                          how)
         finally:
             box.dispose()
             check("the shared worktree was never opened for writing", hash_tree(REPO) == before)

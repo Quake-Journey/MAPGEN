@@ -127,6 +127,34 @@ STOREY_PARTS = re.compile(r"^  dig storeys terrace: " + T3 + r" \.\. " + T3 + ";
                           + r", (\d+) treads$", re.M)
 STOREY_MOVE = re.compile(r"^  dig storeys moves: (\S+) from " + T3 + " to " + T3 + "$", re.M)
 LOST = re.compile(r"(\d+) eyes, (\d+) pairs LOST")
+# brief 11 step 1: where a carried room came from - «base» (a room-copy of the donor) or «second»
+COPY_SOURCE = re.compile(r"^  dig room-of source: (base|second) off " + T3 + " from " + T3 + r" \.\. " + T3 + "$", re.M)
+
+
+def copy_sources(text: str) -> list:
+    """Each carried room's door (the dig's `from`), the map it came from and its box there."""
+    return [{"which": m.group(1), "host": [float(v) for v in m.groups()[1:4]],
+             "src": [float(v) for v in m.groups()[4:10]]} for m in COPY_SOURCE.finditer(text)]
+
+
+def job_sources(job: Path | None, text: str) -> list:
+    """The copies' sources of the re-dealt plan and of every round the run wrote (job/sources.txt)."""
+    more = (job / "sources.txt").read_text(encoding="utf-8", errors="replace") if job and (job / "sources.txt").is_file() \
+        else ""
+    return copy_sources(text + "\n" + more)
+
+
+def source_of(d: dict, sources: list, donor: Path):
+    """A carried dig's original: (the map, its box) - None for any other dig."""
+    if d.get("shape") not in ("room-copy", "room-of"):
+        return None
+    for s in sources:
+        if all(abs(s["host"][i] - d["from"][i]) <= 1.0 for i in range(3)):
+            src_map = donor if s["which"] == "base" else SECOND
+            return (src_map, s["src"]) if src_map else None
+    return None
+
+
 # brief 11 D1: the stairways the plan dealt (`deal_stairways`), and the ledger's accepted ones by their box
 STAIRWAY_LINE = re.compile(r"^  stairway (\d+): foot " + T3 + " top " + T3 + r", (\d+) steps (\d+) wide, "
                            r"(meets a ledge|holds a pickup)$", re.M)
@@ -197,32 +225,26 @@ def ask_light(bsp: Path, job: Path | None, donor: Path, work: Path | None = None
     """Row 405 (Fable's brief 5 L4): «нет вообще лайтмапов или почти нет» - the PO on mg_q3t2, whose new rooms were
     lit 3 to 10 against the donor's 44. Read face by face (`mapgen_light_ratio.faces`): the mean of the lump hides a
     black room under a bright courtyard."""
-    from mapgen_light_ratio import faces
-    cand, don = faces(bsp), faces(donor)
-    theirs = {(f["name"], f["box"]): f for f in don}
+    from mapgen_light_ratio import shared_ratios
     bad, said = [], []
-    for kind in ("sides", "floors", "ceilings"):
-        num = den = 0.0
-        n = 0
-        for f in cand:
-            g = theirs.get((f["name"], f["box"]))
-            if f["kind"] == kind and g:
-                num += f["mean"] * f["lux"]
-                den += g["mean"] * f["lux"]
-                n += 1
-        r = num / den if den else 0.0
+    for kind, r in shared_ratios(bsp, donor).items():
         said.append(f"{kind} {r:.2f}")
-        if n and not LIGHT_BAND[0] <= r <= LIGHT_BAND[1]:
+        if not LIGHT_BAND[0] <= r <= LIGHT_BAND[1]:
             bad.append(f"{kind} {r:.2f}")
     # row 408 (Fable's brief 6 decision 4): every dug room against the light round its doors - its level as a whole,
     # its tint, the unevenness of its light, its ceiling not clearly over its floor (`room_against_door`); the old
     # «60 % of the donor's mean» let white rooms twice the door's level through
-    from mapgen_light_profile import room_against_door
+    from mapgen_light_profile import room_against_door, room_against_source
     digs = static_digs(job, work) if job and work else (accepted_digs(job) if job else [])
+    text, err = plan_listing(job, work) if job and work else ("", "")
+    sources = job_sources(job, text if not err else "")
     rooms = []
     for d in digs:
         doors = [d["from"]] if d.get("own_room_end") == "to" else [d["from"], d["to"]]
-        lit, how = room_against_door(bsp, donor, d["box"], doors)
+        # brief 11 step 1: a room carried whole is lit like its original, not like the corridor at its door
+        src = source_of(d, sources, donor)
+        lit, how = room_against_source(bsp, src[0], d["box"], src[1]) if src else \
+            room_against_door(bsp, donor, d["box"], doors)
         rooms.append(f"{d.get('shape') or 'dig'} at {coords(d['box'][:3])}: {how}")
         if not lit:
             bad.append(rooms[-1])
@@ -691,7 +713,9 @@ def ask_stairways(bsp: Path, job: Path, donor: Path, work: Path) -> tuple[bool, 
         held = "a ledge"
         if not s["ledge"]:
             cls, _, to = s.get("move", ("?", None, s["top"]))
-            got = [e.get("classname") for e in cand.ents if e.get("classname") == cls
+            # the pickup dealt, or the one a later swap of the plan put in its place - what stands on the landing
+            got = [e.get("classname") for e in cand.ents
+                   if e.get("classname", "").startswith(("weapon_", "item_", "ammo_"))
                    and len(e.get("origin", "").split()) == 3
                    and all(abs(float(e["origin"].split()[i]) - to[i]) <= 1.0 for i in range(3))]
             held = got[0] if got else f"NO {cls} at its place"
@@ -712,7 +736,10 @@ def ask_starts(bsp: Path) -> tuple[bool, str]:
     bad = []
     for e in starts:
         o = [float(v) for v in e["origin"].split()]
-        body = [[o[0] + dx, o[1] + dy, o[2] + dz] for dx in (-15, 0, 15) for dy in (-15, 0, 15) for dz in (-20, 0, 28)]
+        # the game puts a player 9 over the start's origin (PutClientInServer), its box -24..32 round that: q3t2's
+        # starts stand 15 over the floor and read «buried» when the box was taken from the origin itself
+        o[2] += 9.0
+        body = [[o[0] + dx, o[1] + dy, o[2] + dz] for dx in (-14, 0, 14) for dy in (-14, 0, 14) for dz in (-20, 0, 28)]
         if any(cand.solid(p) for p in body):
             bad.append(f"{coords(o)} buried")
             continue

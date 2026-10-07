@@ -1094,6 +1094,7 @@ typedef struct {
     uint32_t pack, rooms, needs;
     uint32_t wanted[6];         /* rubble, craters, breaches, broken, collapses, ruins the ladder asked for */
     float    start_nearest;     /* the least distance from a start to anything built or carved (1e9: nothing) */
+    uint32_t budget;            /* pieces and carves left out: the map near the format's brush-side limit */
 } mapgen_destroy_report_t;
 
 mapgen_geometry_result_t MapGenGeometryEdit_Destroy(struct mapgen_geometry_s *g, const struct mapgen_bsp_s *bsp,

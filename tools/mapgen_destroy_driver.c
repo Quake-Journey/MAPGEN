@@ -80,9 +80,9 @@ int main(int argc, char **argv)
         return 2;
     }
     printf("destroyed: percent %u cracks %u rubble %u craters %u breaches %u gouges %u broken %u collapses %u"
-           " ruins %u refused %u rooms %u pack %u needs %u nearest %.0f wanted %u %u %u %u %u %u\n", percent, r.cracks,
-           r.rubble, r.craters, r.breaches, r.gouges, r.broken, r.collapses, r.ruins, r.refused, r.rooms, r.pack, r.needs,
-           (double)r.start_nearest,
+           " ruins %u refused %u budget %u rooms %u pack %u needs %u nearest %.0f wanted %u %u %u %u %u %u\n", percent,
+           r.cracks, r.rubble, r.craters, r.breaches, r.gouges, r.broken, r.collapses, r.ruins, r.refused, r.budget, r.rooms,
+           r.pack, r.needs, (double)r.start_nearest,
            r.wanted[0], r.wanted[1], r.wanted[2], r.wanted[3], r.wanted[4], r.wanted[5]);
     if (masks && into && needs) {
         uint32_t missing = 0;
