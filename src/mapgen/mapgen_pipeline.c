@@ -2240,10 +2240,12 @@ mapgen_pipeline_result_t MapGenPipeline_Run(const char *donor_bsp,
         char path[MAPCOMPILE_MAX_PATH];
         snprintf(path, sizeof(path), "%s/progress.txt", job_dir);
         g_progress = fopen(path, "w");
-        progress_line("stage=start map=%s fidelity=%d seed=%llu target=%u",
+        /* brief 14 F5: whether this run resumes, said at its first line - the PO's mg_1_6662 «resumed» from scratch
+           (no `stage=resume` at all), and nothing in its records said so */
+        progress_line("stage=start map=%s fidelity=%d seed=%llu target=%u resume=%d",
                       map_name ? map_name : "-", (int)request->generate.fidelity,
                       (unsigned long long)request->generate.seed,
-                      (unsigned)MapGenDivergence_Target((uint32_t)request->generate.fidelity));
+                      (unsigned)MapGenDivergence_Target((uint32_t)request->generate.fidelity), request->resume ? 1 : 0);
     }
     const mapgen_pipeline_result_t rc =
         run_pipeline(donor_bsp, job_dir, map_name, adapter, request, report,

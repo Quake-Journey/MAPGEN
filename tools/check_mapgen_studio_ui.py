@@ -31,7 +31,7 @@ import mapgen_load_guard as load_guard  # noqa: E402
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "tools" / "mapgen_studio"
 WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\ui_guard")
-DONORS = Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\MapgenStudio\engine\donors")
+DONORS = Path(r"O:\Claude2\MapgenStudio\engine\donors")
 CLIENT = Path(r"O:\Claude2\q2pro-release")
 CASES = FAILED = 0
 

@@ -597,6 +597,14 @@ public sealed class Generation
         g._job.Start(Path.Combine(Engine.Dir, "pipeline.exe"), args, g.RunDir);
         WriteOwner(g.RunDir);
         g.Log.Add($"pipeline.exe {string.Join(' ', args)}");
+        try
+        {
+            File.AppendAllText(Path.Combine(g.RunDir, "launches.txt"),
+                               $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} pipeline.exe {string.Join(' ', args)}\n");
+        }
+        catch (IOException)
+        {
+        }
         Current = g;
     }
 
@@ -786,6 +794,10 @@ public sealed class Generation
         {
             case "start":
                 Target = I("target");
+                // brief 14 F5: a resume the engine did not take (its first line says resume=0) is said - the PO's
+                // mg_1_6662 began again from nothing after «Продолжить» and nothing told him
+                if (Resumed && f.GetValueOrDefault("resume", "") == "0")
+                    Event(Loc.T("run.resume.restarted"));
                 break;
             case "plan":
                 foreach (var k in new[] { "digs", "annexes", "storeys", "spans", "floods", "windows", "reliquids", "stairways" })
@@ -933,11 +945,13 @@ public sealed class Generation
         _destroyCode = pct > 0
             ? env + "import subprocess,sys,os;" +
               $"d=subprocess.run([sys.executable,r'{destroy}',r'{candidate}','--donor',r'{donor}','--destruction','{pct}'," +
-              $"'--seed','{Request.Seed}','--game',r'{game}','--boxes',r'{Path.Combine(JobDir, "ruin.txt")}']," +
+              $"'--seed','{Request.Seed}','--game',r'{game}','--boxes',r'{Path.Combine(JobDir, "ruin.txt")}'," +
+              // brief 14 F2: the generator's own stairways, annexes, storeys and spans kept whole by the ruin
+              $"'--keep-from',r'{JobDir}']," +
               "capture_output=True,text=True);" +
               "os.environ['MAPGEN_GATE_PREFIX']='after destruction: ';" +
               $"r2=subprocess.run([sys.executable,r'{script}',r'{candidate}','--job',r'{JobDir}','--donor',r'{donor}'," +
-              "'--only','finished,axes,water,starts'],capture_output=True,text=True);" +
+              "'--only','finished,axes,water,starts,stairways'],capture_output=True,text=True);" +
               $"open(r'{Path.Combine(RunDir, "destruction.txt")}','w',encoding='utf-8').write(" +
               "'DESTRUCTION\\n'+d.stdout+d.stderr+'\\n'+r2.stdout+r2.stderr);" +
               "sys.exit(d.returncode or r2.returncode)"
@@ -1139,6 +1153,8 @@ public sealed class Generation
                          (Path.Combine(RunDir, "gates.txt"), "gates.txt"),
                          (Path.Combine(JobDir, "crash.txt"), "crash.txt"),
                          (Path.Combine(JobDir, "crash_resumed_from.txt"), "crash_resumed_from.txt"),
+                         // brief 14 F5: the engine's own words, each launch - what a resume was started with
+                         (Path.Combine(RunDir, "launches.txt"), "launches.txt"),
                      })
                 if (File.Exists(from))
                     File.Copy(from, Path.Combine(to, name), true);

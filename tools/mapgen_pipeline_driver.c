@@ -405,26 +405,39 @@ int main(int argc, char **argv)
          * rooms (and how big), two-storey rooms, bridges over an arena, halls on a long passage. 0 or absent: the
          * likeness decides, as before. Same seed, same counts: the same map.
          */
-        else if (!strcmp(argv[a], "--digs") && a + 1 < argc)
+        /* brief 14 F5: EVERY option that changes the plan goes into the ledger's head, as the recut driver reads it -
+           the PO's mg_1_6662 carried only the stairways and liquids, and the checks judged another plan */
+        else if (!strcmp(argv[a], "--digs") && a + 1 < argc) {
+            plan_option(&request, argv[a], argv[a + 1]);
             MapGenGeometryEdit_WantDigs((uint32_t)strtoul(argv[++a], NULL, 10));
+        }
         else if (!strcmp(argv[a], "--annexes") && a + 4 < argc) {
+            char four[96];
+            snprintf(four, sizeof(four), "%s %s %s %s", argv[a + 1], argv[a + 2], argv[a + 3], argv[a + 4]);
+            plan_option(&request, "--annexes", four);
             const uint32_t n = (uint32_t)strtoul(argv[a + 1], NULL, 10);
             MapGenGeometryEdit_DigAnnexes(n, strtof(argv[a + 2], NULL), strtof(argv[a + 3], NULL),
                                           strtof(argv[a + 4], NULL));
             a += 4;
         }
-        else if (!strcmp(argv[a], "--storeys") && a + 1 < argc)
+        else if (!strcmp(argv[a], "--storeys") && a + 1 < argc) {
+            plan_option(&request, argv[a], argv[a + 1]);
             MapGenGeometryEdit_DigStoreys((uint32_t)strtoul(argv[++a], NULL, 10));
-        else if (!strcmp(argv[a], "--spans") && a + 1 < argc)
+        }
+        else if (!strcmp(argv[a], "--spans") && a + 1 < argc) {
+            plan_option(&request, argv[a], argv[a + 1]);
             MapGenGeometryEdit_DigSpans((uint32_t)strtoul(argv[++a], NULL, 10));
+        }
         /* brief 11 D1: stairways up the rooms' walls, 0..10 */
         else if (!strcmp(argv[a], "--stairways") && a + 1 < argc) {
             plan_option(&request, argv[a], argv[a + 1]);
             MapGenGeometryEdit_DigStairways((uint32_t)strtoul(argv[++a], NULL, 10));
         }
         /* row 410: the map's own pools made another liquid - look and harm («water-lava», «mix» ...) */
-        else if (!strcmp(argv[a], "--liquids") && a + 1 < argc)
+        else if (!strcmp(argv[a], "--liquids") && a + 1 < argc) {
+            plan_option(&request, argv[a], argv[a + 1]);
             MapGenGeometryEdit_SetLiquids(argv[++a]);
+        }
         /* row 412: how much new water, slime and lava the floods lay, percent of the rooms they may take */
         else if (!strcmp(argv[a], "--new-water") && a + 1 < argc) {
             plan_option(&request, argv[a], argv[a + 1]);
@@ -437,10 +450,14 @@ int main(int argc, char **argv)
             MapGenGeometryEdit_SetNewLiquid(2u, (int32_t)strtol(argv[++a], NULL, 10));
         }
         /* row 412: how many of the base's wall pieces the digs hang, percent of the rule's */
-        else if (!strcmp(argv[a], "--decor") && a + 1 < argc)
+        else if (!strcmp(argv[a], "--decor") && a + 1 < argc) {
+            plan_option(&request, argv[a], argv[a + 1]);
             MapGenGeometryEdit_SetWallDecor((uint32_t)strtoul(argv[++a], NULL, 10));
-        else if (!strcmp(argv[a], "--halls") && a + 1 < argc)
+        }
+        else if (!strcmp(argv[a], "--halls") && a + 1 < argc) {
+            plan_option(&request, argv[a], argv[a + 1]);
             MapGenGeometryEdit_DigHalls((uint32_t)strtoul(argv[++a], NULL, 10), 0.0f, 0.0f);
+        }
         /* row 394: a family the run must not try, by its name; repeatable */
         else if (!strcmp(argv[a], "--skip-family") && a + 1 < argc) {
             /* row 410: refused aloud past the room there is - 16 cut a longer list short in silence */

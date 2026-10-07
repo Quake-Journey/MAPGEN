@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, r"C:\Users\alexy\mgwt\tools")
 import mapgen_delivery_gates as gates  # noqa: E402
 
-T = Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\MapgenStudio\temp")
+T = Path(r"O:\Claude2\MapgenStudio\temp")
 MAPS = Path(r"O:\Claude2\q2pro-release\baseq2\maps")
 
 

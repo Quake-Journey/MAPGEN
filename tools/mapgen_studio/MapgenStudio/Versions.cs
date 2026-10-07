@@ -11,6 +11,29 @@ public static class Versions
 
     public static readonly Entry[] All =
     {
+        new("2.7", "07.10.2026",
+            new[]
+            {
+                "Проверки карты судят ровно тот план, который сделала генерация: в журнал записываются все настройки (проходы, пристройки, этажи, мосты, залы, украшения), раньше — только лестницы и жидкости",
+                "Разрушения не трогают построенное генератором: лестницы, пристройки, галереи и мосты остаются целыми",
+                "В описании карты — сколько площадок с лестницами стоит на самом деле после разрушений, и почему остальных нет",
+                "Лестницы ставятся сначала у стен; отдельно стоящие — только в комнатах, где у стен места нет. Пролёт можно поставить и у неровной стены: щель за ним закладывается",
+                "Ступени и бока лестницы — из материала пола комнаты, а не из стены со светящимися панелями",
+                "Лава и кислота: бо́льшая заказанная доля берёт комнаты первой; водоём оставляет сухими места подъёма и не отклоняется за перекрытый путь; если жидкость не легла, в описании сказано почему",
+                "Перенесённые комнаты с одним-двумя светильниками получают и свои; копию судят ещё и по разбросу света; трещины не затемняют стены больше чем на 10 %",
+                "Если продолжить генерацию с прежнего места не удалось и она началась заново, студия об этом говорит",
+            },
+            new[]
+            {
+                "The map's checks judge exactly the plan the generation made: every option goes into its record (passages, annexes, storeys, bridges, halls, decor) - before, only the stairways and liquids",
+                "The destruction leaves the generator's own building whole: stairways, annexes, galleries and bridges",
+                "The map's description says how many platforms with stairs stand after the destruction, and why the rest do not",
+                "Stairs go against walls first; standing free only in rooms whose walls have no place. A flight may stand by an uneven wall: the gap behind it is laid solid",
+                "A stairway's steps and sides are of the room's floor material, not of a wall of lit panels",
+                "Lava and slime: the larger share asked takes its rooms first; a pool keeps the climb places dry instead of being refused for a blocked way; a liquid not laid is said with why",
+                "Carried rooms with one or two lamps get the room's own as well; a copy is judged by its light's spread too; cracks darken a wall by 10 % at most",
+                "When a run could not go on from where it was and began again, the Studio says so",
+            }),
         new("2.6", "07.10.2026",
             new[]
             {

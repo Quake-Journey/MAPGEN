@@ -196,13 +196,23 @@ int main(int argc, char **argv)
             MapGenGeometryEdit_WantDigs((uint32_t)strtoul(argv[++a], NULL, 10));
         else if (!strcmp(argv[a], "--digpass") && a + 1 < argc)
             MapGenGeometryEdit_DigPasses((uint32_t)strtoul(argv[++a], NULL, 10));
-        else if (!strcmp(argv[a], "--halls") && a + 3 < argc) {
+        /* brief 14 F5: `--halls N` as the pipeline (and the ledger's plan-options) says it, `--halls N W H` as the
+           guards do - the size only when two numbers follow; it used to swallow the next option whole (the PO's
+           `--halls 6 --stairways 10` dealt no stairway in the checks' re-deal) */
+        else if (!strcmp(argv[a], "--halls") && a + 1 < argc) {
             const uint32_t count = (uint32_t)strtoul(argv[++a], NULL, 10);
-            const float wide = strtof(argv[++a], NULL);
-            const float high = strtof(argv[++a], NULL);
+            float wide = 0.0f, high = 0.0f;
+            if (a + 2 < argc && argv[a + 1][0] != '-' && argv[a + 2][0] != '-') {
+                wide = strtof(argv[++a], NULL);
+                high = strtof(argv[++a], NULL);
+            }
             MapGenGeometryEdit_DigHalls(count, wide, high);
         }
-        else if (!strcmp(argv[a], "--annex") && a + 4 < argc) {
+        else if (!strcmp(argv[a], "--liquids") && a + 1 < argc)          /* brief 14 F5: the pipeline's words too */
+            MapGenGeometryEdit_SetLiquids(argv[++a]);
+        else if (!strcmp(argv[a], "--decor") && a + 1 < argc)
+            MapGenGeometryEdit_SetWallDecor((uint32_t)strtoul(argv[++a], NULL, 10));
+        else if ((!strcmp(argv[a], "--annex") || !strcmp(argv[a], "--annexes")) && a + 4 < argc) {
             const uint32_t count = (uint32_t)strtoul(argv[++a], NULL, 10);
             const float wide = strtof(argv[++a], NULL);
             const float deep = strtof(argv[++a], NULL);

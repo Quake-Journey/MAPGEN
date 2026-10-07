@@ -35,7 +35,7 @@ import mapgen_destroy as md  # noqa: E402
 from mapgen_red_sandbox import Sandbox, hash_tree  # noqa: E402
 
 REPO = TOOLS.parent
-DONORS = Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\MapgenStudio\engine\donors")
+DONORS = Path(r"O:\Claude2\MapgenStudio\engine\donors")
 WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\destruction")
 # a q2dm1 map the pipeline generated (20/42, row 412l's first run): the map the seal and the side budget are about
 GENERATED = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\fixtures\gen_q2dm1_20_42.bsp")

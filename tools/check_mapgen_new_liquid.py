@@ -12,8 +12,12 @@ On q2dm1 (seed 42, ambition 80), the plan only (the recut driver's `--list`):
 * water 100: at least as many floods as the default - every room that passes the floods' own gates.
 * brief 13 W7 (the PO's mg_1_6662: lava and slime asked, water seen - q2dm1 has a start in every room and every
   hazard flood was turned to water by the start rule): q2dm1 seed 6662 at ambition 99, water 15, slime 30, lava 75 -
-  slime and lava floods laid (they retreat from the starts), no «water instead»;
-RED, two, in a sandbox copy: a kind at 0 still wanting one room - all three at 0 deals floods; the old rule (a hazard
+  hazard floods laid (they retreat from the starts), lava among them, no «water instead»;
+* brief 14 F1 (the PO's mg_1_6662 on Studio 2.6: «лавы не вижу, хотя задавал 100 %» - one lava pool refused for
+  burying a climb place, the big floors to slime): at his own options (digs 8, annexes 6 of 768, storeys 8, spans 8,
+  halls 6, decor, stairways 10, water 15, slime 30, lava 100) lava takes the rooms first and keeps the climb places
+  on its floor dry («kept N climb places dry»);
+RED, three, in a sandbox copy: a kind at 0 still wanting one room - all three at 0 deals floods; the old rule (a hazard
 near a start turned to water) - no slime and no lava at the PO's settings. Each case above goes red.
 
     python tools/check_mapgen_new_liquid.py [--work DIR] [--no-red]
@@ -32,7 +36,7 @@ from check_mapgen_recut import build_driver  # noqa: E402
 from mapgen_red_sandbox import Sandbox, hash_tree  # noqa: E402
 
 REPO = TOOLS.parent
-DONOR = Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\MapgenStudio\engine\donors\q2dm1.bsp")
+DONOR = Path(r"O:\Claude2\MapgenStudio\engine\donors\q2dm1.bsp")
 WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\new_liquid")
 FLOOD = re.compile(r"^  flood offered: (\S+)", re.M)
 RELEVEL = re.compile(r"^  edit \d+  relevel", re.M)
@@ -45,6 +49,15 @@ def check(name: str, ok: bool, detail: str = "") -> bool:
     FAILED += 0 if ok else 1
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  -- {detail}" if detail else ""), flush=True)
     return ok
+
+
+DRY = re.compile(r"^  flood: room \d+'s e2u3/tlava1_3 kept (\d+) climb places dry", re.M)
+
+
+def listing(exe: Path, *extra: str, seed: str = "42", ambition: str = "80") -> str:
+    run = guard.run([str(exe), str(DONOR), "--seed", seed, "--ambition", ambition, "--list", *extra],
+                    capture_output=True, text=True, timeout=3600)
+    return run.stdout + run.stderr
 
 
 def plan(exe: Path, *extra: str, seed: str = "42", ambition: str = "80") -> tuple[list[str], int]:
@@ -79,8 +92,15 @@ def main() -> int:
           said(max_f, max_r))
     po = ("--liquids", "mix", "--new-water", "15", "--new-slime", "30", "--new-lava", "75")
     po_f, po_r = plan(exe, *po, seed="6662", ambition="99")
-    check("q2dm1 6662/99, slime 30, lava 75 (the PO's mg_1_6662): slime and lava laid, kept off the starts",
-          "e2u3/sewer1" in po_f and "e2u3/tlava1_3" in po_f, said(po_f, po_r))
+    check("q2dm1 6662/99, slime 30, lava 75 (the PO's mg_1_6662): hazards laid, lava among them, kept off the starts",
+          "e2u3/tlava1_3" in po_f, said(po_f, po_r))
+    full = ("--digs", "8", "--annexes", "6", "768", "768", "320", "--storeys", "8", "--spans", "8", "--halls", "6",
+            "--decor", "100", "--stairways", "10", "--new-water", "15", "--new-slime", "30", "--new-lava", "100")
+    full_text = listing(exe, *full, seed="6662", ambition="99")
+    full_f = FLOOD.findall(full_text)
+    dry = DRY.findall(full_text)
+    check("q2dm1 6662/99 at the PO's own options, lava 100: lava laid, its floor's climb places kept dry",
+          full_f.count("e2u3/tlava1_3") >= 1 and len(dry) >= 1, f"{said(full_f, 0)}; dry: {dry}")
     if not a.no_red:
         before = hash_tree(REPO)
         box = Sandbox(REPO, "newliquid")
@@ -107,6 +127,15 @@ def main() -> int:
                 rf2, rr2 = plan(red2, *po, seed="6662", ambition="99")
                 check("RED: hazards turned to water by the start rule - no slime, no lava; the case above goes red",
                       "e2u3/sewer1" not in rf2 and "e2u3/tlava1_3" not in rf2, said(rf2, rr2))
+            dry_line = b"        /* brief 14 F1: the climb places on this floor kept dry - a way past the pool, every kind */\n        {"
+            data = target.read_bytes()
+            if check("RED: the climb retreat is where the mutation says", data.count(dry_line) == 1):
+                target.write_bytes(data.replace(dry_line, dry_line[:-1] + b"if (0) {", 1))
+                (a.work / "red_bin3").mkdir(parents=True, exist_ok=True)
+                red3 = build_driver(box.root, a.work / "red_bin3")
+                rt = listing(red3, *full, seed="6662", ambition="99")
+                check("RED: no climb place kept dry - the lava case above goes red", not DRY.findall(rt),
+                      f"{DRY.findall(rt)}")
         finally:
             box.dispose()
             check("the shared worktree was never opened for writing", hash_tree(REPO) == before)

@@ -290,7 +290,7 @@ def ask_light(bsp: Path, job: Path | None, donor: Path, work: Path | None = None
         if not lit:
             bad.append(rooms[-1])
     return (not bad, f"shared faces {', '.join(said)} (0.8..1.25); {len(rooms)} dug rooms against their doors"
-                     + (f": {'; '.join(rooms[:8])}" if rooms else ""))
+                     + (f": {'; '.join(rooms)}" if rooms else ""))   # brief 14 F4: every room, not the first 8
 
 
 def ask_sky(bsp: Path, job: Path, donor: Path) -> tuple[bool, str]:

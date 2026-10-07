@@ -28,7 +28,7 @@ from mapgen_pinned_compiler import pinned_compiler  # noqa: E402
 from mapgen_red_sandbox import Sandbox, hash_tree  # noqa: E402
 
 REPO = TOOLS.parent
-DONOR = Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\MapgenStudio\engine\donors\q2duel1.bsp")
+DONOR = Path(r"O:\Claude2\MapgenStudio\engine\donors\q2duel1.bsp")
 GAME = r"O:\Claude2\q2pro-release\baseq2"
 WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\base_refusal")
 FAILED = TOTAL = 0

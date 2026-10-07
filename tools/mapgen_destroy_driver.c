@@ -236,6 +236,9 @@ int main(int argc, char **argv)
             into = argv[++a];
         else if (!strcmp(argv[a], "--boxes") && a + 1 < argc)
             MapGenGeometryEdit_DestroyBoxesTo(argv[++a]);
+        else if (!strcmp(argv[a], "--keep") && a + 1 < argc)          /* brief 14 F2 */
+            fprintf(stderr, "kept from the ruin: %u boxes of the generator's own building\n",
+                    MapGenGeometryEdit_DestroyKeep(argv[++a]));
         else if (!strcmp(argv[a], "--skip") && a + 1 < argc)
             skip = (uint32_t)strtoul(argv[++a], NULL, 10);
     }

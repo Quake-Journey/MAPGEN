@@ -1,5 +1,16 @@
 # MAPGEN Studio by ly — change log
 
+## 2.7 — 07.10.2026
+
+- The map's checks judge exactly the plan the generation made: every option goes into its record (passages, annexes, storeys, bridges, halls, decor) - before, only the stairways and liquids
+- The destruction leaves the generator's own building whole: stairways, annexes, galleries and bridges
+- The map's description says how many platforms with stairs stand after the destruction, and why the rest do not
+- Stairs go against walls first; standing free only in rooms whose walls have no place. A flight may stand by an uneven wall: the gap behind it is laid solid
+- A stairway's steps and sides are of the room's floor material, not of a wall of lit panels
+- Lava and slime: the larger share asked takes its rooms first; a pool keeps the climb places dry instead of being refused for a blocked way; a liquid not laid is said with why
+- Carried rooms with one or two lamps get the room's own as well; a copy is judged by its light's spread too; cracks darken a wall by 10 % at most
+- When a run could not go on from where it was and began again, the Studio says so
+
 ## 2.6 — 07.10.2026
 
 - The map's light and its checks work on any computer: they looked for the game in the developer's folder, and on other machines the step never ran

@@ -37,7 +37,7 @@ import mapgen_destroy as md  # noqa: E402
 from mapgen_red_sandbox import Sandbox, hash_tree  # noqa: E402
 
 REPO = TOOLS.parent
-DONORS = Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\MapgenStudio\engine\donors")
+DONORS = Path(r"O:\Claude2\MapgenStudio\engine\donors")
 GENERATED = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\fixtures\gen_q2dm1_20_42.bsp")
 WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\ruin_look")
 CASES = {"generated q2dm1": GENERATED, "q2dm1": DONORS / "q2dm1.bsp", "q3t2": DONORS / "q3t2.bsp"}

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -14,6 +15,17 @@ public static class Describe
     private static readonly Regex Accepted = new(@"^\s*\d+\s+(\S+)\s+ACCEPTED\b(.*)$", RegexOptions.Multiline);
     private static readonly Regex Shape = new(@"\bshape (\S+)");
     private static readonly Regex Holds = new(@"holds ((?:weapon|item|ammo)_\w+)");
+    // brief 14 F2: the stairways gate - «N stairways in the plan, M accepted, K built», once before the ruin and once after
+    private static readonly Regex StairGate = new(@"stairways: every stairway[^\n]*?-- (\d+) stairways in the plan, (\d+) accepted, (\d+) built");
+
+    private static string VerdictRu(string v) => v switch
+    {
+        "REJECTED_BURIED_ROUTE" => "перекрыла бы путь или подъём",
+        "REJECTED_HIDDEN" => "открыла бы невидимое",
+        "REJECTED_UNREACHABLE" => "отрезала бы часть карты",
+        "REJECTED_LOST_PICKUP" => "закрыла бы предмет",
+        _ => v,
+    };
 
     public static string Map(Generation g, string lang)
     {
@@ -75,7 +87,10 @@ public static class Describe
         Add(shapes.GetValueOrDefault("tunnel") + shapes.GetValueOrDefault("corridor"), "новый проход", "новых прохода", "новых проходов", "new passage(s)");
         Add(shapes.GetValueOrDefault("tunnel+lift"), "проход с лифтом", "прохода с лифтами", "проходов с лифтами", "passage(s) with a lift");
         Add(families.GetValueOrDefault("span"), "мост над ареной", "моста над ареной", "мостов над ареной", "bridge(s) over the arena");
-        Add(families.GetValueOrDefault("stairway"), "лестница к новой площадке", "лестницы к новым площадкам", "лестниц к новым площадкам", "stairway(s) up to a new landing");
+        // brief 14 F2: the stairways that STAND in the finished map, when the checks counted them
+        var stairGates = File.Exists(gates) ? StairGate.Matches(File.ReadAllText(gates)) : null;
+        Add(stairGates is { Count: > 0 } sg ? int.Parse(sg[sg.Count - 1].Groups[3].Value, CultureInfo.InvariantCulture)
+                                            : families.GetValueOrDefault("stairway"), "лестница к новой площадке", "лестницы к новым площадкам", "лестниц к новым площадкам", "stairway(s) up to a new landing");
         Add(families.GetValueOrDefault("flood"), "место с водой", "места с водой", "мест с водой", "flooded place(s)");
         Add(families.GetValueOrDefault("window"), "окно", "окна", "окон", "window(s)");
         Add(families.GetValueOrDefault("stairs-to-lift"), "лестница заменена лифтом", "лестницы заменены лифтами", "лестниц заменено лифтами", "stair(s) replaced by a lift");
@@ -108,6 +123,7 @@ public static class Describe
                                          float.Parse(m.Groups[4].Value), float.Parse(m.Groups[5].Value) }, m.Groups[1].Value));
             }
             int water = 0, slime = 0, lava = 0, unplayable = 0;
+            var refusedKinds = new List<(string kind, string verdict)>();
             foreach (var line in File.ReadAllLines(ledgerFile))
             {
                 var m = System.Text.RegularExpressions.Regex.Match(line,
@@ -120,11 +136,17 @@ public static class Describe
                         unplayable++;
                     continue;
                 }
-                if (m.Groups[2].Value != "ACCEPTED")
-                    continue;
                 var box = new[] { float.Parse(m.Groups[3].Value), float.Parse(m.Groups[4].Value),
                                   float.Parse(m.Groups[5].Value), float.Parse(m.Groups[6].Value) };
                 var tex = offered.FirstOrDefault(o => o.box.Zip(box, (a, c) => Math.Abs(a - c) <= 1).All(x => x)).tex ?? "";
+                if (m.Groups[2].Value != "ACCEPTED")
+                {
+                    // brief 14 F1: a pool of an asked kind the walk check refused - said with why
+                    var kindName = tex.Contains("lava") ? "lava" : tex.Contains("slime") || tex.Contains("sewer") ? "slime" : "";
+                    if (kindName.Length > 0)
+                        refusedKinds.Add((kindName, m.Groups[2].Value));
+                    continue;
+                }
                 if (tex.Contains("lava"))
                     lava++;
                 else if (tex.Contains("slime") || tex.Contains("sewer"))
@@ -135,15 +157,65 @@ public static class Describe
             if (water + slime + lava > 0)
                 b.AppendLine(ru ? $"Новые водоёмы: воды {water}, кислоты {slime}, лавы {lava}."
                                 : $"New pools: water {water}, slime {slime}, lava {lava}.");
+            // brief 14 F1 (the PO: «лавы не вижу, хотя задавал 100 %»): an asked hazard that came to nothing, and why
+            foreach (var (kindName, askedPct, made, ruName, enName) in new[]
+                     {
+                         ("lava", g.Request.Options?.NewLava ?? -1, lava, "Лава", "Lava"),
+                         ("slime", g.Request.Options?.NewSlime ?? -1, slime, "Кислота", "Slime"),
+                     })
+            {
+                if (askedPct <= 0 || made > 0)
+                    continue;
+                var offeredOf = offered.Count(o => kindName == "lava" ? o.tex.Contains("lava") : o.tex.Contains("slime") || o.tex.Contains("sewer"));
+                var why = refusedKinds.Where(x => x.kind == kindName).Select(x => x.verdict).ToList();
+                string reason;
+                if (offeredOf == 0)
+                    reason = ru ? "на этой основе не нашлось комнаты, где она не закрыла бы подъёмы и места появления игроков"
+                                : "this base had no room where it would not cover the climbs and the players' starts";
+                else if (why.Count > 0)
+                    reason = ru ? $"предложена в {offeredOf} комн., отклонена проверкой хода: {string.Join(", ", why.Select(v => VerdictRu(v)).Distinct())}"
+                                : $"offered in {offeredOf} room(s), refused by the walk check: {string.Join(", ", why.Distinct())}";
+                else
+                    reason = ru ? $"предложена в {offeredOf} комн., но до неё не дошли попытки" : $"offered in {offeredOf} room(s), never tried";
+                b.AppendLine(ru ? $"{ruName} не легла: {reason}." : $"{enName} was not laid: {reason}.");
+            }
             if (unplayable > 0 && !string.IsNullOrEmpty(g.Request.Options?.Liquids))
                 b.AppendLine(ru ? "Часть водоёмов основы осталась прежней: через них проходит путь назад, другая жидкость отрезала бы его."
                                 : "Some of the base's pools stayed as they were: the way back runs through them, another liquid would cut it.");
         }
-        // brief 11: the stairways asked and the places the map had for them
+        // brief 11: the stairways asked and the places the map had for them; brief 14 F2: what STANDS in the finished
+        // map (the gate's «built», asked again after the ruin), not what the ledger accepted - the PO's mg_1_6662 was
+        // told «6 из 10» while 2 stood
         var asked = g.Request.Options?.Stairways ?? 0;
-        if (asked > 0 && families.GetValueOrDefault("stairway") < asked)
-            b.AppendLine(ru ? $"Площадок с лестницами {families.GetValueOrDefault("stairway")} из {asked}: больше подходящих мест на этой основе не нашлось."
-                            : $"Platforms with stairs {families.GetValueOrDefault("stairway")} of {asked}: this base had no more places for them.");
+        if (asked > 0)
+        {
+            var stairs = File.Exists(gates) ? StairGate.Matches(File.ReadAllText(gates)) : null;
+            if (stairs is { Count: > 0 })
+            {
+                int N(Match m, int k) => int.Parse(m.Groups[k].Value, CultureInfo.InvariantCulture);
+                var first = stairs[0];
+                var last = stairs[stairs.Count - 1];
+                var placed = N(first, 1);
+                var accepted = N(first, 2);
+                var standing = N(last, 3);
+                var ruined = Math.Max(0, N(first, 3) - standing);
+                var parts = new List<string>();
+                if (placed < asked)
+                    parts.Add(ru ? $"мест на этой основе нашлось {placed}" : $"this base had places for {placed}");
+                if (accepted < placed)
+                    parts.Add(ru ? $"{placed - accepted} отклонены проверкой хода (перекрыли бы путь или подъём)"
+                                 : $"{placed - accepted} refused by the walk check (they would block a way or a climb)");
+                if (N(first, 3) < accepted)
+                    parts.Add(ru ? $"{accepted - N(first, 3)} не построились" : $"{accepted - N(first, 3)} did not build");
+                if (ruined > 0)
+                    parts.Add(ru ? $"{ruined} разрушены разрушениями" : $"{ruined} broken by the destruction");
+                b.AppendLine((ru ? $"Площадок с лестницами стоит {standing} из {asked}" : $"Platforms with stairs standing: {standing} of {asked}")
+                             + (parts.Count > 0 ? ": " + string.Join(", ", parts) + "." : "."));
+            }
+            else if (families.GetValueOrDefault("stairway") < asked)
+                b.AppendLine(ru ? $"Площадок с лестницами {families.GetValueOrDefault("stairway")} из {asked}: больше подходящих мест на этой основе не нашлось."
+                                : $"Platforms with stairs {families.GetValueOrDefault("stairway")} of {asked}: this base had no more places for them.");
+        }
         // brief 11 D2: what was destroyed, by kind, and that passage is not guaranteed
         var ruin = Path.Combine(g.RunDir, "candidate.destroyed.json");
         if ((g.Request.Options?.Destruction ?? 0) > 0 && File.Exists(ruin))

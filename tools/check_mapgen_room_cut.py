@@ -32,7 +32,7 @@ from check_mapgen_recut import build_driver  # noqa: E402
 from mapgen_red_sandbox import Sandbox, hash_tree  # noqa: E402
 
 REPO = TOOLS.parent
-DONORS = Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\MapgenStudio\engine\donors")
+DONORS = Path(r"O:\Claude2\MapgenStudio\engine\donors")
 WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\room_cut")
 BASE, SECOND, SEED, AMBITION = "q3t2", "koldduel1", "45", "90"
 NO_BOXES = ("--annex", "0", "0", "0", "0", "--storeys", "0")

@@ -27,7 +27,7 @@ sys.path.insert(0, str(TOOLS))
 import mapgen_load_guard as guard  # noqa: E402
 from mapgen_pinned_compiler import pinned_compiler  # noqa: E402
 
-ENGINE = Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\MapgenStudio\engine")
+ENGINE = Path(r"O:\Claude2\MapgenStudio\engine")
 GAME = Path(r"O:\Claude2\q2pro-release\baseq2")
 FINISH = re.compile(r'stage=finish result=(\S+) .*?bsp="([^"]+)"')
 
@@ -108,10 +108,10 @@ def main() -> int:
     after = ""
     if a.destruction > 0:
         d = step([TOOLS / "mapgen_destroy.py", cand, "--donor", base, "--destruction", a.destruction, "--seed",
-                  a.seed, "--game", a.game])
+                  a.seed, "--game", a.game, "--keep-from", job])   # brief 14 F2: its own building kept
         env["MAPGEN_GATE_PREFIX"] = "after destruction: "
         g2 = step([TOOLS / "mapgen_delivery_gates.py", cand, "--job", job, "--donor", base, "--only",
-                   "finished,axes,water,starts"])
+                   "finished,axes,water,starts,stairways"])
         after = "\nDESTRUCTION\n" + d.stdout + d.stderr + "\n" + g2.stdout + g2.stderr
     all_text = (gates.stdout + gates.stderr + "\nLIGHT FIT\n" + fit.stdout + fit.stderr + "\nROOM LIGHT\n"
                 + rooms.stdout + rooms.stderr + "\nLIGHT REFIT\n" + refit.stdout + refit.stderr + after)

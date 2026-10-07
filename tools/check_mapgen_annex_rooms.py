@@ -35,7 +35,7 @@ from check_mapgen_recut import build_driver  # noqa: E402
 from mapgen_red_sandbox import Sandbox, hash_tree  # noqa: E402
 
 REPO = TOOLS.parent
-DONORS = Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\MapgenStudio\engine\donors")
+DONORS = Path(r"O:\Claude2\MapgenStudio\engine\donors")
 WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\annex_rooms")
 CASES = [("q2dm1", "1020", "80"), ("q3t2", "45", "90")]
 NUM = r"(-?\d+(?:\.\d+)?)"

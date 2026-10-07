@@ -286,7 +286,7 @@ typedef struct {
     char                      light_flags[128];
     /* brief 11: the options that change the plan (stairways, destruction, new liquids, real rooms, decor), as the
        driver was given them - written in the ledger's head so a reader re-deals the same plan */
-    char                      plan_options[256];
+    char                      plan_options[512];
     /*
      * Row 410 (Fable's brief 7): the donor's sun as q2tools-220 must be told it, `key=value;key=value` written into
      * the lit copy's worldspawn before its sun is added (replacing the donor's own). MEASURED on cor: without

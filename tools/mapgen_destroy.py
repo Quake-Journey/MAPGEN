@@ -139,6 +139,27 @@ def compile_lit(mapfile: Path, game: Path, into: Path, flags: str, keys: dict, w
     return True, ""
 
 
+# brief 14 F2: what the generator built that the ruin keeps whole - the ledger's accepted stairways, spans and
+# the digs that are rooms of their own building (annexes, two-storey rooms)
+KEPT_FAMILIES = ("stairway", "span")
+KEPT_SHAPES = ("annex", "storeys")
+ACCEPTED_ROW = re.compile(r"^\s*\d+\s+(\S+)\s+ACCEPTED\s+\d+\s+(-?\d+) (-?\d+) (-?\d+)\s+(-?\d+) (-?\d+) (-?\d+)(.*)$", re.M)
+
+
+def keep_boxes(job: Path) -> list[list[float]]:
+    """The ledger's accepted boxes of the generator's own building, for the ruin to keep (brief 14 F2)."""
+    ledger = job / "ledger.txt"
+    if not ledger.is_file():
+        return []
+    out = []
+    for m in ACCEPTED_ROW.finditer(ledger.read_text(encoding="utf-8", errors="replace")):
+        family, rest = m.group(1), m.group(8)
+        shape = re.search(r"\bshape (\S+)", rest)
+        if family in KEPT_FAMILIES or (family == "dig" and shape and shape.group(1) in KEPT_SHAPES):
+            out.append([float(v) for v in m.groups()[1:7]])
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("map", type=Path)
@@ -151,6 +172,7 @@ def main() -> int:
     ap.add_argument("--flags")
     ap.add_argument("--pack", type=Path)
     ap.add_argument("--boxes", type=Path, help="what the ruin built where, a line each (the Studio's scheme)")
+    ap.add_argument("--keep-from", type=Path, help="the run's job folder: its ledger's own building is kept whole")
     a = ap.parse_args()
     if a.destruction <= 0:
         print("destruction 0: nothing to do")
@@ -172,6 +194,11 @@ def main() -> int:
             (into / "pics" / "colormap.pcx").write_bytes(pcx)
     plist = work / "pack.txt"
     pack_list(pack, plist)
+    keep = work / "keep.txt"
+    kept = keep_boxes(a.keep_from) if a.keep_from else []
+    keep.write_text("".join(" ".join(f"{v:g}" for v in b) + "\n" for b in kept), encoding="utf-8")
+    print(f"kept whole: {len(kept)} pieces of the generator's own building (stairways, spans, annexes, storeys)",
+          flush=True)
     exe = driver(work)
     own_flags, keys = donor_light(a.donor)
     flags = a.flags if a.flags is not None else own_flags
@@ -182,7 +209,7 @@ def main() -> int:
         r = guard.run([str(exe), str(a.map), str(mapfile), "--destruction", str(a.destruction), "--seed",
                        str(a.seed), "--pack", str(plist), "--needs", str(needs), "--game", str(a.game), "--skip",
                        str(skip), "--masks", str(pack / "textures" / "mapgen" / "masks"), "--into", str(into)]
-                      + (["--boxes", str(a.boxes)] if a.boxes else []),
+                      + (["--boxes", str(a.boxes)] if a.boxes else []) + ["--keep", str(keep)],
                       capture_output=True, text=True, errors="replace", timeout=3600)
         m = DESTROYED.search(r.stdout)
         if r.returncode or not m or not mapfile.is_file():

@@ -382,6 +382,11 @@ def room_against_source(cand: Path, source: Path, box: list, src_box: list) -> t
         bad.append(f"tint G/R {room['gr']:.2f} B/R {room['br']:.2f} against {ref['gr']:.2f} {ref['br']:.2f}")
     if room["contrast"] < CONTRAST_SHARE * ref["contrast"]:
         bad.append(f"flat (contrast {room['contrast']:.2f} against {ref['contrast']:.2f})")
+    # brief 14 F4: a copy reads like its original to the eye, not only to the mean - its light's spread too (the
+    # door rule's p90/p10): mg_1_6662's copy at 256 1056 376 passed on the mean and read flat and dark
+    s_room, s_ref = spread(inside), spread(there)
+    if s_room[2] < SPREAD_SHARE * s_ref[2]:
+        bad.append(f"flat (spread x{s_room[2]:.1f} against x{s_ref[2]:.1f})")
     return not bad, (f"all {room['level'][3]:.0f}/{ref['level'][3]:.0f} against its original; tint"
                      f" {room['br']:.2f}/{ref['br']:.2f}; contrast {room['contrast']:.2f}/{ref['contrast']:.2f}"
                      + (" - " + "; ".join(bad) if bad else ""))

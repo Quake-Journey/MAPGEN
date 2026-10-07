@@ -45,7 +45,7 @@ from mapgen_red_sandbox import Sandbox  # noqa: E402
 
 REPO = TOOLS.parent
 GAME = r"O:\Claude2\q2pro-release\baseq2"
-DONOR = Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\MapgenStudio\engine\donors\q2dm1.bsp")
+DONOR = Path(r"O:\Claude2\MapgenStudio\engine\donors\q2dm1.bsp")
 WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\memory_guard")
 ARGS = ["q2mg", "20", "42", "--moddir", GAME, "--final", "--max-attempts", "4", "--hold-to-donor"]
 LUMP_VISIBILITY = 3

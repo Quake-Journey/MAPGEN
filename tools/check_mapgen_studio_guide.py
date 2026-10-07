@@ -62,7 +62,7 @@ def loc_options(lang: str) -> list[str]:
     return re.findall(r'\["gen\.opt\.[a-z_]+"\] = "([^"]+)"', body)
 
 
-INSTALLED = Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\MapgenStudio")
+INSTALLED = Path(r"O:\Claude2\MapgenStudio")
 SHOT_MAPS = ("mg_10_45f", "mg_cor", "mg_q3t2")
 SHOT_INI = r"""[ui]
 language=ru

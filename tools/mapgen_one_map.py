@@ -20,7 +20,7 @@ sys.path.insert(0, str(TOOLS))
 import mapgen_load_guard as guard  # noqa: E402
 from mapgen_pinned_compiler import pinned_compiler  # noqa: E402
 
-ENGINE = Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\MapgenStudio\engine")
+ENGINE = Path(r"O:\Claude2\MapgenStudio\engine")
 GAME = r"O:\Claude2\q2pro-release\baseq2"
 
 

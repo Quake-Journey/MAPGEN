@@ -1107,6 +1107,8 @@ void MapGenGeometryEdit_DestroySkip(uint32_t kinds);
 /* The PO, 07.10: where the next Destroy writes what it built - `kind lx ly lz hx hy hz` a line (crater, breach,
    gouge, broken, collapse, ruin, rubble, patch) - for the Studio's scheme; "" none. */
 void MapGenGeometryEdit_DestroyBoxesTo(const char *path);
+/* Brief 14 F2: boxes (`x y z x y z` a line) the ruin never touches - the generator's own building. Returns how many. */
+uint32_t MapGenGeometryEdit_DestroyKeep(const char *path);
 /* Brief 12: a picture codec for DrawCracks - decode a .png to 8-bit RGBA, encode RGBA to a .png file. Set by the
    destroy driver (it links zlib); unset, the copies are drawn as .wal only. */
 void MapGenGeometryEdit_SetImageCodec(uint8_t *(*decode)(const uint8_t *data, size_t len, uint32_t *w, uint32_t *h),

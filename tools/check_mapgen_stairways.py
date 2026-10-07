@@ -13,6 +13,10 @@ ambition 58, `--stairways 3`):
   slot between the steps and a wall that recedes under its face (brief 12 L4: q2dm1's third stairway was refused by
   the transaction for that crack);
 * with no `--stairways` the plan deals none (0 is the default and draws nothing).
+Brief 14 F3 (the PO, quake223 at 1398 1729 926: «Левые текстуры на лестнице» - stairway 5 of his mg_1_6662 wore
+`blum15_1`, a wall of lit panels, for its sides): every dealt stairway of the cases above and of q2dm1 6662/99 with
+10 stairways wears ONE floor material for treads and sides, never a light, sky, liquid, glass or nodraw texture of
+the donor nor a `ceil*` one. RED: the sides from the nearest wall again - the PO's case goes red.
 RED: the same generator with the landing's support taken out (`g_stair_support`, a sandbox copy): the landing is a
 slab in the air - the case above goes red. The back's check has no RED here: none of the five stairways dealt on the
 two donors at 42/58 stands at a receding wall, with the back's reach or without it (measured 07.10) - its proof is the
@@ -36,7 +40,7 @@ from mapgen_delivery_gates import plan_stairways  # noqa: E402
 from mapgen_red_sandbox import Sandbox, hash_tree  # noqa: E402
 
 REPO = TOOLS.parent
-DONORS = Path(r"O:\Claude2\_agent_temp\claude\mapgen_studio\MapgenStudio\engine\donors")
+DONORS = Path(r"O:\Claude2\MapgenStudio\engine\donors")
 WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\stairways")
 CASES = [("q2dm1", "42", "58"), ("q3t2", "42", "58")]
 EDIT = re.compile(r"^  edit (\d+)  stairway  (-?\d+) (-?\d+) (-?\d+) \.\. (-?\d+) (-?\d+) (-?\d+)  (\d+) high$", re.M)
@@ -173,6 +177,39 @@ def run(exe: Path, work: Path, tag: str) -> dict:
     return out
 
 
+WEARS = re.compile(r"^  stairway (\d+) wears: (\S+) and (\S+)", re.M)
+SPECIAL = 0x0001 | 0x0004 | 0x0008 | 0x0010 | 0x0020 | 0x0080
+
+
+def special_textures(bsp: Path) -> set[str]:
+    """The donor's textures that light, are sky, liquid, glass or nodraw (its texinfo flags)."""
+    import struct
+    d = bsp.read_bytes()
+    to, tn = struct.unpack_from("<ii", d, 8 + 8 * 5)
+    out = set()
+    for i in range(tn // 76):
+        flags, value = struct.unpack_from("<ii", d, to + i * 76 + 32)
+        if flags & SPECIAL or value > 0:
+            out.add(d[to + i * 76 + 40:to + i * 76 + 72].split(b"\0")[0].decode("latin-1"))
+    return out
+
+
+def wears_wrong(text: str, bsp: Path) -> list[str]:
+    """Each dealt stairway whose treads and sides differ or wear a texture a stairway must not."""
+    bad, special = [], special_textures(bsp)
+    for n, tread, side in WEARS.findall(text):
+        why = [w for w, cond in (("treads and sides differ", tread != side),
+                                 ("a light/sky/liquid/glass texture", tread in special or side in special),
+                                 ("a ceiling texture", any(x.split("/")[-1].startswith("ceil") for x in (tread, side))))
+               if cond]
+        if why:
+            bad.append(f"stairway {n} {tread} / {side}: {', '.join(why)}")
+    return bad
+
+
+PO_CASE = ("q2dm1", "6662", "99")
+
+
 def said(s: dict) -> str:
     return (f"{' '.join(f'{v:.0f}' for v in s['foot'])} up to {' '.join(f'{v:.0f}' for v in s['top'])},"
             f" {s['steps']} steps {s['wide']:.0f} wide, " + ("a ledge" if s["ledge"] else s["move"][0]))
@@ -190,7 +227,13 @@ def main() -> int:
     plain = drive(exe, str(DONORS / "q2dm1.bsp"), "--seed", "42", "--ambition", "58", "--list")
     check("q2dm1 without --stairways: no stairway in the plan", not plan_stairways(plain)
           and "families:" in plain and "stairway=" not in plain)
+    po_text = drive(exe, str(DONORS / "q2dm1.bsp"), "--seed", PO_CASE[1], "--ambition", PO_CASE[2], "--stairways", "10",
+                    "--list")
     green = run(exe, a.work, "green")
+    wrong = [w for donor, (text, _) in green.items() for w in wears_wrong(text, DONORS / f"{donor}.bsp")]
+    wrong += wears_wrong(po_text, DONORS / "q2dm1.bsp")
+    check("every stairway wears one floor material, no lamp, sky, liquid, glass or ceiling texture (q2dm1 6662/99 too)",
+          not wrong and len(WEARS.findall(po_text)) >= 1, "; ".join(wrong) or f"{len(WEARS.findall(po_text))} on 6662/99")
     for donor, (text, results) in green.items():
         check(f"{donor}: stairways dealt, each with its purpose", len(results) >= 1,
               "; ".join(said(s) for s, _ in results) or next(iter(re.findall(r"^  stairways.*$", text, re.M)), ""))
@@ -213,6 +256,19 @@ def main() -> int:
                 total = sum(len(res) for _, res in red.values())
                 check("RED: with the support taken out every landing floats - the case above goes red",
                       total > 0 and len(floats) == total, f"{len(floats)} of {total} float")
+            side = b'snprintf(s.tex_side, sizeof(s.tex_side), "%s", s.tex_tread);'
+            data = target.read_bytes().replace(b"static const bool g_stair_support = false;",
+                                               b"static const bool g_stair_support = true;", 1)
+            if check("RED: the sides' material is where the mutation says", data.count(side) == 1):
+                target.write_bytes(data.replace(side, b"{ const float back_[3] = { 0.5f * (s.lo[0] + s.hi[0]), 0.5f * (s.lo[1] + s.hi[1]), z + 64.0f };"
+                                                 b" nearest_wall_texture(donor, back_, s.tex_side, sizeof(s.tex_side)); }", 1))
+                (a.work / "red_bin2").mkdir(parents=True, exist_ok=True)
+                red2 = build_driver(box.root, a.work / "red_bin2")
+                rt = drive(red2, str(DONORS / "q2dm1.bsp"), "--seed", PO_CASE[1], "--ambition", PO_CASE[2],
+                           "--stairways", "10", "--list")
+                rw = wears_wrong(rt, DONORS / "q2dm1.bsp")
+                check("RED: sides from the nearest wall - the PO's 6662/99 wears what it must not, the case goes red",
+                      bool(rw), "; ".join(rw[:4]))
         finally:
             box.dispose()
             check("the shared worktree was never opened for writing", hash_tree(REPO) == before)
