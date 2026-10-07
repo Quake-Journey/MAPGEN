@@ -40,7 +40,8 @@ import check_mapgen_glass_alive as alive          # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mapgen_load_guard as load_guard          # noqa: E402
 
-RELEASE = Path(r"O:\Claude2\q2pro-release")
+from mapgen_load_guard import game_dir  # noqa: E402  (brief 13 W1: the game folder of this run)
+RELEASE = Path(game_dir()).parent
 EXE = RELEASE / "Q2PRO-X.exe"
 DUMPS = RELEASE / "baseq2" / "condumps"
 

@@ -17,7 +17,8 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
-GAME = Path(r"O:\Claude2\q2pro-release\baseq2")
+from mapgen_load_guard import game_dir  # noqa: E402  (brief 13 W1: the game folder of this run)
+GAME = Path(game_dir())
 
 
 def lump(d, i):
@@ -231,6 +232,56 @@ def lit_faces(path: Path) -> list:
                     "peak": peak / top if top > 1 else 1.0})
     _LIT[key] = out
     return out
+
+
+_SKY: dict = {}
+SKY_LIT_SHARE = 0.10        # brief 13 W2: a room is lit by its sky when this share of its floor's plan is sky over it
+
+
+def sky_faces(path: Path) -> list:
+    """The sky faces of model zero, each as its box (a face whose texinfo says SURF_SKY)."""
+    key = (str(path), path.stat().st_mtime)
+    if key in _SKY:
+        return _SKY[key]
+    d = path.read_bytes()
+    vo, vn = lump(d, 2)
+    verts = [struct.unpack_from("<3f", d, vo + i * 12) for i in range(vn // 12)]
+    eo, en = lump(d, 11)
+    edges = [struct.unpack_from("<2H", d, eo + i * 4) for i in range(en // 4)]
+    so, sn = lump(d, 12)
+    se = struct.unpack_from(f"<{sn // 4}i", d, so)
+    to, tn = lump(d, 5)
+    flags = [struct.unpack_from("<i", d, to + i * 76 + 32)[0] for i in range(tn // 76)]
+    mo, _ = lump(d, 13)
+    first, count = struct.unpack_from("<ii", d, mo + 40)
+    fo, _ = lump(d, 6)
+    out = []
+    for i in range(first, first + count):
+        pnum, side, fe, ne, ti = struct.unpack_from("<HhiHh", d, fo + i * 20)
+        if not flags[ti] & 4 or ne < 3:
+            continue
+        pts = []
+        for k in range(ne):
+            e = se[fe + k]
+            pts.append(verts[edges[e][0]] if e >= 0 else verts[edges[-e][1]])
+        out.append([min(q[a] for q in pts) for a in range(3)] + [max(q[a] for q in pts) for a in range(3)])
+    _SKY[key] = out
+    return out
+
+
+def sky_share(path: Path, box: list) -> float:
+    """Brief 13 W2: how much of BOX's plan has the map's sky over it - sky faces above its floor, at most 256 over its
+    top (a courtyard's sky is its ceiling; a hall's skylight a little above), their plan's overlap over the box's."""
+    area = max(1.0, (box[3] - box[0]) * (box[4] - box[1]))
+    got = 0.0
+    for s in sky_faces(path):
+        if s[5] < box[2] + 32 or s[2] > box[5] + 256:
+            continue
+        w = min(s[3], box[3]) - max(s[0], box[0])
+        h = min(s[4], box[4]) - max(s[1], box[1])
+        if w > 0 and h > 0:
+            got += w * h
+    return min(1.0, got / area)
 
 
 def summary(faces: list) -> dict:

@@ -50,7 +50,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 CORPUS = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260831\corpus")
-GAME = Path(r"O:\Claude2\q2pro-release\baseq2")
+from mapgen_load_guard import game_dir  # noqa: E402  (brief 13 W1: the game folder of this run)
+GAME = Path(game_dir())
 PIN = REPO / "tools" / "mapgen_compiler_pin.json"
 WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260912\texture_axes")
 

@@ -1076,6 +1076,18 @@ static void write_plan(const char *job_dir, const mapgen_geometry_edit_plan_t *p
             fprintf(s, "  %s\n", line);
     }
     fclose(s);
+    /* brief 13 W7: which liquid each flood was dealt with, and the kinds' account - the map's description names them
+       (the PO on mg_1_6662: lava and slime asked, water seen) */
+    snprintf(path, sizeof(path), "%s/liquids.txt", job_dir);
+    FILE *q = fopen(path, round ? "a" : "w");
+    if (!q)
+        return;
+    for (uint32_t i = 0; i < MapGenGeometryEdit_NumRefusals(plan); i++) {
+        const char *line = MapGenGeometryEdit_Refusal(plan, i);
+        if (line && (!strncmp(line, "flood offered:", 14) || !strncmp(line, "floods by kind:", 15)))
+            fprintf(q, "  %s\n", line);
+    }
+    fclose(q);
 }
 
 /* Every file directly in a folder removed - not the folder, nothing below it (row 395). */

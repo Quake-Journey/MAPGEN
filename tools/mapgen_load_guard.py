@@ -65,6 +65,17 @@ HEAVY = (
 )
 
 
+# Brief 13 W1: the client's baseq2 every map is lit, textured and checked against. The Studio sets MAPGEN_GAME from
+# its client folder (Settings: «Папка игры»); the flow tool from --game; the authors' own runs fall back to the PO's.
+# The light tools had this folder hard-wired: off the PO's machine the released Studio's light step never worked.
+GAME_DEFAULT = r"O:\Claude2\q2pro-release\baseq2"
+
+
+def game_dir() -> str:
+    """The game folder (baseq2) of this run: MAPGEN_GAME when set, else the authors' own."""
+    return os.environ.get("MAPGEN_GAME") or GAME_DEFAULT
+
+
 def logical_cpus() -> int:
     return os.cpu_count() or 1
 

@@ -31,6 +31,7 @@ public sealed partial class MainWindow : Window
         MinWidth = 900;
         MinHeight = 600;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        Icon = App.Icon();
         _chosen.AddRange(S.Bases.Distinct());
         _graftMode = S.GraftMode;
         _nav.PaneDisplayMode = FANavigationViewPaneDisplayMode.Left;
@@ -181,7 +182,7 @@ public sealed partial class MainWindow : Window
         var o = S.Options;
         Row("gen.opt.digs", Counts(CountChoices), Array.IndexOf(CountChoices, o.Digs), i => S.Options = S.Options with { Digs = CountChoices[i] });
         Row("gen.opt.annexes", Counts(CountChoices), Array.IndexOf(CountChoices, o.Annexes), i => S.Options = S.Options with { Annexes = CountChoices[i] });
-        Row("gen.opt.annex_size", new[] { "gen.default", "gen.size.small", "gen.size.medium", "gen.size.large", "gen.size.halls" }.Select(Loc.T).ToArray(),
+        Row("gen.opt.annex_size", new[] { "gen.default", "gen.size.small", "gen.size.medium", "gen.size.large", "gen.size.halls", "gen.size.niches" }.Select(Loc.T).ToArray(),
             o.AnnexSize, i => S.Options = S.Options with { AnnexSize = i });
         Row("gen.opt.storeys", Counts(CountChoices), Array.IndexOf(CountChoices, o.Storeys), i => S.Options = S.Options with { Storeys = CountChoices[i] });
         Row("gen.opt.spans", Counts(CountChoices), Array.IndexOf(CountChoices, o.Spans), i => S.Options = S.Options with { Spans = CountChoices[i] });
@@ -613,8 +614,10 @@ public sealed partial class MainWindow : Window
         // P5: a generation stopped part way (a crash, the program closed) is resumed from where it was
         foreach (var (runDir, req, when, attempts) in Generation.Interrupted(S).Take(3))
         {
+            // brief 13 W4: its map made, the checks or the ruin cut short - resumed from the checks, said so
+            var afterEngine = Generation.EngineDone(runDir);
             // row 411: a run whose steps never reached the disk is said so - nothing to resume from
-            if (!Generation.KeptCheckpoints(runDir))
+            if (!afterEngine && !Generation.KeptCheckpoints(runDir))
             {
                 p.Children.Add(new FAInfoBar
                 {
@@ -646,7 +649,8 @@ public sealed partial class MainWindow : Window
             {
                 IsOpen = true, IsClosable = false, Severity = FAInfoBarSeverity.Informational,
                 Title = Loc.F("gen.interrupted.title", req.Name),
-                Message = Loc.F("gen.interrupted.text", when.ToString("g"), req.Fidelity, req.Seed, attempts),
+                Message = afterEngine ? Loc.F("gen.interrupted.after", when.ToString("g"), req.Fidelity, req.Seed)
+                                      : Loc.F("gen.interrupted.text", when.ToString("g"), req.Fidelity, req.Seed, attempts),
                 ActionButton = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { resume, drop } },
                 Margin = new Thickness(0, 0, 0, 8),
             });

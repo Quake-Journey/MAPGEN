@@ -152,6 +152,9 @@ public sealed partial class MainWindow
         await Task.Delay(1200);
         var full = w._runView?.Scheme.Full;
         Check("the plan opens full screen", full != null);
+        // brief 13 W6 (the PO, 07.10: «у окошка программы нет иконки»): every window carries the Studio's icon
+        Check("the Studio's window and the full-screen map carry the Studio's icon", w.Icon != null && full?.Icon != null,
+              $"window {(w.Icon != null ? "yes" : "no")}, full screen {(full?.Icon != null ? "yes" : "no")}");
         // (the guide's picture of the map on the whole screen is `--shots-full`'s: a real map, not this stand-in's)
         // the PO, 06.10: one window at a time - the Studio hidden behind the full-screen map, back when it closes
         Check("the Studio's window is hidden while the map is full screen", !w.IsVisible);
@@ -373,6 +376,7 @@ public sealed partial class MainWindow
         firstShot?.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
         await Until(() => w.Viewer != null, 5);
         var viewer = w.Viewer;
+        Check("the shot viewer carries the Studio's icon", viewer?.Icon != null);
         Check("a click on a shot opens it as big as the window", viewer != null
               && Math.Abs(viewer.Width - w.Bounds.Width) < 2 && Math.Abs(viewer.Height - w.Bounds.Height) < 2,
               viewer == null ? "no viewer" : $"{viewer.Width:0}x{viewer.Height:0} / {w.Bounds.Width:0}x{w.Bounds.Height:0}");

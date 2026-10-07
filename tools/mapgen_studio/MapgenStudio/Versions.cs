@@ -11,6 +11,33 @@ public static class Versions
 
     public static readonly Entry[] All =
     {
+        new("2.6", "07.10.2026",
+            new[]
+            {
+                "Свет карты и её проверки работают на любом компьютере: раньше они искали игру в папке разработчика, и на других машинах этот шаг не выполнялся",
+                "Кислота и лава появляются, когда их выбрали: водоём отступает от мест появления игроков, а не становится водой; в описании карты сказано, сколько новых водоёмов каждой жидкости",
+                "Площадки с лестницами — и у стен, и отдельно стоящие на открытом полу, высотой 96–192: на тех же картах их выходит больше (q2dm1: 7 из 10 заказанных вместо 2)",
+                "Разрушения: завал в коридоре — обрушившаяся стена из наклонных плит с просветами, а не сплошной блок; отдельные обломки не крупнее 32",
+                "Пристройки: ниши 128 × 160 — зашёл и взял предмет; комнаты бывают восьмиугольные, крестом, буквой Г и со скруглёнными углами, не только прямоугольные",
+                "Перенесённые под землю комнаты берутся сначала из освещённых светильниками; копия комнаты, освещённой небом, проверяется по свету у своей двери",
+                "Свет: комната, которую подсвечивают соседи, больше не затемняется слишком резким шагом",
+                "У студии своя иконка — в окне, на панели задач и при переключении окон",
+                "Окно не замирает на первом запуске генерации за день: ядра с ошибками проверяются в фоне при старте студии",
+                "Генерация, прерванная на проверках или разрушениях, продолжается с проверок: карта уже построена и не строится заново",
+            },
+            new[]
+            {
+                "The map's light and its checks work on any computer: they looked for the game in the developer's folder, and on other machines the step never ran",
+                "Acid and lava appear when chosen: a pool draws back from the players' start points instead of turning to water; the map's description says how many new pools of each liquid",
+                "Platforms with stairs both against walls and standing free on open floor, 96-192 up: more of them on the same maps (q2dm1: 7 of 10 asked instead of 2)",
+                "Destruction: a corridor's blockage is a collapsed wall of leaning slabs with gaps, not one solid block; single pieces of debris no larger than 32",
+                "Annexes: niches 128 x 160 - step in and take the item; rooms octagonal, cross-shaped, L-shaped and with rounded corners, not only rectangles",
+                "Rooms carried underground are taken first from lamp-lit ones; a copy of a sky-lit room is checked against the light at its door",
+                "Light: a room lit up by its neighbours is no longer darkened by too hard a step",
+                "The Studio has its own icon - in the window, the taskbar and the window switcher",
+                "The window no longer freezes on the day's first generation: the faulty cores are read in the background when the Studio starts",
+                "A generation interrupted in its checks or its destruction resumes from the checks: the map is built already and is not built again",
+            }),
         new("2.5", "07.10.2026",
             new[]
             {

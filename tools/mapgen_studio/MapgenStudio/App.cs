@@ -1,5 +1,7 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Platform;
 using Avalonia.Styling;
 using FluentAvalonia.Styling;
 
@@ -16,6 +18,21 @@ public sealed class App : Application
         Settings.EnsureFolders();
         Loc.Language = Settings.Language;
         ApplyTheme(Settings.Theme);
+    }
+
+    private static WindowIcon? s_icon;
+
+    /// <summary>Brief 13 W6: the Studio's own icon (Assets/mapgen_studio.ico), for every window's title bar and Alt-Tab.</summary>
+    public static WindowIcon? Icon()
+    {
+        try
+        {
+            return s_icon ??= new WindowIcon(AssetLoader.Open(new Uri("avares://MapgenStudio/Assets/mapgen_studio.ico")));
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     public static void ApplyTheme(string theme)
@@ -157,6 +174,8 @@ public sealed class App : Application
                 base.OnFrameworkInitializationCompleted();
                 return;
             }
+            // brief 13 W4: the faulty cores read on a pool thread now, not on the window's at the first run
+            NativeJob.WarmFaultyCpus();
             desktop.MainWindow = new MainWindow();
         }
         base.OnFrameworkInitializationCompleted();

@@ -31,7 +31,8 @@ from mapgen_light_profile import LEVEL_BAND, TINT_BAND, room_against_door  # noq
 from mapgen_pinned_compiler import pinned_compiler  # noqa: E402
 from mapgen_memfile import compile_bsp_in_memory  # noqa: E402
 
-GAME = r"O:\Claude2\q2pro-release\baseq2"
+from mapgen_load_guard import game_dir  # noqa: E402  (brief 13 W1: the game folder of this run)
+GAME = game_dir()
 LIGHT = re.compile(r'\{[^{}]*"classname" "light"[^{}]*\}')
 ORIGIN = re.compile(r'"origin" "(\S+) (\S+) (\S+)"')
 VALUE = re.compile(r'"light" "(\d+(?:\.\d+)?)"')
@@ -87,9 +88,11 @@ def measure(bsp: Path, donor: Path, digs: list, sources: list | None = None) -> 
     for d in digs:
         doors = [d["from"]] if d.get("own_room_end") == "to" else [d["from"], d["to"]]
         # brief 11 step 1: a carried room is brought to its original's light, not its door's
-        src = gates.source_of(d, sources or [], donor)
+        # brief 13 W2: (and how much of the original is under the sky, said)
+        src, sky = gates.judged_source(d, sources or [], donor)
         ok, said = room_against_source(bsp, src[0], d["box"], src[1]) if src else \
             room_against_door(bsp, donor, d["box"], doors)
+        said += sky
         m = re.search(r"all (\d+)/(\d+)", said)
         ref, room = profile.LAST.get("ref"), profile.LAST.get("room")
         tint_off = bool(ref and room and (abs(room["gr"] - ref["gr"]) > TINT_BAND or abs(room["br"] - ref["br"]) > TINT_BAND))
@@ -321,6 +324,20 @@ def relight(bsp: Path, text: str, flags: str, work: Path, keys: dict | None = No
     bsp.write_bytes(with_entities(out, text))
 
 
+def learn_power(prev: float, answer: float) -> float:
+    """
+    Brief 13 W5: a room's power from its answer to the last round's step. A room whose level ROSE while its factor was
+    under 1 (a neighbour's light spilling in) answered nothing about its own lights: the negative (or no) answer keeps
+    the power it had - it used to be taken as 0.2, and the hardest step then overshot the room dark.
+    """
+    return max(0.2, min(2.0, answer)) if answer > 0.05 else prev
+
+
+def step_floor(answer: float | None) -> float:
+    """Brief 13 W5: a step below 0.3 only for a room whose own last answer was under 1 (it moves less than its lights)."""
+    return 0.15 if answer is not None and answer < 1.0 else 0.3
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("map", type=Path)
@@ -361,6 +378,7 @@ def main() -> int:
     # brief 12 L2: each room's own answer to its lights - the level's change over the last round's factor (a lamp-panel
     # tunnel moved ~6 % a round under «level as the square of the values»: q2dm1's at 1896 -24 512, x1.53 -> x1.27)
     learnt: dict = {}
+    answered: dict = {}          # brief 13 W5: each room's own last real answer (a power), when it gave one
     if a.relight_first:
         text, moved = revalue(entity_text(a.map.read_bytes()), flags)
         print(f"relighting under the donor's calibration: flags '{flags}', keys {keys}; {moved} lights the generator"
@@ -371,10 +389,12 @@ def main() -> int:
         for d, ok, said, lv, *_ in found:
             key = tuple(round(v) for v in d["box"])
             if lv and key in learnt and learnt[key][0] and abs(learnt[key][1] - 1.0) > 0.02:
-                was, k, _ = learnt[key]
+                was, k, prev = learnt[key]
                 import math
                 answer = math.log(max(1, lv[0]) / max(1, was)) / math.log(k)
-                learnt[key] = (was, k, max(0.2, min(2.0, answer)) if answer > 0.05 else 0.2)
+                learnt[key] = (was, k, learn_power(prev, answer))
+                if answer > 0.05:
+                    answered[key] = answer
         for d, ok, said, *_ in found:
             print(f"round {rnd} {'PASS' if ok else 'FAIL'} {d.get('shape')} {[round(v) for v in d['box'][:3]]}: {said}",
                   flush=True)
@@ -408,7 +428,7 @@ def main() -> int:
                     # answered otherwise last round is stepped by its own answer
                     key = tuple(round(v) for v in b)
                     power = learnt.get(key, (None, None, 2.0))[2]
-                    k = max(0.15, min(3.0, (target / max(1, room)) ** (1.0 / power)))
+                    k = max(step_floor(answered.get(key)), min(3.0, (target / max(1, room)) ** (1.0 / power)))
                     learnt[key] = (room, k, power)
                     changed += 1
                     return VALUE.sub(lambda v: f'"light" "{round(float(v.group(1)) * k)}"', e)
@@ -437,7 +457,7 @@ def main() -> int:
             got = learnt.get(tuple(round(v) for v in d["box"]))
             power = got[2] if got and got[2] != 2.0 else 1.0       # linear until the room has answered
             target = ref * (LEVEL_BAND[0] + LEVEL_BAND[1]) / 2.0 / max(1, room)
-            return max(0.15, min(3.0, target ** (1.0 / power)))
+            return max(step_floor(answered.get(tuple(round(v) for v in d["box"]))), min(3.0, target ** (1.0 / power)))
         panels = scale_panels(a.map, [d["box"] for d, _, _ in off],
                               [panel_k(d, room, ref) for d, (room, ref), _ in off])
         print(f"round {rnd}: {changed} lights and {panels} panel faces rescaled in {len(off)} rooms; relighting",

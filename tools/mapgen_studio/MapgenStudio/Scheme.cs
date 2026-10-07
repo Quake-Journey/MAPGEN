@@ -1020,6 +1020,7 @@ public sealed class SchemeFullScreen : Window
     public SchemeFullScreen(SchemeModel model, Func<Generation?> run)
     {
         Title = "MAPGEN Studio";
+        Icon = App.Icon();
         WindowState = WindowState.FullScreen;
         WindowDecorations = Avalonia.Controls.WindowDecorations.None;
         Background = new SolidColorBrush(Color.FromRgb(0x16, 0x18, 0x1c));

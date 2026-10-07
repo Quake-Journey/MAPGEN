@@ -65,7 +65,21 @@ public sealed class NativeJob : IDisposable
      * map checks' load guard (tools/mapgen_load_guard.py, faulty_cpus) reads and writes. On Intel's hybrid parts a
      * P-core's APIC IDs are 8 apart and its threads the logical CPUs 2k and 2k+1; elsewhere the APIC ID is the index.
      */
-    public static HashSet<int> FaultyCpus(List<int> fast)
+    /*
+     * Brief 13 W4: the read above runs PowerShell (one to three seconds, once a day) - and it ran on the window's thread
+     * the first time a run's share was set, the window frozen. It is started on a pool thread when the Studio starts
+     * (WarmFaultyCpus) and its answer kept; a run asks for the kept answer, waiting only while the read still goes.
+     */
+    private static readonly Lazy<Task<HashSet<int>>> s_faulty =
+        new(() => Task.Run(() => ReadFaultyCpus(PerformanceCpus())));
+
+    /// <summary>Start reading the cores the machine reported for hardware errors, off the window's thread.</summary>
+    public static void WarmFaultyCpus() => _ = s_faulty.Value;
+
+    /// <summary>The cores to leave out (brief 12), read once per Studio start on a pool thread.</summary>
+    public static HashSet<int> FaultyCpus(List<int> fast) => s_faulty.Value.GetAwaiter().GetResult();
+
+    private static HashSet<int> ReadFaultyCpus(List<int> fast)
     {
         var cache = Path.Combine(Environment.GetEnvironmentVariable("LOCALAPPDATA") ?? Path.GetTempPath(),
                                  "mapgen_faulty_cpus.json");

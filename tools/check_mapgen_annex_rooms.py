@@ -12,8 +12,12 @@ On q2dm1 (seed 1020, ambition 80) and q3t2 (seed 45, ambition 90):
 * each annex, applied alone and compiled, is sealed (no leak) and is the room the plan declared - a dais exactly when
   the pickup stands on it, the rim, the gallery and its steps, the columns where they were drawn - and its pickup has
   floor under it and air around it.
-RED: the same generator with the room's pattern taken out (`g_annex_pattern`, a sandbox copy): the declared parts
-are not there - the case above goes red.
+Brief 13 W10 (the PO: «256 x 256 недостаточно мелко ... сейчас только прямоугольники, что скучно»): the annexes of
+one map wear different outlines (a box, an octagon, a cross, an L, rounded corners) - at least three different among
+four or more; each outline is in the compiled room (its far corner filled, or open for a box); and NICHES (128 x 160,
+`--annex N 128 160 128`) are dealt on q2dm1, their pickup on a dais within 96 of the mouth.
+RED, two, in a sandbox copy: the room's pattern taken out (`g_annex_pattern`) - the declared parts are not there; the
+outline held to the box - fewer than three outlines. Each case above goes red.
 
     python tools/check_mapgen_annex_rooms.py [--work DIR] [--no-red]
 """
@@ -39,6 +43,7 @@ PATTERN = re.compile(r"^  dig annex pattern: footprint (\d+) x (\d+), floor (\w+
                      r" trims (\d+)$", re.M)
 ROOM = re.compile(r"^  dig annex: room " + " ".join([NUM] * 3) + r" \.\. " + " ".join([NUM] * 3)
                   + " off " + " ".join([NUM] * 3) + r" through (\d+) of wall(?:, built in air)?$", re.M)
+SHAPE = re.compile(r"^  dig annex shape: ([\w ]+), (\d+) x (\d+)$", re.M)
 MOVE = re.compile(r"^  dig annex moves: (\S+) from " + " ".join([NUM] * 3) + " to " + " ".join([NUM] * 3) + "$",
                   re.M)
 FAILED = TOTAL = 0
@@ -54,6 +59,7 @@ def check(name: str, ok: bool, detail: str = "") -> bool:
 
 def annexes(text: str) -> list[dict]:
     pats = PATTERN.findall(text)
+    shapes = [m.group(1) for m in SHAPE.finditer(text)]
     rooms = [[float(v) for v in m.groups()] for m in ROOM.finditer(text)]
     moves = [(m.group(1), [float(v) for v in m.groups()[1:]]) for m in MOVE.finditer(text)]
     out = []
@@ -63,7 +69,8 @@ def annexes(text: str) -> list[dict]:
         edit = next((m.group(1) for m in DIG_EDIT.finditer(text) if m.group(9) == "annex"
                      and [float(m.group(k)) for k in range(3, 9)] == host + mid), None)
         out.append({"foot": (int(p[0]), int(p[1])), "floor": p[2], "pickup": p[3], "columns": int(p[4]),
-                    "trims": int(p[5]), "room": room, "host": host, "edit": edit, "cls": mv[0], "to": mv[1][3:]})
+                    "trims": int(p[5]), "room": room, "host": host, "edit": edit, "cls": mv[0], "to": mv[1][3:],
+                    "shape": shapes[len(out)] if len(out) < len(shapes) else "?"})
     return out
 
 
@@ -97,6 +104,14 @@ def parts(tree, an: dict) -> dict:
                        for side in (0, 1)
                        for k in ((1,) if an["columns"] == 2 else (1, 2))) if an["columns"] else False,
     }
+    # brief 13 W10: the outline, at the far corner on the low side across: a box's is open, every other filled
+    def corner(fa: float, fc: float) -> bool:
+        return solid(far - dirn * fa * deep, r[ac] + fc * wide, f + 72)
+    got["outline"] = {"a box": not corner(0.04, 0.04), "a niche": True, "an octagon": corner(0.04, 0.04),
+                      "rounded": corner(0.04, 0.04), "a cross": corner(0.12, 0.12),
+                      "an L": corner(0.12, 0.12)}.get(an.get("shape", "?"), True)
+    near = r[al] if dirn > 0 else r[3 + al]
+    got["mouth"] = abs(an["to"][al] - near)
     to = an["to"]
     # something to stand on within 48 under it (a floor 16 thick may have the old map's air under it), air around it
     got["pickup"] = (not tree_solid(tree, (to[0], to[1], to[2]))
@@ -109,18 +124,22 @@ def matches(an: dict, got: dict) -> list[str]:
     """What of the declared room is not there (empty: it is the room the plan said)."""
     want = {"dais": an["pickup"] == "dais", "rim": an["floor"] == "rim", "gallery": an["floor"] == "gallery",
             "pair": an["pickup"] == "columns"}
+    if an.get("shape") == "a niche":
+        want = {"dais": True}
     wrong = [k for k, v in want.items() if got[k] != v]
     if an["columns"] and an["pickup"] != "columns" and not got["columns"]:
         wrong.append("columns")
     if not got["pickup"]:
         wrong.append("pickup stand")
+    if not got.get("outline", True):
+        wrong.append(f"its outline ({an.get('shape')})")
     return wrong
 
 
-def run(exe: Path, work: Path, tag: str) -> dict[str, list]:
+def run(exe: Path, work: Path, tag: str, cases: list | None = None, extra: tuple = ()) -> dict[str, list]:
     out = {}
-    for donor, seed, amb in CASES:
-        text = drive(exe, DONORS / f"{donor}.bsp", "--seed", seed, "--ambition", amb, "--annex-capped", "--list")
+    for donor, seed, amb in cases or CASES:
+        text = drive(exe, DONORS / f"{donor}.bsp", "--seed", seed, "--ambition", amb, "--annex-capped", *extra, "--list")
         rooms = annexes(text)
         results = []
         for k, an in enumerate(rooms):
@@ -128,7 +147,8 @@ def run(exe: Path, work: Path, tag: str) -> dict[str, list]:
                 results.append((an, None, "no edit found for it"))
                 continue
             mp = work / f"{tag}_{donor}_{k}.map"
-            said_out = drive(exe, DONORS / f"{donor}.bsp", "--seed", seed, "--ambition", amb, "--annex-capped", "--apply", an["edit"],
+            said_out = drive(exe, DONORS / f"{donor}.bsp", "--seed", seed, "--ambition", amb, "--annex-capped", *extra,
+                             "--apply", an["edit"],
                              "--out", str(mp))
             # row 412: an annex the builder itself declines (a sky lift it cannot lay, ...) is the transaction's to
             # refuse, not a room drawn wrong - said, and not judged by its pattern
@@ -148,7 +168,8 @@ def run(exe: Path, work: Path, tag: str) -> dict[str, list]:
 
 
 def said(an: dict) -> str:
-    return (f"{an['foot'][0]}x{an['foot'][1]} {an['floor']}, pickup {an['pickup']}, columns {an['columns']},"
+    return (f"{an.get('shape', '?')} {an['foot'][0]}x{an['foot'][1]} {an['floor']}, pickup {an['pickup']},"
+            f" columns {an['columns']},"
             f" trims {an['trims']} ({an['cls']})")
 
 
@@ -180,6 +201,16 @@ def main() -> int:
                 continue
             check(f"{donor}: the annex «{said(an)}» compiles sealed and is the room the plan declared",
                   got is not None and not matches(an, got), why or ", ".join(matches(an, got)) or "as declared")
+        shapes = {an.get("shape") for an in rooms}
+        check(f"{donor}: the annexes wear different outlines (three or more among four or more)",
+              len(shapes) >= min(3, len(rooms)), ", ".join(sorted(s or "?" for s in shapes)))
+    niches = run(exe, a.work, "niche", [("q2dm1", "1020", "80")], ("--annex", "4", "128", "160", "128"))
+    nr = [r for r in niches["q2dm1"] if r[1] is not None]
+    check("q2dm1: niches (128 x 160) dealt and built, each a dais with its pickup within 96 of the mouth",
+          len(nr) >= 1 and all(not matches(an, got) and got["mouth"] <= 96.0 for an, got, _ in nr),
+          "; ".join(f"{said(an)}: mouth {got['mouth']:.0f}" + (f", missing {', '.join(matches(an, got))}"
+                                                                if matches(an, got) else "") for an, got, _ in nr)
+          or "; ".join(why for _, _, why in niches["q2dm1"]))
     if not a.no_red:
         before = hash_tree(REPO)
         box = Sandbox(REPO, "annexrooms")
@@ -195,6 +226,17 @@ def main() -> int:
                 check("RED: with the pattern taken out the rooms are not the rooms declared - the case above goes red",
                       bool(bad) and all(matches(an, got) for an, got in bad),
                       "; ".join(f"{said(an)}: missing {', '.join(matches(an, got))}" for an, got in bad[:3]))
+            shape_line = b"                        d.pat_shape = shape;"
+            data = target.read_bytes().replace(b"static const bool g_annex_pattern = false;",
+                                               b"static const bool g_annex_pattern = true;", 1)
+            if check("RED: the outline's choice is where the mutation says", data.count(shape_line) == 1):
+                target.write_bytes(data.replace(shape_line, b"                        d.pat_shape = 0u * shape;", 1))
+                (a.work / "red_bin2").mkdir(parents=True, exist_ok=True)
+                rexe = build_driver(box.root, a.work / "red_bin2")
+                text = drive(rexe, DONORS / "q2dm1.bsp", "--seed", "1020", "--ambition", "80", "--annex-capped", "--list")
+                rs = {an.get("shape") for an in annexes(text)}
+                check("RED: the outline held to the box - fewer than three outlines, the case above goes red",
+                      len(rs) < 3, ", ".join(sorted(s or "?" for s in rs)))
         finally:
             box.dispose()
             check("the shared worktree was never opened for writing", hash_tree(REPO) == before)

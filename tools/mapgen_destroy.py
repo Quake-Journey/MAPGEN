@@ -35,7 +35,8 @@ from mapgen_pinned_compiler import pinned_compiler  # noqa: E402
 
 DESTROYED = re.compile(r"^destroyed: (.*)$", re.M)
 DRAWN = re.compile(r"^cracks drawn: (\d+), (\d+) without", re.M)
-GAME = Path(r"O:\Claude2\q2pro-release\baseq2")
+from mapgen_load_guard import game_dir  # noqa: E402  (brief 13 W1: the game folder of this run)
+GAME = Path(game_dir())
 PACK = Path(r"O:\Claude2\_agent_temp\claude\mapgen_textures\pack")       # the authors' build of the pack
 
 

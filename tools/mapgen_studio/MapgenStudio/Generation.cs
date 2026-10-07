@@ -34,6 +34,7 @@ public sealed record GenerationOptions(int Digs = 0, int Annexes = 0, int AnnexS
     {
         new[] { 0f, 0f, 0f }, new[] { 256f, 256f, 192f }, new[] { 384f, 384f, 256f }, new[] { 512f, 512f, 288f },
         new[] { 768f, 768f, 320f },
+        new[] { 128f, 160f, 128f },     // brief 13 W10: niches - a pickup two steps in from the mouth
     };
 
     /// <summary>The pipeline's words for them - none for a default.</summary>
@@ -430,7 +431,9 @@ public sealed class Generation
             {
                 continue;
             }
-            if (text.Contains("stage=finish"))
+            // brief 13 W4: an engine that finished, its Studio gone in the checks or the ruin (its owner's file
+            // left behind, its map there), is interrupted too - it was neither delivered nor ended
+            if (text.Contains("stage=finish") && !EngineDone(dir))
                 continue;
             list.Add((dir, req, Directory.GetLastWriteTime(dir), rows));
         }
@@ -494,12 +497,48 @@ public sealed class Generation
         }
     }
 
+    /// <summary>
+    /// Brief 13 W4: did the run's engine finish and leave its map, the run stopped after it - in the checks or the
+    /// ruin (the owner's file still there: an ended run drops it)? Such a run is resumed from its checks.
+    /// </summary>
+    public static bool EngineDone(string runDir)
+    {
+        try
+        {
+            var progress = Path.Combine(runDir, "job", "progress.txt");
+            if (!File.Exists(progress) || !File.Exists(Path.Combine(runDir, OwnerFile)))
+                return false;
+            var fin = ReadShared(progress).Split('\n').LastOrDefault(l => l.Contains("stage=finish"));
+            var bsp = fin == null ? null : Field.Matches(fin).FirstOrDefault(m => m.Groups[1].Value == "bsp");
+            return bsp != null && File.Exists(bsp.Groups[2].Value.Trim('"'));
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>Resume a run that stopped part way: the engine replays its ledger and goes on (G3).</summary>
     public static Generation Resume(Settings s, string runDir)
     {
         if (LiveElsewhere(runDir))
             throw new InvalidOperationException(Loc.T("run.resume.live"));
         var r = LoadRequest(runDir) ?? throw new InvalidOperationException(Loc.T("run.resume.norequest"));
+        // brief 13 W4: the engine finished - its map is not made again; the checks and the ruin are run again from
+        // the engine's own map (the ruin works on a copy of it, so a half-made ruin is left behind, not built on)
+        if (EngineDone(runDir))
+        {
+            var done = new Generation(r, s, runDir) { Resumed = true };
+            lock (done.Sync)
+            {
+                done.ReadProgress();
+                WriteOwner(done.RunDir);
+                done.Log.Add(Loc.T("run.resume.checks"));
+                Current = done;
+                done.StartGates();
+            }
+            return done;
+        }
         if (!KeptCheckpoints(runDir))
             throw new InvalidOperationException(Loc.T("run.resume.nocheckpoints"));
         var g = new Generation(r, s, runDir) { Resumed = true };
@@ -876,7 +915,9 @@ public sealed class Generation
         var second = Request.Grafts is { Count: > 0 } gr ? $",'--second',r'{Engine.DonorPath(gr[0])}'" : "";
         // brief 10 (D2): the released Studio's own compiler and built helpers, for the checks (a user has no compiler)
         var helpers = Path.Combine(Engine.Dir, "helpers");
-        var env = "import os;" +
+        // brief 13 W1: the checks, the light and the ruin against THIS client's game - the tools had the authors' own
+        // folder hard-wired, and the light step never worked on any other machine
+        var env = "import os;" + $"os.environ['MAPGEN_GAME']=r'{Path.Combine(_s.ClientDir, "baseq2")}';" +
                   (Directory.Exists(helpers) ? $"os.environ['MAPGEN_HELPERS']=r'{helpers}';" : "") +
                   $"os.environ['MAPGEN_Q2TOOL']=r'{Path.Combine(Engine.Dir, "q2tool.exe")}';" +
                   // brief 11 D2: the released Studio's texture pack (engine/textures/mapgen)

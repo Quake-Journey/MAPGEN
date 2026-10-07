@@ -28,7 +28,8 @@ from mapgen_light_profile import faithful  # noqa: E402
 from mapgen_pinned_compiler import pinned_compiler  # noqa: E402
 from mapgen_memfile import compile_bsp_in_memory  # noqa: E402
 
-GAME = r"O:\Claude2\q2pro-release\baseq2"
+from mapgen_load_guard import game_dir  # noqa: E402  (brief 13 W1: the game folder of this run)
+GAME = game_dir()
 
 
 def light_only(raw: bytes, own: str, keys: dict, flags: str, d: Path, donor: Path) -> tuple[int, bool, list]:

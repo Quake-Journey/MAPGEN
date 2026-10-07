@@ -11,9 +11,12 @@ generated q2dm1 (20 %, variant 42), q2dm1 and q3t2 as they are, the destroy driv
 * (d) the debris: chunks - at least nine in ten of the small detail brushes have 8 or 9 sides (a box cut at its
   corners), none over 34 high; each wears a dusted copy of a texture the map itself draws, or an isotropic pack rock
   (its grain under 0.6) - never a directional picture (a corridor's fill, a block by design, is counted apart);
-* (e) the copies drawn at the game's own resolution where the game has the original's picture (its .png).
-RED, two, each in a sandbox: the stamps back in the crack list - (a) goes red; the chunks' corner cuts taken out -
-(d) goes red.
+* (e) the copies drawn at the game's own resolution where the game has the original's picture (its .png);
+* (f) brief 13 W9 (the PO on mg_1_6662, quake218..221: «нужно класть именно разрушенные конструкции, а не
+  прямоугольники»): no ruin piece is an upright box - every piece over 40 high leans (its faces tilted, not its broken corner
+  alone); no chunk is over 92 across (a 64 chunk turned).
+RED, three, each in a sandbox: the stamps back in the crack list - (a) goes red; the chunks' corner cuts taken out -
+(d) goes red; the slabs stood upright (no lean) - (f) goes red.
 
     python tools/check_mapgen_ruin_look.py [--work DIR] [--no-red]
 """
@@ -110,7 +113,7 @@ def shape(sides: list[dict]) -> dict:
     lo = [min(c[a] for c in corners) for a in range(3)] if corners else [0, 0, 0]
     hi = [max(c[a] for c in corners) for a in range(3)] if corners else [0, 0, 0]
     real = sum(1 for n, d in planes if sum(1 for c in corners if abs(n[0] * c[0] + n[1] * c[1] + n[2] * c[2] - d) < 0.05) >= 3)
-    return {"sides": sides, "lo": lo, "hi": hi, "faces": real,
+    return {"sides": sides, "lo": lo, "hi": hi, "faces": real, "planes": planes,
             "detail": bool(sides and sides[0]["contents"] & DETAIL)}
 
 
@@ -161,14 +164,17 @@ def judge(name: str, mapfile: Path, needs_path: Path, catalogue: dict, into: Pat
                 default=1e9)
     # the ruin's pieces: small detail brushes wearing one texture all over - a dusted copy or a pack texture (the
     # generated map's own detail, its faces cracked here and there, wears several)
-    debris = [b for b in bs if b["detail"] and b not in stamp_plates
-              and max(b["hi"][a] - b["lo"][a] for a in range(2)) <= 64.0
+    pieces = [b for b in bs if b["detail"] and b not in stamp_plates
               and len({s["tex"] for s in b["sides"]}) == 1
               and (b["sides"][0]["tex"].startswith("mapgen/")
                    or (b["sides"][0]["tex"] in needs and needs[b["sides"][0]["tex"]]["mask"].startswith("dust")))]
-    # a corridor's fill (the ruin kind: a block from wall to wall up to the ceiling) is a block by design, not debris
-    fills = [b for b in debris if b["faces"] == 6 and b["hi"][2] - b["lo"][2] > 40.0]
-    debris = [b for b in debris if b not in fills]
+    # the slabs (a collapsed wall, a fall's tent): over 40 high; the chunks: the rest
+    fills = [b for b in pieces if b["hi"][2] - b["lo"][2] > 40.0]
+    debris = [b for b in pieces if b not in fills]
+    # a leaning slab: its front, back, top and foot are all tilted (4 normals 0.3..0.97 up); an upright one has its
+    # broken corner alone
+    upright = [b for b in fills if sum(1 for n, _ in b["planes"] if 0.3 <= abs(n[2]) <= 0.97) < 3]
+    wide = [b for b in debris if max(b["hi"][a] - b["lo"][a] for a in range(2)) > 92.0]
     cut = sum(1 for b in debris if b["faces"] >= 8)
     tall = [b for b in debris if b["hi"][2] - b["lo"][2] > 34.05]
     wrong = []
@@ -203,7 +209,7 @@ def judge(name: str, mapfile: Path, needs_path: Path, catalogue: dict, into: Pat
     pngs = sum(1 for t in pictured if (into / "textures" / f"{t}.png").is_file())
     res = {"stamp_on_map": stamp_on_map, "share": cracked / max(1, drawn), "patches": len(patches), "close": close,
            "debris": len(debris), "cut": cut, "tall": len(tall), "wrong": wrong, "piles": len(groups), "pngs": pngs,
-           "needs": len(needs)}
+           "needs": len(needs), "slabs": len(fills), "upright": len(upright), "wide": len(wide)}
     if report:
         check(f"{name}: (a) no tiled stamp - every hole, crater, burn and picture copy on a placed plate alone",
               not stamp_on_map, f"{len(stamp_plates)} plates" + (f"; on the map's own faces: {stamp_on_map[:4]}"
@@ -214,8 +220,10 @@ def judge(name: str, mapfile: Path, needs_path: Path, catalogue: dict, into: Pat
               f"{len(patches)} patches, the nearest two {close:.0f} apart")
         check(f"{name}: (d) debris are chunks (9 in 10 with 8..9 faces), none over 34 high, each in what broke",
               debris and cut >= 0.9 * len(debris) and not tall and not wrong,
-              f"{len(debris)} pieces in {len(groups)} piles, {cut} cut, {len(tall)} tall; {len(fills)} corridor fills"
+              f"{len(debris)} pieces in {len(groups)} piles, {cut} cut, {len(tall)} tall"
               + (f", wrong texture: {wrong[:3]}" if wrong else ""))
+        check(f"{name}: (f) the slabs lean, no upright block, no chunk over 92 across", not upright and not wide,
+              f"{len(fills)} slabs, {len(upright)} upright, {len(wide)} wide chunks")
         check(f"{name}: (e) every copy drawn at the game's resolution where the game has the original's picture",
               pngs == len(pictured), f"{pngs} .png of {len(pictured)} copies with a pictured original"
               f" ({len(needs)} copies in all)")
@@ -283,6 +291,21 @@ def main() -> int:
                 r = judge("red", mapfile, needs, catalogue, a.work / "red_cuts" / "into", report=False)
                 check("RED: without the cuts the debris are boxes again - (d) goes red",
                       r["debris"] > 0 and r["cut"] < 0.9 * r["debris"], f"{r['cut']} of {r['debris']} cut")
+            lean = b"const float cl = cosf(lean), sl = sinf(lean);"
+            if check("RED: the slabs' lean is where the mutation says", clean.count(lean) == 1):
+                target.write_bytes(clean.replace(lean, b"const float cl = 1.0f, sl = 0.0f * lean;", 1))
+                (a.work / "red_lean").mkdir()
+                prepare(a.work / "red_lean")
+                saved = md.REPO
+                md.REPO = box.root
+                try:
+                    rexe = md.driver(a.work / "red_lean")
+                finally:
+                    md.REPO = saved
+                mapfile, needs, _ = run(rexe, GENERATED, a.work / "red_lean", "gen", pack, plist)
+                r = judge("red", mapfile, needs, catalogue, a.work / "red_lean" / "into", report=False)
+                check("RED: the slabs upright - upright blocks again, (f) goes red", r["upright"] > 0,
+                      f"{r['upright']} upright of {r['slabs']} slabs")
         finally:
             box.dispose()
             check("the shared worktree was never opened for writing", hash_tree(REPO) == before)

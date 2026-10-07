@@ -90,6 +90,7 @@ def main() -> int:
     shutil.copy2(m.group(2), cand)
     py = sys.executable
     env = dict(os.environ)
+    env["MAPGEN_GAME"] = str(a.game)          # brief 13 W1: every step lights and checks against this game
 
     def step(args: list) -> subprocess.CompletedProcess:
         return subprocess.run([py, *map(str, args)], capture_output=True, text=True, errors="replace", env=env)

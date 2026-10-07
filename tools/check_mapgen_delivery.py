@@ -44,7 +44,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mapgen_load_guard as load_guard          # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
-MAPS = Path(r"O:\Claude2\q2pro-release\baseq2\maps")
+from mapgen_load_guard import game_dir  # noqa: E402  (brief 13 W1: the game folder of this run)
+MAPS = Path(game_dir()) / "maps"
 RECEIPT = "mgtest_delivery.json"
 
 LUMP_VISIBILITY = 3

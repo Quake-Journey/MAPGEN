@@ -1,5 +1,18 @@
 # MAPGEN Studio by ly — change log
 
+## 2.6 — 07.10.2026
+
+- The map's light and its checks work on any computer: they looked for the game in the developer's folder, and on other machines the step never ran
+- Acid and lava appear when chosen: a pool draws back from the players' start points instead of turning to water; the map's description says how many new pools of each liquid
+- Platforms with stairs both against walls and standing free on open floor, 96-192 up: more of them on the same maps (q2dm1: 7 of 10 asked instead of 2)
+- Destruction: a corridor's blockage is a collapsed wall of leaning slabs with gaps, not one solid block; single pieces of debris no larger than 32
+- Annexes: niches 128 x 160 - step in and take the item; rooms octagonal, cross-shaped, L-shaped and with rounded corners, not only rectangles
+- Rooms carried underground are taken first from lamp-lit ones; a copy of a sky-lit room is checked against the light at its door
+- Light: a room lit up by its neighbours is no longer darkened by too hard a step
+- The Studio has its own icon - in the window, the taskbar and the window switcher
+- The window no longer freezes on the day's first generation: the faulty cores are read in the background when the Studio starts
+- A generation interrupted in its checks or its destruction resumes from the checks: the map is built already and is not built again
+
 ## 2.5 — 07.10.2026
 
 - Destruction is a stage of its own on the run's page, with its time; its percent is named in the plan's line

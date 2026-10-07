@@ -614,6 +614,7 @@ typedef struct {
     float    move_from[3], move_to[3];
     char     tex_tread[MAPGEN_BSP_TEXNAME + 1];
     char     tex_side[MAPGEN_BSP_TEXNAME + 1];
+    bool     free;                /* brief 13 W8: on open floor, no wall behind it - a platform with its steps */
 } stairway_t;
 /* Set by `deal_annexes` (row 405, W5): some size found no rock site and its annexes were sought in the map's free
    air - the donor is an arena, and spans are dealt on it. */
@@ -920,6 +921,7 @@ typedef struct {
      */
     bool     pat_set;
     uint8_t  pat_floor, pat_pickup, pat_columns, pat_trims;
+    uint8_t  pat_shape;          /* brief 13 W10: 0 a box, 1 an octagon, 2 a cross, 3 an L, 4 rounded corners */
     /* brief 9 D2: the second map whose room's skin it wears ("" - the host room's, as always) */
     char     skin_of[32];
     /*
@@ -1910,6 +1912,7 @@ static bool leads_up(const mapgen_bsp_t *ground, const float lo[3],
                      const float hi[3], float top, float *found_at);
 static bool under_sky(const mapgen_bsp_t *ground, const float lo[3],
                       const float hi[3]);
+static bool room_sky_lit(const mapgen_bsp_t *g, const mapgen_room_t *room);
 static bool region_is_all_boxes(const mapgen_geometry_t *g, const float lo[3],
                                 const float hi[3]);
 /* The window's own sampler: is the opening's rectangle, on this plane, all
@@ -16545,6 +16548,9 @@ static void deal_floods(mapgen_geometry_edit_plan_t *plan,
     }
 
     uint32_t dealt = 0, dealt_passages = 0, tried = 0;
+    /* brief 13 W7: per kind - asked, made, kept off a start, retreated from one (the plan says it, the Studio too) */
+    uint32_t asked_of[3] = { kind[0].want, kind[1].want, kind[2].want };
+    uint32_t made_of[3] = { 0, 0, 0 }, kept_off[3] = { 0, 0, 0 }, retreated_from_starts[3] = { 0, 0, 0 };
     uint32_t why_small = 0, why_level = 0, why_under = 0, why_busy = 0,
              why_share = 0, why_clash = 0, why_storey = 0, why_wet = 0,
              why_edge = 0, why_frame = 0, why_huge = 0, why_void = 0,
@@ -17425,39 +17431,55 @@ static void deal_floods(mapgen_geometry_edit_plan_t *plan,
         if (passage)
             k = 0;
 
-        /* a hazard keeps its distance from every start */
+        /*
+         * A hazard keeps its distance from every start - by RETREATING from it (brief 13 W7, the PO on mg_1_6662:
+         * «я выбирал кислоту и лаву, а там одна вода»). It used to turn to water whenever a start stood within
+         * SUNK_SPAWN_CLEAR of the room, and q2dm1 has a start in every room: lava 75 % and slime 30 % asked, every
+         * hazard flood became water, silently. Now the cells within SUNK_SPAWN_CLEAR of a start leave the mask (as the
+         * hollow retreats from a pickup); what is left is flooded with the hazard when it is still worth it, else this
+         * room takes none of it and the next room is tried - never water in its place.
+         */
         if (kind[k].hazard) {
-            bool near_start = false;
-            uint32_t length = 0;
+            uint32_t length = 0, gone = 0;
             const char *text = MapGenBsp_Entities(ground, &length);
             const char *at = text;
-            while (text && !near_start
-                   && (at = strstr(at, "info_player_deathmatch")) != NULL) {
+            while (text && (at = strstr(at, "info_player_deathmatch")) != NULL) {
                 const char *o = strstr(at, "\"origin\"");
                 at += 22;
                 if (!o)
                     break;
                 const char *v = strchr(o + 8, '"');
                 float p[3] = { 0, 0, 0 };
-                if (v && sscanf(v + 1, "%f %f %f", &p[0], &p[1], &p[2]) == 3
-                    && p[0] >= flo[0] - SUNK_SPAWN_CLEAR
-                    && p[0] <= fhi[0] + SUNK_SPAWN_CLEAR
-                    && p[1] >= flo[1] - SUNK_SPAWN_CLEAR
-                    && p[1] <= fhi[1] + SUNK_SPAWN_CLEAR
-                    && p[2] >= modal - SUNK_SPAWN_CLEAR
-                    && p[2] <= modal + SUNK_SPAWN_CLEAR)
-                    near_start = true;
-            }
-            if (near_start) {
-                /* the ROOM is fine; the liquid is not. Water has no such
-                   rule, so the room takes water rather than nothing. */
-                refuse(plan, "flood: room %u would put %s within %.0f of a"
-                             " player start - water instead", r, kind[k].tex,
-                       (double)SUNK_SPAWN_CLEAR);
-                k = 0;
-                /* row 412: unless the PO asked for no new water - then not this room at all */
-                if (custom && g_new_liquid[0] == 0)
+                if (!v || sscanf(v + 1, "%f %f %f", &p[0], &p[1], &p[2]) != 3
+                    || p[2] < modal - SUNK_SPAWN_CLEAR || p[2] > modal + SUNK_SPAWN_CLEAR)
                     continue;
+                for (int32_t j = 0; j < ny; j++)
+                    for (int32_t i = 0; i < nx; i++) {
+                        const size_t c = (size_t)j * nx + i;
+                        if (!mask[c])
+                            continue;
+                        const float x = flo[0] + ((float)i + 0.5f) * SUNK_PITCH;
+                        const float y = flo[1] + ((float)j + 0.5f) * SUNK_PITCH;
+                        if (fabsf(x - p[0]) < SUNK_SPAWN_CLEAR + 0.5f * SUNK_PITCH
+                            && fabsf(y - p[1]) < SUNK_SPAWN_CLEAR + 0.5f * SUNK_PITCH) {
+                            mask[c] = 0u;
+                            gone++;
+                        }
+                    }
+            }
+            if (gone) {
+                const uint32_t offered = cells;
+                cells = cells > gone ? cells - gone : 0u;
+                if (!mapgen_flood_worth_dealing(offered, cells, floor_cells, SUNK_MIN_CELLS, SUNK_MIN_SHARE)) {
+                    kept_off[k]++;
+                    refuse(plan, "flood: room %u keeps %s %.0f off its player starts: %u cells retreated, %u left -"
+                                 " too little, the next room is tried", r, kind[k].tex, (double)SUNK_SPAWN_CLEAR,
+                           gone, cells);
+                    continue;
+                }
+                retreated_from_starts[k]++;
+                refuse(plan, "flood: room %u's %s retreated %u cells from its player starts - %u left", r,
+                       kind[k].tex, gone, cells);
             }
         }
 
@@ -17952,6 +17974,7 @@ static void deal_floods(mapgen_geometry_edit_plan_t *plan,
             dealt++;
         if (custom && !passage && kind[k].want > 0)      /* row 412: a kind asked for counts down */
             kind[k].want--;
+        made_of[passage ? 0 : k]++;
         refuse(plan, "flood offered: %s in room %u, %u of %u floor cells,"
                      " %u pieces, %u shell, %.0f deep, surface %.0f, %.0f %.0f"
                      " .. %.0f %.0f", kind[k].tex, r, cells, floor_cells,
@@ -17984,6 +18007,11 @@ static void deal_floods(mapgen_geometry_edit_plan_t *plan,
            why_fill, why_level, why_under, why_busy, why_machine, why_clash,
            why_wet, why_edge, why_frame,
            first_why[0] ? " - first: " : "", first_why);
+    /* brief 13 W7: what each kind came to (the Studio's «водоёмов» line names them) */
+    refuse(plan, "floods by kind: water %u of %u, slime %u of %u, lava %u of %u; kept off starts: %u rooms gave up a"
+                 " hazard, %u hazards retreated from a start", made_of[0], asked_of[0] + want_passages, made_of[1],
+           asked_of[1], made_of[2], asked_of[2], kept_off[1] + kept_off[2],
+           retreated_from_starts[1] + retreated_from_starts[2]);
     free(by_size);
     free(thing);
     free(real);
@@ -19404,6 +19432,10 @@ static void deal_annexes(mapgen_geometry_edit_plan_t *plan,
         memcpy(sizes[0], mid, sizeof(mid));
         memcpy(sizes[1], small, sizeof(small));
     }
+    /* brief 13 W10 (the PO: «256 x 256 кажется не достаточно мелким ... чтобы можно было просто зайти и взять важный
+       предмет»): NICHES are a size of their own - 128 x 160 x 128 asked (the Studio's «Ниши», `--annex N 128 160
+       128`), each a dais two steps in from its mouth (the pattern pass). Not among the default sizes: a fourth size
+       in the turn moved every seeded plan (the halls of 768 at seed 1020 were no longer dealt) */
     /*
      * Brief 9 D3: the annex's own footprints - not only squares. Each size the plan has, and beside it the same area
      * long along the wall and long away from it, in the seed's order; the rooms are dealt one of each size in turn,
@@ -19478,6 +19510,11 @@ static void deal_annexes(mapgen_geometry_edit_plan_t *plan,
         }
     }
     uint64_t pat_stream = *stream ^ 0x9E3779B97F4A7C15ull;     /* the parts' own stream: the sites' order is untouched */
+    /* brief 13 W10: where the shapes' turn starts - from a copy of the parts' stream, no draw of it spent (a draw
+       moved every later pattern and source of the seed's plan, and the dig guard's staged plans with them) */
+    uint64_t shape_stream = pat_stream ^ 0xD1B54A32D192ED03ull;
+    const uint32_t shape_turn = (uint32_t)(mix(&shape_stream) % 5u);
+    uint32_t shapes_used = 0u;                                         /* ... and the outlines this map has had */
     for (uint32_t i = num_foot; i > 1u; i--) {
         const uint32_t j = (uint32_t)(mix(&pat_stream) % i);
         float tmp[3];
@@ -19737,6 +19774,9 @@ static void deal_annexes(mapgen_geometry_edit_plan_t *plan,
                         co = 0u, pk = pk == 3u ? 1u : pk;
                     if (co == 4u && deep < 384.0f)
                         co = 2u;
+                    /* brief 13 W10: a niche (under 256 both ways) - step in, take it: flat, the pickup on its dais */
+                    if (wide < 256.0f && deep < 256.0f)
+                        fl = 0u, pk = 0u, co = 0u;
                     const uint32_t key = z * 100u + fl * 10u + pk;
                     bool seen = false;
                     for (uint32_t u = 0; u < num_used_pat; u++)
@@ -19748,6 +19788,27 @@ static void deal_annexes(mapgen_geometry_edit_plan_t *plan,
                     d.pat_pickup = pk;
                     d.pat_columns = co;
                     d.pat_trims = tr;
+                    /* brief 13 W10 (the PO: «сейчас только прямоугольники, что скучно»): the room's outline - a box,
+                       an octagon, a cross, an L, rounded corners - in the seed's turn, none twice while they last; a
+                       cross needs 320 a side, a niche stays a box */
+                    {
+                        const float side = fminf(wide, deep);
+                        uint8_t shape = 0u;
+                        bool found = false;
+                        for (int pass = 0; pass < 2 && !found && side >= 256.0f; pass++)
+                            for (uint32_t n = 0; n < 5u && !found; n++) {
+                                const uint8_t c5 = (uint8_t)((shape_turn + num_used_pat + n) % 5u);
+                                if (c5 == 2u && side < 320.0f)
+                                    continue;              /* a cross's arms need the room */
+                                if (pass == 0 && (shapes_used & (1u << c5)))
+                                    continue;              /* none twice while there are others */
+                                shape = c5;
+                                found = true;
+                            }
+                        if (side >= 256.0f)
+                            shapes_used |= 1u << shape;
+                        d.pat_shape = shape;
+                    }
                     if (num_used_pat < ANNEX_MAX)
                         used_pat[num_used_pat++] = key;
                     drawn = true;
@@ -19767,6 +19828,9 @@ static void deal_annexes(mapgen_geometry_edit_plan_t *plan,
                     d.move_to[0][axis] = far - (float)dir * 0.5f * ANNEX_GALLERY_DEEP;
                     d.move_to[0][2] = floor_z + ANNEX_GALLERY_HIGH + over;
                 }
+                refuse(plan, "dig annex shape: %s, %.0f x %.0f", d.pat_shape == 1u ? "an octagon"
+                       : d.pat_shape == 2u ? "a cross" : d.pat_shape == 3u ? "an L" : d.pat_shape == 4u ? "rounded"
+                       : wide < 256.0f || deep < 256.0f ? "a niche" : "a box", (double)wide, (double)deep);
                 refuse(plan, "dig annex pattern: footprint %.0f x %.0f, floor %s, pickup %s, columns %u, trims %u",
                        (double)wide, (double)deep,
                        d.pat_floor == 0u ? "flat" : d.pat_floor == 1u ? "rim" : "gallery",
@@ -20056,6 +20120,27 @@ static void deal_annexes(mapgen_geometry_edit_plan_t *plan,
                 const uint32_t tmp = order[i - 1u];
                 order[i - 1u] = order[j];
                 order[j] = tmp;
+            }
+            /*
+             * Brief 13 W2: a room carried into rock is lit by lamps; one whose original is lit by its SKY (q2dm1's
+             * courtyard: the sun's shadows) cannot look like it there - such rooms are tried LAST, the seed's order
+             * kept within each part (no draw of the stream spent, the rest of the plan unmoved).
+             */
+            {
+                uint32_t lamp[256], sky[256], nl = 0, ns = 0;
+                for (uint32_t i = 0; i < count; i++) {
+                    const mapgen_bundle_t *b = MapGenBundleSet_At(set, order[i]);
+                    const uint32_t ri = b ? MapGenBundle_Room(b) : UINT32_MAX;
+                    const mapgen_room_t *room = ri < MapGenRooms_Count(src_rooms) ? MapGenRooms_Room(src_rooms, ri) : NULL;
+                    if (room && room_sky_lit(src_bsp, room))
+                        sky[ns++] = order[i];
+                    else
+                        lamp[nl++] = order[i];
+                }
+                memcpy(order, lamp, nl * sizeof(*order));
+                memcpy(order + nl, sky, ns * sizeof(*order));
+                if (ns)
+                    refuse(plan, "dig room-of %s: %u of %u rooms lit by their sky, tried last", src_name, ns, count);
             }
             const uint32_t want_of = real_rooms_want;
             const uint32_t nb = MapGenGeometry_NumBrushes(src_g);
@@ -20923,12 +21008,12 @@ static bool build_span(mapgen_geometry_t *g, const span_t *s)
  */
 #define STAIR_RISE        16.0f
 #define STAIR_TREAD       32.0f
-#define STAIR_H_MIN      128.0f
+#define STAIR_H_MIN       96.0f    /* brief 13 W8: 96 (was 128) - shorter flights fit q2dm1's broken walls */
 #define STAIR_H_MAX      192.0f
-#define STAIR_LAND_EXTRA  64.0f
+#define STAIR_LAND_EXTRA  32.0f    /* brief 13 W8: 32 (was 64) */
 #define STAIR_HEAD        72.0f
 #define STAIR_KEEP        32.0f
-#define STAIR_LANE        48.0f
+#define STAIR_LANE        32.0f    /* brief 13 W8: 32 (was 48), the room's own floor in front */
 #define STAIR_WALL_REACH  96.0f
 #define STAIR_WALL_DEPTH  22.0f
 #define STAIR_WALL_SLACK  16.0f
@@ -20950,6 +21035,8 @@ typedef struct {
     uint32_t looked, no_wall, crooked, floor, wet, low, open_wall, by_entity, by_pad, by_plan, no_lane, no_purpose,
              crossing, dealt, ledges, pickups, stuck;
     uint32_t ledge_seen;    /* walkways' edges met along a wall at a landing's height (brief 12 L5) */
+    uint32_t site_why[6];   /* brief 13 W8: SITES refused, each by its own main cause (straight, floor, wet, lane,
+                               low, open) - the samples' counts above say how often, these how many places */
 } stair_tally_t;
 
 /* The floor at (x, y) is at z (within `slack`), dry, with a player's height of air over it. */
@@ -21001,7 +21088,7 @@ typedef struct {
 } stair_run_t;
 
 static void stair_scan(const mapgen_bsp_t *g, int ra, float P, float ws, float c, float z, float W, float top,
-                       stair_run_t *r)
+                       bool free, stair_run_t *r)
 {
     const float vin = P - ws * W;
     for (int j = -STAIR_SCAN; j <= STAIR_SCAN; j++) {
@@ -21023,6 +21110,15 @@ static void stair_scan(const mapgen_bsp_t *g, int ra, float P, float ws, float c
         stair_point(ra, u, P + ws * 2.0f, q);
         const bool footed = !donor_air(g, q[0], q[1], z - 12.0f);
         r->straight[i] = !pillar && face && footed;
+        if (free) {
+            /* brief 13 W8: a platform on open floor - its strip and the floor behind it open at a player's chest */
+            bool open = true;
+            for (float dd = 8.0f; dd <= W + 16.0f && open; dd += 8.0f) {
+                stair_point(ra, u, P + ws * 16.0f - ws * dd, q);
+                open = donor_air(g, q[0], q[1], z + 40.0f);
+            }
+            r->straight[i] = open;
+        }
         r->floor[i] = 1u;
         r->wet[i] = 0u;
         r->air[i] = top + STAIR_HEAD;
@@ -21046,9 +21142,13 @@ static void stair_scan(const mapgen_bsp_t *g, int ra, float P, float ws, float c
                 h += 8.0f;
             r->air[i] = fminf(r->air[i], h - 8.0f);
         }
-        /* the lane: a floor a step from the stairway's own either way */
+        /* the lane: a floor a step from the stairway's own either way (and behind it, standing free) */
         stair_point(ra, u, vin - ws * STAIR_LANE, q);
         r->lane[i] = stair_floor_near(g, q[0], q[1], z, DIG_WALK_UP, NULL);
+        if (free) {
+            stair_point(ra, u, P + ws * STAIR_LANE, q);
+            r->lane[i] = r->lane[i] && stair_floor_near(g, q[0], q[1], z, DIG_WALK_UP, NULL);
+        }
         /* the wall whole: not open through its first STAIR_WALL_DEPTH, from over the floor's trim up */
         float h = 24.0f;
         for (; h <= top + 0.5f; h += 24.0f) {
@@ -21060,7 +21160,7 @@ static void stair_scan(const mapgen_bsp_t *g, int ra, float P, float ws, float c
             if (open)
                 break;
         }
-        r->whole[i] = h - 24.0f;
+        r->whole[i] = free ? top + 999.0f : h - 24.0f;
     }
 }
 
@@ -21103,7 +21203,7 @@ static bool stair_site(const stair_run_t *r, int ra, float rs, float P, float ws
                                : r->whole[i] < (body ? fmaxf(tread - 8.0f, 0.0f) : 96.0f) - 24.0f ? 5 : -1;
                 if (fail >= 0) {
                     ok = false;
-                    if (off == 0)
+                    if (off == 0 && force == INT32_MAX)
                         why[fail]++;
                 }
             }
@@ -21262,6 +21362,109 @@ static bool stair_ledge(const mapgen_bsp_t *g, int ra, float rs, stairway_t *s)
     return false;
 }
 
+/*
+ * Brief 13 W3: BALCONY EDGES, measured, nothing built - the PO's picture (06.10) has stairs climbing TO a walkway from
+ * the floor below, at right angles to its edge. One is counted where, from a reached floor, the floor runs on flat
+ * under open air (headroom over the flight) and a walkable floor 128..192 above it begins - its edge - with the room
+ * for a flight in front of it: (H / rise) treads + 96 + 64 of flat floor. Each edge once, by its place to 64, its
+ * way and its height to 32.
+ */
+static uint32_t stair_balcony_edges(const mapgen_bsp_t *g, const dig_walk_t *walk, const uint8_t *reached,
+                                    bool have_start, uint32_t why[2])
+{
+    enum { MAX_SEEN = 4096 };
+    uint32_t *seen = calloc(MAX_SEEN, sizeof(*seen));
+    uint32_t num_seen = 0, edges = 0;
+    why[0] = why[1] = 0u;       /* edges met with too little floor in front, with too little headroom over it */
+    static const int DX[4] = { 1, -1, 0, 0 };
+    static const int DY[4] = { 0, 0, 1, -1 };
+    for (uint32_t col = 0; seen && col < walk->nx * walk->ny; col++) {
+        const int32_t ix = (int32_t)(col % walk->nx) + walk->ix0, iy = (int32_t)(col / walk->nx) + walk->iy0;
+        if ((ix & 1) || (iy & 1))
+            continue;
+        for (uint8_t k = 0; k < walk->count[col]; k++) {
+            const uint32_t sf = walk->first[col] + k;
+            if (have_start && !reached[sf])
+                continue;
+            const float z = walk->z[sf];
+            const float at[2] = { ((float)ix + 0.5f) * DIG_LAT, ((float)iy + 0.5f) * DIG_LAT };
+            for (int d = 0; d < 4; d++) {
+                float clear = STAIR_H_MAX + 64.0f;     /* the lowest overhead met so far along the way */
+                for (float u = 16.0f; u <= 640.0f; u += 16.0f) {
+                    const float q[2] = { at[0] + (float)DX[d] * u, at[1] + (float)DY[d] * u };
+                    if (!stair_floor_near(g, q[0], q[1], z, 8.0f, NULL))
+                        break;                          /* the floor ends, or a wall: no edge this way */
+                    float H = 0.0f;
+                    for (float h = 128.0f; h <= STAIR_H_MAX && H == 0.0f; h += 8.0f)
+                        if (!donor_air(g, q[0], q[1], z + h - 4.0f) && stair_floor_near(g, q[0], q[1], z + h, 8.0f, NULL))
+                            H = h;
+                    if (H == 0.0f) {
+                        /* still under open air here: the overhead keeps the flight's headroom */
+                        for (float h = 64.0f; h < clear; h += 16.0f)
+                            if (!donor_air(g, q[0], q[1], z + h)) {
+                                clear = h;
+                                break;
+                            }
+                        if (clear < 128.0f)
+                            break;                      /* too low over the floor for a flight to climb */
+                        continue;
+                    }
+                    const float need = ceilf(H / STAIR_RISE) * STAIR_TREAD + 96.0f + 64.0f;
+                    why[0] += u < need ? 1u : 0u;
+                    why[1] += u >= need && clear < H + 56.0f ? 1u : 0u;
+                    if (u >= need && clear >= H + 56.0f) {
+                        const uint32_t key = ((uint32_t)((int32_t)floorf(q[0] / 64.0f) & 0x3ff) << 20)
+                                             | ((uint32_t)((int32_t)floorf(q[1] / 64.0f) & 0x3ff) << 10)
+                                             | ((uint32_t)d << 8) | ((uint32_t)((z + H) / 32.0f) & 0xff);
+                        bool dup = false;
+                        for (uint32_t s = 0; s < num_seen && !dup; s++)
+                            dup = seen[s] == key;
+                        if (!dup && num_seen < MAX_SEEN) {
+                            seen[num_seen++] = key;
+                            edges++;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    free(seen);
+    return edges;
+}
+
+/*
+ * Brief 13 W2: is a room lit by its sky? From nine points of its air at a player's chest, straight up: two or more
+ * of them meeting the sky first (a courtyard: all nine; a hall with a skylight: some). `under_sky` traces from the
+ * box's top, which in a closed room is already in its ceiling - every q2dm1 room read as under the sky.
+ */
+static bool room_sky_lit(const mapgen_bsp_t *g, const mapgen_room_t *room)
+{
+    mapgen_trace_context_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    if (!g || !MapGenTrace_Bind(&ctx, g))
+        return false;
+    uint32_t hits = 0;
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) {
+            const float x = room->mins[0] + (room->maxs[0] - room->mins[0]) * (0.2f + 0.3f * (float)i);
+            const float y = room->mins[1] + (room->maxs[1] - room->mins[1]) * (0.2f + 0.3f * (float)j);
+            float z = -1e30f;
+            for (float h = room->mins[2] + 16.0f; h < room->maxs[2] - 8.0f && z < -1e29f; h += 16.0f)
+                if (donor_air(g, x, y, h) && donor_air(g, x, y, h + 32.0f))
+                    z = h + 32.0f;
+            if (z < -1e29f)
+                continue;
+            const float from[3] = { x, y, z }, to[3] = { x, y, z + 8192.0f }, zero[3] = { 0.0f, 0.0f, 0.0f };
+            mapgen_trace_result_t hit;
+            MapGenTrace_Box(&ctx, from, to, zero, zero, CONTENTS_SOLID_BIT, &hit);
+            if (hit.fraction < 1.0f && (hit.surface_flags & EDIT_SURF_SKY))
+                hits++;
+        }
+    MapGenTrace_Release(&ctx);
+    return hits >= 2u;
+}
+
 static void deal_stairways(mapgen_geometry_edit_plan_t *plan, const mapgen_geometry_t *donor,
                            const mapgen_bsp_t *ground, const mapgen_rooms_t *rooms, dig_walk_t *walk, uint64_t seed,
                            size_t ceiling)
@@ -21332,20 +21535,28 @@ static void deal_stairways(mapgen_geometry_edit_plan_t *plan, const mapgen_geome
                     }
                 }
                 t.looked++;
+                /* brief 13 W8 (the PO: «новые уровни на высоте, до которых можно добраться - лифтами, блоками,
+                   лестницами»; q2dm1 has a few long straight walls and they were all taken): where no wall is near,
+                   a platform with its steps stands on the open floor - two of the four ways, the strip centred */
+                bool free = false;
                 if (!wall) {
                     t.no_wall++;
-                    continue;
+                    if (d != 0 && d != 2)
+                        continue;
+                    free = true;
+                    P = at[wa] + ws * 48.0f;
                 }
                 const float c = 16.0f * floorf(at[ra] / 16.0f + 0.5f);
                 /* the wall's run, once per width, scanned to the highest landing's needs */
                 stair_run_t run[2];
-                stair_scan(ground, ra, P, ws, c, z, 96.0f, STAIR_H_MAX, &run[0]);
-                stair_scan(ground, ra, P, ws, c, z, 64.0f, STAIR_H_MAX, &run[1]);
+                stair_scan(ground, ra, P, ws, c, z, 96.0f, STAIR_H_MAX, free, &run[0]);
+                stair_scan(ground, ra, P, ws, c, z, 64.0f, STAIR_H_MAX, free, &run[1]);
                 for (int r = 0; r < 2; r++) {
                     const float rs = r ? -1.0f : 1.0f;
                     /* the seed's landing height, then lower ones where the room or the wall gives less - and FIRST a
                        height whose landing meets a walkway of the room past its end (the PO's picture: stairs up to
                        the walkways), for either width */
+                    const uint32_t was[6] = { t.crooked, t.floor, t.wet, t.no_lane, t.low, t.open_wall };
                     const float H0 = STAIR_H_MIN + STAIR_RISE * (float)(mix(&stream) % 5u);
                     stairway_t s;
                     bool ok = false;
@@ -21377,9 +21588,22 @@ static void deal_stairways(mapgen_geometry_edit_plan_t *plan, const mapgen_geome
                     for (float H = H0; H >= STAIR_H_MIN - 0.5f && !ok; H -= STAIR_RISE)
                         for (int w = 0; w < 2 && !ok; w++)
                             ok = stair_site(&run[w], ra, rs, P, ws, c, z, w ? 64.0f : 96.0f, H, INT32_MAX, &s, &t);
-                    if (!ok)
+                    if (!ok) {
+                        const uint32_t now[6] = { t.crooked, t.floor, t.wet, t.no_lane, t.low, t.open_wall };
+                        int worst = -1;
+                        uint32_t most = 0;
+                        for (int k = 0; k < 6; k++)
+                            if (now[k] - was[k] > most) {
+                                most = now[k] - was[k];
+                                worst = k;
+                            }
+                        if (worst >= 0)
+                            t.site_why[worst]++;
                         continue;
-                    stair_back(ground, ra, ws, P, &s);
+                    }
+                    if (!free)
+                        stair_back(ground, ra, ws, P, &s);
+                    s.free = free;
                     /* nothing near it a player meets, no pad's flight, no edit of the plan */
                     bool kept = false;
                     for (uint32_t i = 0; i < keep.num_entities && !kept; i++)
@@ -21434,9 +21658,14 @@ static void deal_stairways(mapgen_geometry_edit_plan_t *plan, const mapgen_geome
             if (plan->digs[p].move_entity1[m] && num_taken < STAIR_MAX + 64u)
                 taken[num_taken++] = plan->digs[p].move_entity1[m] - 1u;
     /* two passes: one stairway a room first, then more in a room when the count asks for them */
+    /* brief 13 W8: platforms on open floor at most half of what is wanted - the rest against walls */
+    uint32_t free_dealt = 0;
+    const uint32_t free_max = (want + 1u) / 2u;
     for (int pass = 0; pass < 2 && t.dealt < want; pass++)
         for (uint32_t i = 0; i < num_cand && t.dealt < want; i++) {
             stairway_t *s = &cand[i];
+            if (s->free && free_dealt >= free_max)
+                continue;
             bool crossing = false, same_room = false;
             for (uint32_t p = 0; p < plan->num_stairways && !crossing; p++) {
                 crossing = span_boxes_meet(s->lo, s->hi, plan->stairways[p].lo, plan->stairways[p].hi, 64.0f);
@@ -21540,6 +21769,8 @@ static void deal_stairways(mapgen_geometry_edit_plan_t *plan, const mapgen_geome
             edit->amount = (int32_t)s->high;
             plan->counts[MAPGEN_EDIT_STAIRWAY]++;
             t.dealt++;
+            if (s->free)
+                free_dealt++;
             if (s->ledge)
                 t.ledges++;
             else
@@ -21553,6 +21784,8 @@ static void deal_stairways(mapgen_geometry_edit_plan_t *plan, const mapgen_geome
                    (double)s->land_lo[1], (double)s->land_lo[2], (double)s->land_hi[0], (double)s->land_hi[1],
                    (double)s->land_hi[2]);
             refuse(plan, "stairway %u wears: %s and %s", sn, s->tex_tread, s->tex_side);
+            if (s->free)
+                refuse(plan, "stairway %u stands free: a platform on the open floor", sn);
             if (s->move_entity1)
                 refuse(plan, "stairway %u moves: %s from %.0f %.0f %.0f to %.0f %.0f %.0f", sn, s->move_class,
                        (double)s->move_from[0], (double)s->move_from[1], (double)s->move_from[2],
@@ -21560,6 +21793,14 @@ static void deal_stairways(mapgen_geometry_edit_plan_t *plan, const mapgen_geome
         }
     refuse(plan, "stairways: %u dealt of %u wanted (%u on a ledge, %u holding a pickup); %u sites of %u looked at;"
            " %u walkway edges met", t.dealt, want, t.ledges, t.pickups, num_cand, t.looked, t.ledge_seen);
+    {
+        uint32_t bwhy[2];
+        const uint32_t balconies = stair_balcony_edges(ground, walk, reached, have_start, bwhy);
+        refuse(plan, "stairways: %u balcony edges with room for a flight up to them (a floor 128..192 over open floor);"
+                     " met short of floor in front %u times, under too little headroom %u", balconies, bwhy[0], bwhy[1]);
+    }
+    refuse(plan, "stairways refused, by site: %u not straight, %u floor not flat, %u wet, %u no lane, %u too low, %u open"
+                 " behind", t.site_why[0], t.site_why[1], t.site_why[2], t.site_why[3], t.site_why[4], t.site_why[5]);
     refuse(plan, "stairways refused (walls): %u no wall near, %u not straight, %u open behind, %u floor not flat, %u wet,"
                  " %u too low", t.no_wall, t.crooked, t.open_wall, t.floor, t.wet, t.low);
     refuse(plan, "stairways refused (sites): %u no lane, %u an entity near, %u a pad's flight, %u an edit of the plan,"
@@ -25858,10 +26099,130 @@ static bool dig_passage(mapgen_geometry_t *g, const dig_t *d,
     if (!strcmp(d->shape, "annex") && g_annex_pattern) {
         for (uint32_t k = 0; k < d->num_segs; k++) {
             const dig_seg_t *s = &d->seg[k];
-            if (s->kind != DIG_SEG_LAND || s->mouth || s->inner
-                || s->hi[0] - s->lo[0] < ANNEX_ROOM_MIN
-                || s->hi[1] - s->lo[1] < ANNEX_ROOM_MIN)
+            if (s->kind != DIG_SEG_LAND || s->mouth || s->inner)
                 continue;
+            /* brief 13 W10: a NICHE (under ANNEX_ROOM_MIN both ways) - a dais of two tiers in its middle, the pickup
+               on it two steps in from the mouth; none of a room's drawn parts */
+            if (s->hi[0] - s->lo[0] < ANNEX_ROOM_MIN && s->hi[1] - s->lo[1] < ANNEX_ROOM_MIN) {
+                const float ncx = 0.5f * (s->lo[0] + s->hi[0]), ncy = 0.5f * (s->lo[1] + s->hi[1]);
+                for (int tier = 0; tier < 2; tier++) {
+                    const float half = 32.0f - 12.0f * (float)tier;
+                    const float lo[3] = { ncx - half, ncy - half, s->lo[2] + ANNEX_DAIS_TIER * (float)tier };
+                    const float hi[3] = { ncx + half, ncy + half, s->lo[2] + ANNEX_DAIS_TIER * (float)(tier + 1) };
+                    if (add_box_of(g, &trim, lo, hi, CONTENTS_SOLID_BIT) != MAPGEN_GEOMETRY_OK)
+                        return decline("annex: the niche's dais would not go in");
+                }
+                continue;
+            }
+            if (s->hi[0] - s->lo[0] < ANNEX_ROOM_MIN || s->hi[1] - s->lo[1] < ANNEX_ROOM_MIN)
+                continue;
+            /*
+             * Brief 13 W10: the room's OUTLINE, by infill inside its carved box - solid set in the room's own air,
+             * so nothing can open the map: an octagon (its corners cut at 45 degrees), a cross (a block in each
+             * corner), an L (one far corner filled, short of the middle where a pickup stands), rounded corners
+             * (each corner filled under three chords of a quarter circle). Never within the doorway's half width
+             * plus 16 of the door wall's middle, never over the room's middle.
+             */
+            if (d->pat_set && d->pat_shape) {
+                const int sal = s->axis, sac = 1 - s->axis;
+                const float wide_r = s->hi[sac] - s->lo[sac], deep_r = s->hi[sal] - s->lo[sal];
+                const float side = fminf(wide_r, deep_r);
+                const float door_keep = 0.5f * ANNEX_DOOR_WIDE + 16.0f;
+                const float fz0 = s->lo[2], fz1 = s->hi[2];
+                const float near_w = s->dir > 0 ? s->lo[sal] : s->hi[sal];
+                /* a prism over a polygon (x, y in the room's own axes along/across), floor to ceiling */
+                #define SHAPE_PRISM(n, pa, pc, said)                                                          \
+                    do {                                                                                      \
+                        mapgen_geometry_side_t sides_[10];                                                    \
+                        int m_ = 0;                                                                           \
+                        float ccx_ = 0.0f, ccy_ = 0.0f;                                                       \
+                        for (int q_ = 0; q_ < (n); q_++) {                                                    \
+                            ccx_ += (pa)[q_] / (float)(n);                                                    \
+                            ccy_ += (pc)[q_] / (float)(n);                                                    \
+                        }                                                                                     \
+                        for (int q_ = 0; q_ < (n); q_++) {                                                    \
+                            const int r_ = (q_ + 1) % (n);                                                    \
+                            float ea_ = (pa)[r_] - (pa)[q_], ec_ = (pc)[r_] - (pc)[q_];                       \
+                            float na_ = ec_, nc_ = -ea_;                                                      \
+                            const float l_ = sqrtf(na_ * na_ + nc_ * nc_);                                    \
+                            if (l_ < 1e-3f)                                                                   \
+                                continue;                                                                     \
+                            na_ /= l_;                                                                        \
+                            nc_ /= l_;                                                                        \
+                            if (na_ * ((pa)[q_] - ccx_) + nc_ * ((pc)[q_] - ccy_) < 0.0f) {                   \
+                                na_ = -na_;                                                                   \
+                                nc_ = -nc_;                                                                   \
+                            }                                                                                 \
+                            float nv_[3] = { 0.0f, 0.0f, 0.0f };                                              \
+                            nv_[sal] = na_;                                                                   \
+                            nv_[sac] = nc_;                                                                   \
+                            float pv_[3] = { 0.0f, 0.0f, 0.0f };                                              \
+                            pv_[sal] = (pa)[q_];                                                              \
+                            pv_[sac] = (pc)[q_];                                                              \
+                            plane(&sides_[m_++], &wall_to, nv_[0], nv_[1], 0.0f, nv_[0] * pv_[0] + nv_[1] * pv_[1]); \
+                        }                                                                                     \
+                        plane(&sides_[m_++], &wall_to, 0.0f, 0.0f, -1.0f, -fz0);                                 \
+                        plane(&sides_[m_++], &wall_to, 0.0f, 0.0f, 1.0f, fz1);                                   \
+                        if (MapGenGeometry_AddBrush(g, sides_, (uint32_t)m_, CONTENTS_SOLID_BIT, 0)           \
+                            != MAPGEN_GEOMETRY_OK)                                                            \
+                            return decline("annex: " said " would not go in");                              \
+                    } while (0)
+                for (int corner = 0; corner < 4; corner++) {
+                    const float ca = (corner & 1) ? s->hi[sal] : s->lo[sal];
+                    const float cc = (corner & 2) ? s->hi[sac] : s->lo[sac];
+                    const float da = (corner & 1) ? -1.0f : 1.0f, dc = (corner & 2) ? -1.0f : 1.0f;
+                    const bool door_side = fabsf(ca - near_w) < 1.0f;
+                    /* how far a corner's fill may reach along the door's wall without touching the doorway */
+                    const float room_c = 0.5f * wide_r - door_keep;
+                    if (d->pat_shape == 1u) {
+                        float cut = 0.25f * side;
+                        if (door_side)
+                            cut = fminf(cut, room_c);
+                        if (cut < 24.0f)
+                            continue;
+                        const float pa[3] = { ca, ca + da * cut, ca };
+                        const float pc[3] = { cc, cc, cc + dc * cut };
+                        SHAPE_PRISM(3, pa, pc, "an octagon's corner");
+                    } else if (d->pat_shape == 2u) {
+                        float ba = 0.22f * deep_r, bc = 0.22f * wide_r;
+                        if (door_side)
+                            bc = fminf(bc, room_c);
+                        if (ba < 32.0f || bc < 32.0f)
+                            continue;
+                        const float pa[4] = { ca, ca + da * ba, ca + da * ba, ca };
+                        const float pc[4] = { cc, cc, cc + dc * bc, cc + dc * bc };
+                        SHAPE_PRISM(4, pa, pc, "a cross's corner");
+                    } else if (d->pat_shape == 3u) {
+                        if (door_side || corner != ((s->dir > 0 ? 1 : 0) | 0))
+                            continue;                   /* one far corner, on the low side across */
+                        const float ba = 0.45f * deep_r, bc = 0.5f * wide_r - 56.0f;
+                        if (bc < 48.0f)
+                            continue;
+                        const float pa[4] = { ca, ca + da * ba, ca + da * ba, ca };
+                        const float pc[4] = { cc, cc, cc + dc * bc, cc + dc * bc };
+                        SHAPE_PRISM(4, pa, pc, "an L's block");
+                    } else if (d->pat_shape == 4u) {
+                        float R = 0.35f * side;
+                        if (door_side)
+                            R = fminf(R, room_c);
+                        if (R < 32.0f)
+                            continue;
+                        /* the quarter circle about (ca + da R, cc + dc R), from the wall along to the wall across */
+                        float qa[4], qc[4];
+                        for (int i = 0; i < 4; i++) {
+                            const float ang = 1.5707963f * (float)i / 3.0f;
+                            qa[i] = ca + da * R - da * R * cosf(ang);
+                            qc[i] = cc + dc * R - dc * R * sinf(ang);
+                        }
+                        for (int i = 0; i < 3; i++) {
+                            const float pa[3] = { ca, qa[i], qa[i + 1] };
+                            const float pc[3] = { cc, qc[i], qc[i + 1] };
+                            SHAPE_PRISM(3, pa, pc, "a rounded corner");
+                        }
+                    }
+                }
+                #undef SHAPE_PRISM
+            }
             const float floor_z = s->lo[2], ceil_z = s->hi[2];
             const float cx = 0.5f * (s->lo[0] + s->hi[0]);
             const float cy = 0.5f * (s->lo[1] + s->hi[1]);
@@ -30035,41 +30396,6 @@ static bool destroy_wall(destroy_t *d, const float at[3], float reach, int *dir,
     return best < 1e29f;
 }
 
-/* One debris piece: a box, or a wedge (its top tilted), wearing `tex`. */
-static bool destroy_piece(destroy_t *d, const float lo[3], const float hi[3], const char *tex, bool wedge)
-{
-    if (MapGenGeometry_NumSides(d->g) > d->sides_cap) {
-        d->rep->budget++;
-        return false;
-    }
-    mapgen_geometry_side_t skin;
-    if (!tex || !dig_skin(d->g, tex, &skin))
-        return false;
-    mapgen_geometry_side_t sides[6];
-    plane(&sides[0], &skin, 0, 0, -1.0f, -lo[2]);
-    plane(&sides[2], &skin, -1.0f, 0, 0, -lo[0]);
-    plane(&sides[3], &skin, 1.0f, 0, 0, hi[0]);
-    plane(&sides[4], &skin, 0, -1.0f, 0, -lo[1]);
-    plane(&sides[5], &skin, 0, 1.0f, 0, hi[1]);
-    if (wedge) {
-        /* the top falls from hi[2] at one side to a third of the height at the other */
-        const int ax = destroy_rand(d) < 0.5f ? 0 : 1;
-        const float sg = destroy_rand(d) < 0.5f ? 1.0f : -1.0f;
-        const float run = hi[ax] - lo[ax], drop = (hi[2] - lo[2]) * 0.66f;
-        float n[3] = { 0, 0, 1.0f };
-        n[ax] = sg * drop / run;
-        const float len = sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
-        for (int a = 0; a < 3; a++)
-            n[a] /= len;
-        float p[3] = { 0.5f * (lo[0] + hi[0]), 0.5f * (lo[1] + hi[1]), hi[2] - 0.5f * drop };
-        plane(&sides[1], &skin, n[0], n[1], n[2], n[0] * p[0] + n[1] * p[1] + n[2] * p[2]);
-    } else {
-        plane(&sides[1], &skin, 0, 0, 1.0f, hi[2]);
-    }
-    /* detail: debris splits no visibility portal (300 pieces of rubble as structure took q2dm1's vis from minutes to
-       past half an hour) and, standing in the map's air, seals nothing either way */
-    return MapGenGeometry_AddBrush(d->g, sides, 6, CONTENTS_SOLID_BIT | DESTROY_DETAIL_BIT, 0) == MAPGEN_GEOMETRY_OK;
-}
 
 /* Liquid in or within `grow` of a box (every 8 over it): nothing is built there - a solid standing in a pool's
    surface makes a wall of water round it (brief 12: q2dm1 at 100, a crater's rim piece at the edge of a pool). */
@@ -30096,6 +30422,10 @@ static bool destroy_chunk(destroy_t *d, const float c[3], float a, float b, floa
         d->rep->budget++;
         return false;
     }
+    /* debris, never architecture (brief 13 W9, quake220: a fall's quarter chunk 128 across stood like a slab a player
+       walks under): half a side at most 32 */
+    a = fminf(a, 32.0f);
+    b = fminf(b, 32.0f);
     const float r = fmaxf(a, b) * 1.42f;
     const float wlo[3] = { c[0] - r, c[1] - r, c[2] - sink }, whi[3] = { c[0] + r, c[1] + r, c[2] + hgt };
     if (destroy_wet(d, wlo, whi, 8.0f))
@@ -30133,6 +30463,53 @@ static bool destroy_chunk(destroy_t *d, const float c[3], float a, float b, floa
     }
     /* detail: debris splits no visibility portal (300 pieces of rubble as structure took q2dm1's vis from minutes to
        past half an hour) and, standing in the map's air, seals nothing either way */
+    return MapGenGeometry_AddBrush(d->g, sides, (uint32_t)n, CONTENTS_SOLID_BIT | DESTROY_DETAIL_BIT, 0)
+        == MAPGEN_GEOMETRY_OK;
+}
+
+/*
+ * A SLAB (brief 13 W9): a broken piece of wall or ceiling L long, H tall, T thick, standing on the floor at p0 (the
+ * middle of its foot's front edge) and leaning by `lean` radians from upright toward the horizontal direction h
+ * (unit) - its top on a wall or on another slab; one top corner broken off. A detail brush in the map's own texture.
+ */
+static bool destroy_slab(destroy_t *d, const float p0[3], const float h[2], float L, float H, float T, float lean,
+                         const char *tex)
+{
+    if (MapGenGeometry_NumSides(d->g) > d->sides_cap) {
+        d->rep->budget++;
+        return false;
+    }
+    mapgen_geometry_side_t skin;
+    if (!tex || !dig_skin(d->g, tex, &skin))
+        return false;
+    const float cl = cosf(lean), sl = sinf(lean);
+    const float el[3] = { -h[1], h[0], 0.0f };                       /* along the slab's foot */
+    const float up[3] = { sl * h[0], sl * h[1], cl };                /* up the slab */
+    const float nf[3] = { -cl * h[0], -cl * h[1], sl };              /* its front face, away from what it leans on */
+    const float o[3] = { p0[0], p0[1], p0[2] - 4.0f };
+    const float top[3] = { o[0] + up[0] * H, o[1] + up[1] * H, o[2] + up[2] * H };
+    const float wlo[3] = { fminf(o[0], top[0]) - L, fminf(o[1], top[1]) - L, o[2] },
+                whi[3] = { fmaxf(o[0], top[0]) + L, fmaxf(o[1], top[1]) + L, top[2] };
+    if (destroy_wet(d, wlo, whi, 8.0f))
+        return false;
+#define DOT3(a, b) ((a)[0] * (b)[0] + (a)[1] * (b)[1] + (a)[2] * (b)[2])
+    mapgen_geometry_side_t sides[7];
+    int n = 0;
+    plane(&sides[n++], &skin, el[0], el[1], el[2], DOT3(el, o) + 0.5f * L);
+    plane(&sides[n++], &skin, -el[0], -el[1], -el[2], -DOT3(el, o) + 0.5f * L);
+    plane(&sides[n++], &skin, -up[0], -up[1], -up[2], -DOT3(up, o));
+    plane(&sides[n++], &skin, up[0], up[1], up[2], DOT3(up, o) + H);
+    plane(&sides[n++], &skin, nf[0], nf[1], nf[2], DOT3(nf, o));
+    plane(&sides[n++], &skin, -nf[0], -nf[1], -nf[2], -DOT3(nf, o) + T);
+    /* one top corner broken off, at 30..60 degrees, a third to a half of the slab's length */
+    const float side = destroy_rand(d) < 0.5f ? 1.0f : -1.0f;
+    const float corner[3] = { top[0] + side * el[0] * 0.5f * L, top[1] + side * el[1] * 0.5f * L, top[2] };
+    float cn[3] = { side * el[0] + up[0], side * el[1] + up[1], side * el[2] + up[2] };
+    const float cnl = sqrtf(DOT3(cn, cn));
+    for (int k = 0; k < 3; k++)
+        cn[k] /= cnl;
+    plane(&sides[n++], &skin, cn[0], cn[1], cn[2], DOT3(cn, corner) - destroy_between(d, 0.33f, 0.5f) * L * 0.7f);
+#undef DOT3
     return MapGenGeometry_AddBrush(d->g, sides, (uint32_t)n, CONTENTS_SOLID_BIT | DESTROY_DETAIL_BIT, 0)
         == MAPGEN_GEOMETRY_OK;
 }
@@ -30227,6 +30604,13 @@ static bool destroy_carve(destroy_t *d, const float lo[3], const float hi[3], fl
         return false;
     }
     if (!destroy_carve_safe(d, lo, hi)) {
+        d->rep->refused++;
+        return false;
+    }
+    /* brief 13: nothing cut within 72 of liquid - q2dm1 20/42 at 50: a gouge 64 over a pool cut the wall that bounds
+       it and left the water a face against air (the water gate after the ruin, x 372 y 792 z 320); craters, broken
+       edges and falls cut the same brushes */
+    if (destroy_wet(d, lo, hi, 72.0f)) {
         d->rep->refused++;
         return false;
     }
@@ -30980,8 +31364,18 @@ static void destroy_collapses(destroy_t *d, uint32_t want)
         const float span[2] = { slab_hi[0] - slab_lo[0], slab_hi[1] - slab_lo[1] };
         const float bc[3] = { slab_lo[0] + span[0] * destroy_between(d, 0.3f, 0.7f),
                               slab_lo[1] + span[1] * destroy_between(d, 0.3f, 0.7f), at[2] };
-        destroy_chunk(d, bc, span[0] * 0.25f, span[1] * 0.25f, destroy_between(d, 16.0f, 24.0f),
-                      destroy_between(d, 2.0f, 6.0f), slab);
+        /* its big piece: 3..4 slabs of 48 leaning on each other, a tent (brief 13 W9: one chunk a quarter of the fall
+           across stood like a slab a player walks under - quake220) */
+        const int tent = 3 + (destroy_rand(d) < 0.5f ? 1 : 0);
+        const float turn = destroy_between(d, 0.0f, 6.2831853f);
+        for (int k = 0; k < tent; k++) {
+            const float ang = turn + (float)k * 6.2831853f / (float)tent;
+            const float lean = destroy_between(d, 0.70f, 1.00f), H = destroy_between(d, 64.0f, 80.0f);
+            const float hdir[2] = { -cosf(ang), -sinf(ang) };          /* toward the tent's middle */
+            const float p0[3] = { bc[0] + cosf(ang) * H * sinf(lean) * 0.9f, bc[1] + sinf(ang) * H * sinf(lean) * 0.9f,
+                                  at[2] };
+            destroy_slab(d, p0, hdir, 48.0f, H, floorf(destroy_between(d, 10.0f, 16.0f)), lean, slab);
+        }
         const int pieces = 8 + (int)(destroy_rand(d) * 5.0f);
         for (int k = 0; k < pieces; k++) {
             const float pc[3] = { destroy_between(d, slab_lo[0], slab_hi[0]), destroy_between(d, slab_lo[1], slab_hi[1]),
@@ -31023,7 +31417,7 @@ static void destroy_ruin(destroy_t *d, uint32_t want)
                 if (a < 0 || b < 0)
                     continue;
                 const float top = donor_ceiling(d->b, at[0], at[1], at[2] + 8.0f, 256.0f);
-                const float len = floorf(destroy_between(d, 48.0f, 96.0f));
+                const float len = floorf(destroy_between(d, 96.0f, 192.0f));
                 float lo[3], hi[3];
                 lo[ax] = at[ax] - a - 8.0f;          /* into the walls: solid into solid */
                 hi[ax] = at[ax] + b + 8.0f;
@@ -31034,7 +31428,48 @@ static void destroy_ruin(destroy_t *d, uint32_t want)
                 if (!destroy_clear(d, lo, hi, DESTROY_STARTS_KEEP + 64.0f, true))
                     continue;
                 const char *tex = destroy_debris_tex(d, at, 0);
-                if (destroy_piece(d, lo, hi, tex, false)) {
+                /*
+                 * A COLLAPSED WALL, not a box (brief 13 W9, the PO on mg_1_6662, quake218/221: «нужно класть именно
+                 * разрушенные конструкции, а не прямоугольники ... чтобы через них просматривался частично проход
+                 * в их трещинах и разломах»): 6..12 slabs of the wall's own texture leaning against the two walls,
+                 * staggered along the corridor with gaps of 16..48 between them, their tops 32..96 short of the
+                 * ceiling - under them and between them the way behind is seen. Passage is not promised (the PO).
+                 */
+                const float width = a + b, ceil_h = top - at[2];
+                const int want_slabs = 6 + (int)(destroy_rand(d) * 7.0f);
+                int made = 0;
+                float along = lo[1 - ax] + 8.0f;
+                for (int k = 0; k < want_slabs * 2 && made < want_slabs; k++) {
+                    const float L = floorf(destroy_between(d, 32.0f, 64.0f));
+                    if (along + L > hi[1 - ax] - 8.0f) {
+                        along = lo[1 - ax] + 8.0f + destroy_between(d, 8.0f, 32.0f);     /* the second rank */
+                        if (along + L > hi[1 - ax] - 8.0f)
+                            break;
+                    }
+                    const float s = destroy_rand(d) < 0.5f ? 1.0f : -1.0f;              /* the wall it leans on */
+                    const float rise = ceil_h - destroy_between(d, 32.0f, 96.0f);
+                    if (rise < 48.0f)
+                        break;
+                    float lean = destroy_between(d, 0.52f, 1.22f);
+                    float H = rise / cosf(lean);
+                    if (H * sinf(lean) > width - 16.0f) {
+                        /* the foot within the corridor: a shorter slab, never a steeper one (a narrow corridor stood
+                           its slabs nearly upright - blocks again); its top falls further short of the ceiling */
+                        lean = fmaxf(lean, 0.52f);
+                        H = (width - 16.0f) / sinf(lean);
+                        if (H * cosf(lean) < 48.0f)
+                            break;                          /* too low to read as a fallen wall: no slab here */
+                    }
+                    float p0[3] = { at[0], at[1], at[2] };
+                    const float wall = s > 0.0f ? at[ax] + b : at[ax] - a;
+                    p0[ax] = wall - s * H * sinf(lean);
+                    p0[1 - ax] = along + 0.5f * L;
+                    const float hdir[2] = { ax == 0 ? s : 0.0f, ax == 1 ? s : 0.0f };
+                    if (destroy_slab(d, p0, hdir, L, H, floorf(destroy_between(d, 12.0f, 24.0f)), lean, tex))
+                        made++;
+                    along += L + destroy_between(d, 16.0f, 48.0f);
+                }
+                if (made) {
                     destroy_mark(d, lo, hi);
                     destroy_note(d, "ruin", lo, hi);
                     d->rep->ruins++;

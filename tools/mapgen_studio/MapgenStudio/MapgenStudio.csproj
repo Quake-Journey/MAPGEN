@@ -10,8 +10,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>MapgenStudio</AssemblyName>
     <RootNamespace>MapgenStudio</RootNamespace>
-    <Version>2.5.0</Version>
+    <Version>2.6.0</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- brief 13 W6 (the PO, 07.10: «у окошка программы нет иконки»): the exe's own icon (Explorer, the taskbar),
+         drawn by tools/mapgen_studio_icon.py; the windows carry it too (App.Icon) -->
+    <ApplicationIcon>Assets\mapgen_studio.ico</ApplicationIcon>
     <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
     <InvariantGlobalization>false</InvariantGlobalization>
     <SatelliteResourceLanguages>en;ru</SatelliteResourceLanguages>
@@ -24,6 +27,9 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <DebugType>embedded</DebugType>
   </PropertyGroup>
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\mapgen_studio.ico" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.1.3" />
     <PackageReference Include="Avalonia.Desktop" Version="12.1.3" />

@@ -83,10 +83,10 @@ Any other value is your direct order:
   liquid; 100 fills every room it can. The generator floods only rooms with a level floor and no room underneath,
   and never cuts off an item or a way. Lava and slime stay away from the player starts; passages between rooms are
   flooded with water only.
-- **Stairway annexes** — from «None» to 10. The generator builds flights of steps along rooms' walls up to new
-  landings 128-192 high: a pickup of that part of the map stands on a landing, or a landing meets a ledge. It finds
-  the places on any base by itself - a level blank wall and free floor before it; when the map has fewer such walls
-  than asked, there are fewer stairways, and the map's description says so.
+- **Stairway annexes** — from «None» to 10. The generator builds new platforms 96-192 high with stairs up to them:
+  along rooms' walls and standing free on open floor (at most half of them). A pickup of that part of the map stands
+  on each, or, by a wall, the platform leads onto a ledge of the map. It finds the places on any base by itself - a level floor, room around it and above it; when the map has
+  fewer places than asked, there are fewer platforms, and the map's description says so.
 - **Destruction** — a slider from 0 to 100 %. At 0 the map is made as usual, with every passage check. The higher,
   the more is destroyed: cracks in walls and floors, rubble, craters, breaches in walls, broken ledge edges, fallen
   ceilings, blocked corridors; at 100 almost the whole level. The player starts always stay free and no pickup is

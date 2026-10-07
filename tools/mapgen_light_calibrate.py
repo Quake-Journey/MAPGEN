@@ -24,7 +24,8 @@ import mapgen_load_guard as guard  # noqa: E402
 from mapgen_light_profile import faithful  # noqa: E402
 from mapgen_pinned_compiler import pinned_compiler  # noqa: E402
 
-GAME = r"O:\Claude2\q2pro-release\baseq2"
+from mapgen_load_guard import game_dir  # noqa: E402  (brief 13 W1: the game folder of this run)
+GAME = game_dir()
 
 
 def entity_text(d: bytes) -> str:

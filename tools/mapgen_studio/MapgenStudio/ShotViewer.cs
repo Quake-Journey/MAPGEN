@@ -34,6 +34,7 @@ public sealed class ShotViewer : Window
         _at = Math.Clamp(at, 0, Math.Max(0, shots.Count - 1));
         _coverNow = cover;
         Title = "MAPGEN Studio";
+        Icon = App.Icon();
         WindowDecorations = Avalonia.Controls.WindowDecorations.None;
         ShowInTaskbar = false;
         CanResize = false;

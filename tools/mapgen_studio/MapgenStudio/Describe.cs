@@ -91,11 +91,59 @@ public static class Describe
                                     : ru ? "  ничего — карта совпадает с основой." : "  nothing - the map is the base.");
         if (pickups.Count > 0)
             b.AppendLine(ru ? $"В новых комнатах: {string.Join(", ", pickups)}." : $"In the new rooms: {string.Join(", ", pickups)}.");
+        // brief 13 W7 (the PO on mg_1_6662: «я выбирал кислоту и лаву, а там одна вода»): the floods by their liquid,
+        // as the generator dealt them (job/liquids.txt) and the ledger accepted them; and the base's own pools a
+        // «mix» could not touch, said with why
+        var liquids = Path.Combine(g.JobDir, "liquids.txt");
+        var ledgerFile = Path.Combine(g.JobDir, "ledger.txt");
+        if (File.Exists(liquids) && File.Exists(ledgerFile))
+        {
+            var offered = new List<(float[] box, string tex)>();
+            foreach (var line in File.ReadAllLines(liquids))
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(line,
+                    @"flood offered: (\S+) in room \d+, .* (-?\d+) (-?\d+) \.\. (-?\d+) (-?\d+)\s*$");
+                if (m.Success)
+                    offered.Add((new[] { float.Parse(m.Groups[2].Value), float.Parse(m.Groups[3].Value),
+                                         float.Parse(m.Groups[4].Value), float.Parse(m.Groups[5].Value) }, m.Groups[1].Value));
+            }
+            int water = 0, slime = 0, lava = 0, unplayable = 0;
+            foreach (var line in File.ReadAllLines(ledgerFile))
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(line,
+                    @"^\s*\d+\s+(flood|reliquid)\s+(\S+)\s+\d+\s+(-?\d+) (-?\d+) -?\d+\s+(-?\d+) (-?\d+)");
+                if (!m.Success)
+                    continue;
+                if (m.Groups[1].Value == "reliquid")
+                {
+                    if (m.Groups[2].Value == "REJECTED_UNPLAYABLE")
+                        unplayable++;
+                    continue;
+                }
+                if (m.Groups[2].Value != "ACCEPTED")
+                    continue;
+                var box = new[] { float.Parse(m.Groups[3].Value), float.Parse(m.Groups[4].Value),
+                                  float.Parse(m.Groups[5].Value), float.Parse(m.Groups[6].Value) };
+                var tex = offered.FirstOrDefault(o => o.box.Zip(box, (a, c) => Math.Abs(a - c) <= 1).All(x => x)).tex ?? "";
+                if (tex.Contains("lava"))
+                    lava++;
+                else if (tex.Contains("slime") || tex.Contains("sewer"))
+                    slime++;
+                else
+                    water++;
+            }
+            if (water + slime + lava > 0)
+                b.AppendLine(ru ? $"Новые водоёмы: воды {water}, кислоты {slime}, лавы {lava}."
+                                : $"New pools: water {water}, slime {slime}, lava {lava}.");
+            if (unplayable > 0 && !string.IsNullOrEmpty(g.Request.Options?.Liquids))
+                b.AppendLine(ru ? "Часть водоёмов основы осталась прежней: через них проходит путь назад, другая жидкость отрезала бы его."
+                                : "Some of the base's pools stayed as they were: the way back runs through them, another liquid would cut it.");
+        }
         // brief 11: the stairways asked and the places the map had for them
         var asked = g.Request.Options?.Stairways ?? 0;
         if (asked > 0 && families.GetValueOrDefault("stairway") < asked)
-            b.AppendLine(ru ? $"Лестниц {families.GetValueOrDefault("stairway")} из {asked}: больше подходящих стен на этой основе не нашлось."
-                            : $"Stairways {families.GetValueOrDefault("stairway")} of {asked}: this base had no more walls for them.");
+            b.AppendLine(ru ? $"Площадок с лестницами {families.GetValueOrDefault("stairway")} из {asked}: больше подходящих мест на этой основе не нашлось."
+                            : $"Platforms with stairs {families.GetValueOrDefault("stairway")} of {asked}: this base had no more places for them.");
         // brief 11 D2: what was destroyed, by kind, and that passage is not guaranteed
         var ruin = Path.Combine(g.RunDir, "candidate.destroyed.json");
         if ((g.Request.Options?.Destruction ?? 0) > 0 && File.Exists(ruin))

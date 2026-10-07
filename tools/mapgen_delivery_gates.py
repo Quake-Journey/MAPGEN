@@ -76,7 +76,8 @@ from check_mapgen_static import Bsp, SURF_TRANS  # noqa: E402
 REPO = Path(__file__).resolve().parent.parent
 TOOLS = REPO / "tools"
 DONOR = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260831\corpus\q2dm1.bsp")
-MAPS = Path(r"O:\Claude2\q2pro-release\baseq2\maps")
+from mapgen_load_guard import game_dir  # noqa: E402  (brief 13 W1: the game folder of this run)
+MAPS = Path(game_dir()) / "maps"
 ROUND35 = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\round35\s3")
 ROUND36 = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\round36\s3")
 ROUND40_S7 = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\round40\s3_7")
@@ -142,6 +143,23 @@ def job_sources(job: Path | None, text: str) -> list:
     more = (job / "sources.txt").read_text(encoding="utf-8", errors="replace") if job and (job / "sources.txt").is_file() \
         else ""
     return copy_sources(text + "\n" + more)
+
+
+def judged_source(d: dict, sources: list, donor: Path):
+    """
+    Brief 13 W2: the original a carried room is judged against, and a note of how much of it is under the sky.
+    Measured on q2dm1 20/42 (b12's job, the post steps alone): judged by their DOORS, the three copies of sky-lit
+    originals that passed against them (96 %, 100 % and 16 % of their plan under the sky) failed - on tint, on a
+    ceiling over the floor - while the one copy that fails (1504 1312 768, flat: contrast 1.41 against 1.87) came from
+    a LAMP-lit room (0 % under the sky). The door rule fixed nothing and broke three: the judgement stays with the
+    original, the sky is said; the deal tries sky-lit rooms last (`room_sky_lit`).
+    """
+    src = source_of(d, sources, donor)
+    if not src:
+        return None, ""
+    from mapgen_light_profile import SKY_LIT_SHARE, sky_share
+    share = sky_share(src[0], src[1])
+    return src, (f"; original {share:.0%} under the sky" if share >= SKY_LIT_SHARE else "")
 
 
 def source_of(d: dict, sources: list, donor: Path):
@@ -249,9 +267,10 @@ def ask_light(bsp: Path, job: Path | None, donor: Path, work: Path | None = None
     for d in digs:
         doors = [d["from"]] if d.get("own_room_end") == "to" else [d["from"], d["to"]]
         # brief 11 step 1: a room carried whole is lit like its original, not like the corridor at its door
-        src = source_of(d, sources, donor)
+        src, sky = judged_source(d, sources, donor)
         lit, how = room_against_source(bsp, src[0], d["box"], src[1]) if src else \
             room_against_door(bsp, donor, d["box"], doors)
+        how += sky
         door = next((alone for box, alone in lit_by_door if all(abs(box[i] - d["box"][i]) <= 1.0 for i in range(6))),
                     None)
         level = re.search(r"all (\d+)/(\d+)", how)
