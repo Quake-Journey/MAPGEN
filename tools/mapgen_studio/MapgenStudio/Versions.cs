@@ -11,6 +11,23 @@ public static class Versions
 
     public static readonly Entry[] All =
     {
+        new("2.5", "07.10.2026",
+            new[]
+            {
+                "Разрушения — отдельный этап в ходе работы, со своим временем; их процент назван в строке плана",
+                "На схеме карты видны пристройки-лестницы по имени, а на этапе разрушений — каждая воронка, пролом, обвал и куча обломков по мере постройки",
+                "Студия, развёрнутая на весь экран, после «Назад в студию» возвращается развёрнутой",
+                "Кнопка «Начать генерацию» срабатывает с первого нажатия (над ней открывались две подсказки сразу)",
+                "Генерация из студии не занимает ядра процессора, на которые жалуется Windows",
+            },
+            new[]
+            {
+                "Destruction is a stage of its own on the run's page, with its time; its percent is named in the plan's line",
+                "The map's scheme names stairway annexes and, at the destruction stage, shows every crater, breach, fallen ceiling and debris pile as it is built",
+                "The Studio maximised comes back maximised after «Back to the Studio»",
+                "«Start generating» works on the first press (two tooltips were opening over it at once)",
+                "A generation from the Studio keeps off the processor cores Windows reports hardware errors for",
+            }),
         new("2.4", "07.10.2026",
             new[]
             {

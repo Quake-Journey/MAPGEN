@@ -1104,6 +1104,9 @@ mapgen_geometry_result_t MapGenGeometryEdit_Destroy(struct mapgen_geometry_s *g,
 /* A guard's seam: the kinds to leave out, by bit (1 cracks, 2 rubble, 4 craters, 8 breaches, 16 broken, 32
    collapses, 64 ruin, 128 patches). */
 void MapGenGeometryEdit_DestroySkip(uint32_t kinds);
+/* The PO, 07.10: where the next Destroy writes what it built - `kind lx ly lz hx hy hz` a line (crater, breach,
+   gouge, broken, collapse, ruin, rubble, patch) - for the Studio's scheme; "" none. */
+void MapGenGeometryEdit_DestroyBoxesTo(const char *path);
 /* Brief 12: a picture codec for DrawCracks - decode a .png to 8-bit RGBA, encode RGBA to a .png file. Set by the
    destroy driver (it links zlib); unset, the copies are drawn as .wal only. */
 void MapGenGeometryEdit_SetImageCodec(uint8_t *(*decode)(const uint8_t *data, size_t len, uint32_t *w, uint32_t *h),

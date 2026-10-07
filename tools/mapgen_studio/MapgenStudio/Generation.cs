@@ -756,6 +756,7 @@ public sealed class Generation
                     ? Loc.F("run.plan.made", I("digs"), I("annexes"), I("storeys"), I("spans"), I("floods"), I("windows"))
                       + (I("reliquids") > 0 ? Loc.F("run.plan.reliquids", I("reliquids")) : "")
                       + (I("stairways") > 0 ? Loc.F("run.plan.stairways", I("stairways")) : "")
+                      + ((Request.Options?.Destruction ?? 0) > 0 ? Loc.F("run.plan.destruction", Request.Options!.Destruction) : "")
                     : "";
                 Offered = I("offered");
                 Budget = I("budget");
@@ -886,13 +887,21 @@ public sealed class Generation
         var destroy = Path.Combine(repo, "tools", "mapgen_destroy.py");
         var pct = Request.Options?.Destruction ?? 0;
         var game = Path.Combine(_s.ClientDir, "baseq2");
-        var after = pct > 0
-            ? $"d=subprocess.run([sys.executable,r'{destroy}',r'{candidate}','--donor',r'{donor}','--destruction','{pct}'," +
-              $"'--seed','{Request.Seed}','--game',r'{game}'],capture_output=True,text=True);" +
+        // the PO, 07.10: «не вижу пунктов по разрушаемости» - the ruin is a stage of its own after the checks
+        // (StartDestruction), with its time on the run's page, no longer hidden inside the checks' job
+        _destroyCode = pct > 0
+            ? env + "import subprocess,sys,os;" +
+              $"d=subprocess.run([sys.executable,r'{destroy}',r'{candidate}','--donor',r'{donor}','--destruction','{pct}'," +
+              $"'--seed','{Request.Seed}','--game',r'{game}','--boxes',r'{Path.Combine(JobDir, "ruin.txt")}']," +
+              "capture_output=True,text=True);" +
               "os.environ['MAPGEN_GATE_PREFIX']='after destruction: ';" +
               $"r2=subprocess.run([sys.executable,r'{script}',r'{candidate}','--job',r'{JobDir}','--donor',r'{donor}'," +
-              "'--only','finished,axes,water,starts'],capture_output=True,text=True);"
-            : "d=None;r2=None;";
+              "'--only','finished,axes,water,starts'],capture_output=True,text=True);" +
+              $"open(r'{Path.Combine(RunDir, "destruction.txt")}','w',encoding='utf-8').write(" +
+              "'DESTRUCTION\\n'+d.stdout+d.stderr+'\\n'+r2.stdout+r2.stderr);" +
+              "sys.exit(d.returncode or r2.returncode)"
+            : null;
+        const string after = "d=None;r2=None;";
         var code = env + "import subprocess,sys;" +
                    $"f=subprocess.run([sys.executable,r'{fit}',r'{candidate}',r'{donor}',r'{fitWork}']," +
                    "capture_output=True,text=True);" +
@@ -916,14 +925,55 @@ public sealed class Generation
         _gatesJob.Start(python, new[] { "-c", code }, RunDir);
     }
 
+    private string? _destroyCode;
+    private bool _destroying;
+
+    /// <summary>The finished map in ruins (brief 11 D2), its own stage after the checks; then what a ruin answers to,
+    /// asked again, named apart.</summary>
+    private void StartDestruction()
+    {
+        Stage = "destruction";
+        StageBegan["destruction"] = DateTime.Now;
+        Event(Loc.T("stage.destruction.now"));
+        _destroying = true;
+        _gatesJob = new NativeJob();
+        _sharePercent = -1;
+        ApplyShare();
+        _gatesJob.Start(Engine.Python!, new[] { "-c", _destroyCode! }, RunDir);
+        _destroyCode = null;
+    }
+
     private void PollGates()
     {
         if (_gatesJob == null || !_gatesJob.Exited(out _))
             return;
         _gatesJob.Dispose();
         _gatesJob = null;
-        if (File.Exists(_gatesOut))
-            foreach (var raw in File.ReadAllLines(_gatesOut))
+        if (_destroyCode != null && !_destroying && Engine.Python != null)
+        {
+            ReadGates(_gatesOut);
+            StartDestruction();
+            return;
+        }
+        if (_destroying)
+        {
+            _destroying = false;
+            var ruin = Path.Combine(RunDir, "destruction.txt");
+            ReadGates(ruin);
+            // the gates' file keeps the whole story, as before: the ruin's part appended to it
+            if (File.Exists(ruin) && File.Exists(_gatesOut))
+                File.AppendAllText(_gatesOut, "\n" + File.ReadAllText(ruin));
+            Deliver();
+            return;
+        }
+        ReadGates(_gatesOut);
+        Deliver();
+    }
+
+    private void ReadGates(string? file)
+    {
+        if (file != null && File.Exists(file))
+            foreach (var raw in File.ReadAllLines(file))
             {
                 var line = raw.Trim();
                 if (!line.StartsWith("PASS") && !line.StartsWith("FAIL"))
@@ -932,7 +982,6 @@ public sealed class Generation
                 var cut = what.IndexOf(" -- ", StringComparison.Ordinal);
                 Gates.Add((line.StartsWith("PASS"), cut > 0 ? what[..cut] : what));
             }
-        Deliver();
     }
 
     /// <summary>Covers taken by this generation's own cover launch (S-4); -1 before or without one.</summary>

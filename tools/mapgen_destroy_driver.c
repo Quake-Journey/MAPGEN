@@ -234,6 +234,8 @@ int main(int argc, char **argv)
             masks = argv[++a];
         else if (!strcmp(argv[a], "--into") && a + 1 < argc)
             into = argv[++a];
+        else if (!strcmp(argv[a], "--boxes") && a + 1 < argc)
+            MapGenGeometryEdit_DestroyBoxesTo(argv[++a]);
         else if (!strcmp(argv[a], "--skip") && a + 1 < argc)
             skip = (uint32_t)strtoul(argv[++a], NULL, 10);
     }

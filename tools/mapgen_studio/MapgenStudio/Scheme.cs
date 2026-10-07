@@ -75,6 +75,7 @@ public sealed class SchemeModel
     public readonly object Sync = new();
     private string _jobDir = "";
     private long _ledgerRead;
+    private long _ruinRead;
     private string _base = "";
     private DateTime _baseTime;
     private Task? _refresh;
@@ -180,6 +181,30 @@ public sealed class SchemeModel
             }
             _first = false;
         }
+        // the PO, 07.10: the ruin on the scheme as it is built - what the destroy driver made, a box each
+        var ruin = Path.Combine(job, "ruin.txt");
+        if (File.Exists(ruin) && new FileInfo(ruin).Length != _ruinRead)
+        {
+            _ruinRead = new FileInfo(ruin).Length;
+            var now = DateTime.Now;
+            var added = new List<Edit>();
+            foreach (var line in File.ReadAllLines(ruin))
+            {
+                var p = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (p.Length != 7 || !p.Skip(1).All(v => float.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out _)))
+                    continue;
+                added.Add(new Edit
+                {
+                    Index = -1, Family = "ruin." + p[0], Verdict = "ACCEPTED", Seen = now,
+                    Box = Box(p.Skip(1).Select(v => float.Parse(v, NumberStyles.Float, CultureInfo.InvariantCulture)).ToArray()),
+                });
+            }
+            lock (Sync)
+            {
+                Edits.RemoveAll(e => e.Family.StartsWith("ruin.", StringComparison.Ordinal));
+                Edits.AddRange(added);
+            }
+        }
         /*
          * Row 411: a try's folder is numbered by the ATTEMPT - the ledger's row, counted from 0 - not by the edit's
          * index in the plan (row 142 of a run is edit 142 of its plan, try_0020 its 21st attempt). Taking the edit's
@@ -187,7 +212,7 @@ public sealed class SchemeModel
          */
         lock (Sync)
             for (var row = 0; row < Edits.Count; row++)
-                if (Edits[row].Verdict == "ACCEPTED")
+                if (Edits[row].Verdict == "ACCEPTED" && Edits[row].Index >= 0)   /* the ruin's boxes are no try */
                     newest = row;
         /*
          * Row 411 (Fable's brief 8): a run in memory keeps the map being built there - its last accepted try's and its
@@ -931,6 +956,8 @@ public sealed class SchemePanel : DockPanel
 
     public SchemeFullScreen? Full => _full;
 
+    private WindowState _mainState = WindowState.Normal;
+
     public void FullScreen()
     {
         // row 410 (the PO, 05.10: «жму на На весь экран и ничего не происходит»): the full screen left open behind the
@@ -939,6 +966,10 @@ public sealed class SchemePanel : DockPanel
         // два окна (чтобы по alt+tab не переключаться в том числе между ними)» - the main window is hidden while the
         // map is on the whole screen, and comes back, in front and active, when it closes («Вернуться в студию», Esc)
         var main = TopLevel.GetTopLevel(this) as Window;
+        // the PO, 07.10: the Studio maximised, the map on the whole screen, «Назад в студию» - the Studio came back
+        // not maximised: hidden and shown, a window forgets its state; the state it had is kept and given back
+        if (main != null && main.IsVisible && main.WindowState != WindowState.Minimized)
+            _mainState = main.WindowState;
         if (_full != null)
         {
             _full.WindowState = WindowState.FullScreen;
@@ -953,7 +984,14 @@ public sealed class SchemePanel : DockPanel
             if (main == null)
                 return;
             main.Show();
-            if (main.WindowState == WindowState.Minimized)
+            // shown again, a maximised window may keep its state's NAME and come up at its normal size: the state is
+            // set anew (through Normal - setting the same value changes nothing)
+            if (_mainState == WindowState.Maximized)
+            {
+                main.WindowState = WindowState.Normal;
+                main.WindowState = WindowState.Maximized;
+            }
+            else if (main.WindowState == WindowState.Minimized)
                 main.WindowState = WindowState.Normal;
             main.Activate();
         };

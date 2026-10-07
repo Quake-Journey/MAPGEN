@@ -29620,6 +29620,8 @@ typedef struct {
     destroy_seed_t seeds[256];     /* where the ruin happened: the patches go there first */
     uint32_t num_seeds;
     uint32_t built_before_rubble;  /* the carves' and the falls' boxes: rubble lies by them */
+    struct { char kind[12]; float box[6]; } notes[4096];   /* what was built where, for the Studio's scheme */
+    uint32_t num_notes;
     float built[4096][6];          /* what this pass built or carved, for the keep-outs of later kinds */
     uint32_t sides_cap;            /* the brush sides this kind may grow the map to (its share of the budget) */
     uint32_t num_built;
@@ -29734,6 +29736,26 @@ static bool destroy_clear(destroy_t *d, const float lo[3], const float hi[3], fl
         if (span_boxes_meet(lo, hi, d->built[i], d->built[i] + 3, 16.0f))
             return false;
     return true;
+}
+
+/* The PO, 07.10: the ruin shown on the Studio's scheme as it is built - each thing made, its kind and box. */
+static char g_destroy_boxes[1024];
+
+void MapGenGeometryEdit_DestroyBoxesTo(const char *path)
+{
+    snprintf(g_destroy_boxes, sizeof(g_destroy_boxes), "%s", path ? path : "");
+}
+
+static void destroy_note(destroy_t *d, const char *kind, const float lo[3], const float hi[3])
+{
+    if (d->num_notes >= sizeof(d->notes) / sizeof(d->notes[0]))
+        return;
+    snprintf(d->notes[d->num_notes].kind, sizeof(d->notes[0].kind), "%s", kind);
+    for (int a = 0; a < 3; a++) {
+        d->notes[d->num_notes].box[a] = lo[a];
+        d->notes[d->num_notes].box[3 + a] = hi[a];
+    }
+    d->num_notes++;
 }
 
 static void destroy_mark(destroy_t *d, const float lo[3], const float hi[3])
@@ -30189,8 +30211,10 @@ static bool destroy_pile(destroy_t *d, float x, float y, float z, const char *te
             }
         }
     }
-    if (made)
+    if (made) {
         destroy_mark(d, plo, phi);
+        destroy_note(d, "rubble", plo, phi);
+    }
     return made > 0;
 }
 
@@ -30485,6 +30509,7 @@ static bool destroy_patch(destroy_t *d, const float c[3], int ax, float nsg, flo
     for (int e = 0; e < 3; e++)
         d->patches[d->num_patches][e] = 0.5f * (lo[e] + hi[e]);
     d->num_patches++;
+    destroy_note(d, "patch", lo, hi);
     d->rep->patches++;
     return true;
 }
@@ -30663,6 +30688,7 @@ static void destroy_craters(destroy_t *d, uint32_t want)
             destroy_face_texture(d, at, 1, frgb);
             if (destroy_clear(d, plo, phi, DESTROY_STARTS_KEEP, true) && destroy_crater_patch(d, at, r, frgb)) {
                 destroy_mark(d, plo, phi);
+                destroy_note(d, "crater", plo, phi);
                 d->rep->craters++;
             }
             continue;
@@ -30696,6 +30722,7 @@ static void destroy_craters(destroy_t *d, uint32_t want)
         const char *tex = destroy_pick(d, DESTROY_GROUND, rgb, destroy_rand(d) < 0.5f ? "dk" : "soot");
         if (destroy_carve(d, lo, hi, pn, pd, 10, tex)) {
             d->rep->craters++;
+            destroy_note(d, "crater", lo, hi);
             /* the floor round it cracked */
             const float ring_lo[3] = { lo[0] - 48, lo[1] - 48, at[2] - 2 }, ring_hi[3] = { hi[0] + 48, hi[1] + 48, at[2] + 2 };
             for (uint32_t bb = 0; bb < MapGenGeometry_NumBrushes(d->g); bb++) {
@@ -30791,6 +30818,7 @@ static void destroy_breaches(destroy_t *d, uint32_t want)
             d->rep->breaches++;
         else
             d->rep->gouges++;
+        destroy_note(d, through ? "breach" : "gouge", lo, hi);
         /* jagged: 3..6 bites at its top and sides, each safe or skipped */
         const int bites = 3 + (int)(destroy_rand(d) * 4.0f);
         for (int k = 0; k < bites; k++) {
@@ -30875,6 +30903,7 @@ static void destroy_edges(destroy_t *d, uint32_t want)
         if (!destroy_carve(d, lo, hi, NULL, NULL, 6, tex))
             continue;
         d->rep->broken++;
+        destroy_note(d, "broken", lo, hi);
         /* its rubble below */
         float below[3] = { at[0], at[1], at[2] };
         below[ax] = e + sg * 40.0f;
@@ -30969,6 +30998,7 @@ static void destroy_collapses(destroy_t *d, uint32_t want)
         const float bx = slab_lo[0] - 72.0f, by = 0.5f * (slab_lo[1] + slab_hi[1]);
         const float burn[3] = { bx, by, destroy_floor_plane(d, bx, by, at[2]) };
         destroy_seed(d, burn, 4);
+        destroy_note(d, "collapse", whole_lo, whole_hi);
         d->rep->collapses++;
     }
 }
@@ -31006,6 +31036,7 @@ static void destroy_ruin(destroy_t *d, uint32_t want)
                 const char *tex = destroy_debris_tex(d, at, 0);
                 if (destroy_piece(d, lo, hi, tex, false)) {
                     destroy_mark(d, lo, hi);
+                    destroy_note(d, "ruin", lo, hi);
                     d->rep->ruins++;
                     /* its slopes: chunks spilled before both of its faces */
                     for (int side = 0; side < 2; side++) {
@@ -31033,8 +31064,10 @@ static void destroy_ruin(destroy_t *d, uint32_t want)
                 continue;
             float rgb[3];
             destroy_face_texture(d, at, 1, rgb);
-            if (destroy_carve(d, lo, hi, NULL, NULL, 6, destroy_pick(d, DESTROY_GROUND, rgb, "dk")))
+            if (destroy_carve(d, lo, hi, NULL, NULL, 6, destroy_pick(d, DESTROY_GROUND, rgb, "dk"))) {
                 d->rep->ruins++;
+                destroy_note(d, "ruin", lo, hi);
+            }
         }
     }
 }
@@ -31179,6 +31212,13 @@ mapgen_geometry_result_t MapGenGeometryEdit_Destroy(mapgen_geometry_t *g, const 
     if (f)
         fclose(f);
     rep->needs = d->num_needs;
+    FILE *bf = g_destroy_boxes[0] ? fopen(g_destroy_boxes, "w") : NULL;
+    for (uint32_t i = 0; bf && i < d->num_notes; i++)
+        fprintf(bf, "%s %.0f %.0f %.0f %.0f %.0f %.0f\n", d->notes[i].kind, (double)d->notes[i].box[0],
+                (double)d->notes[i].box[1], (double)d->notes[i].box[2], (double)d->notes[i].box[3],
+                (double)d->notes[i].box[4], (double)d->notes[i].box[5]);
+    if (bf)
+        fclose(bf);
     /* the start rule, measured: how near any start came to the ruin (a box's nearest point) */
     rep->start_nearest = 1e9f;
     for (uint32_t s = 0; s < d->num_starts; s++)

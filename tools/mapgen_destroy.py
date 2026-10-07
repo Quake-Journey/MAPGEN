@@ -149,6 +149,7 @@ def main() -> int:
     ap.add_argument("--work", type=Path)
     ap.add_argument("--flags")
     ap.add_argument("--pack", type=Path)
+    ap.add_argument("--boxes", type=Path, help="what the ruin built where, a line each (the Studio's scheme)")
     a = ap.parse_args()
     if a.destruction <= 0:
         print("destruction 0: nothing to do")
@@ -179,7 +180,8 @@ def main() -> int:
         needs = work / "needs.txt"
         r = guard.run([str(exe), str(a.map), str(mapfile), "--destruction", str(a.destruction), "--seed",
                        str(a.seed), "--pack", str(plist), "--needs", str(needs), "--game", str(a.game), "--skip",
-                       str(skip), "--masks", str(pack / "textures" / "mapgen" / "masks"), "--into", str(into)],
+                       str(skip), "--masks", str(pack / "textures" / "mapgen" / "masks"), "--into", str(into)]
+                      + (["--boxes", str(a.boxes)] if a.boxes else []),
                       capture_output=True, text=True, errors="replace", timeout=3600)
         m = DESTROYED.search(r.stdout)
         if r.returncode or not m or not mapfile.is_file():

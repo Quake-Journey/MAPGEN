@@ -107,12 +107,15 @@ Any other value is your direct order:
 The run's page shows:
 
 - **The stages**: Getting ready → Building the base map → Making the plan of edits → Edits → Checking it is
-  playable → Light and visibility → The map's checks → Cover → Done. The stage under way shows its time; a finished one, when it ended.
+  playable → Light and visibility → The map's checks → (Destruction - when asked for) → Cover → Done. The stage
+  under way shows its time; a finished one, when it ended.
 - **Edits** — how many were accepted, how many builds were spent of those allowed, how many were considered, and
   how far the map already differs from the base.
-- **Done of the plan** — what of the plan was built: new passages, annexes, pools, windows, rooms from the second
-  map.
-- **The map's scheme** — the plan from above or at a slant, with the accepted changes on it and, at the light
+- **Done of the plan** — what of the plan was built: new passages, annexes, pools, windows, stairway annexes,
+  rooms from the second map. Destruction comes after the edits and the checks; its percent is named in the plan's
+  line.
+- **The map's scheme** — the plan from above or at a slant, with the accepted changes on it (stairway annexes too,
+  and, at the destruction stage, every crater, breach, fallen ceiling and debris pile as it is built) and, at the light
   stage, how the map is lit. «Full screen» puts the scheme on the whole screen; while it is there, the program's
   window is hidden.
 - **Load** — CPU, memory, GPU, video memory: the whole machine's and the generator's own.

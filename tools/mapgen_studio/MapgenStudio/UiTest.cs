@@ -159,6 +159,20 @@ public sealed partial class MainWindow
         await Task.Delay(400);
         Check("and closes back to the run", w._runView?.Scheme.Full == null);
         Check("the Studio's window is back on the screen", w.IsVisible && w.WindowState != WindowState.Minimized);
+        // the PO, 07.10: maximised before, maximised after «Назад в студию»
+        w.WindowState = WindowState.Maximized;
+        await Task.Delay(400);
+        w._runView?.Scheme.FullScreen();
+        await Task.Delay(1000);
+        w._runView?.Scheme.Full?.Close();
+        await Task.Delay(500);
+        // by its size on the screen, not the state's name: the PO saw it come back at its normal size
+        var area = w.Screens.ScreenFromWindow(w)?.WorkingArea;
+        var wide = area is { } wa ? w.ClientSize.Width * w.RenderScaling / wa.Width : 0;
+        Check("a maximised Studio comes back maximised", w.WindowState == WindowState.Maximized && wide > 0.95,
+              $"{w.WindowState}, {wide:0.00} of the screen's width");
+        w.WindowState = WindowState.Normal;
+        await Task.Delay(300);
         Check("no key in brackets while it runs", Brackets(w).Length == 0, Brackets(w));
         // stopped, listed, resumed, finished
         await Until(() => g.Accepted >= 2, 20);

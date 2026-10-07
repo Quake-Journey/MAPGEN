@@ -57,14 +57,94 @@ public sealed class NativeJob : IDisposable
      * the run and his editor was left the E-cores. The share is now of the performance class itself - 9 of 16 by day,
      * 4 at night - so the fast cores he works on are never all taken.
      */
+    /*
+     * Brief 12 (07.10): the PO's i9-14900KF - generator crashes (the CPU executing at its own branch target with bit 31
+     * set) and, in the System log, 37 corrected machine checks of the processor core (internal parity and TLB errors)
+     * at APIC 0, 1, 32, 33, 41 in 30 days. The cores WHEA-Logger names (events of the last 30 days) are left out of the
+     * mask, both threads of each; read once a day into %LOCALAPPDATA%\mapgen_faulty_cpus.json - the same file the
+     * map checks' load guard (tools/mapgen_load_guard.py, faulty_cpus) reads and writes. On Intel's hybrid parts a
+     * P-core's APIC IDs are 8 apart and its threads the logical CPUs 2k and 2k+1; elsewhere the APIC ID is the index.
+     */
+    public static HashSet<int> FaultyCpus(List<int> fast)
+    {
+        var cache = Path.Combine(Environment.GetEnvironmentVariable("LOCALAPPDATA") ?? Path.GetTempPath(),
+                                 "mapgen_faulty_cpus.json");
+        try
+        {
+            if (File.Exists(cache) && (DateTime.Now - File.GetLastWriteTime(cache)).TotalHours < 24)
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(File.ReadAllText(cache), "\"cpus\"\\s*:\\s*\\[([^\\]]*)\\]");
+                if (m.Success)
+                    return m.Groups[1].Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Select(int.Parse).ToHashSet();
+            }
+        }
+        catch (Exception)
+        {
+            // an unreadable cache is read again from the log below
+        }
+        var apics = new HashSet<int>();
+        try
+        {
+            var ps = "Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-WHEA-Logger'; " +
+                     "StartTime=(Get-Date).AddDays(-30)} -ErrorAction SilentlyContinue | ForEach-Object { $_.Message }";
+            var si = new System.Diagnostics.ProcessStartInfo("powershell", new[] { "-NoProfile", "-NonInteractive", "-Command", ps })
+            {
+                RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+            };
+            using var proc = System.Diagnostics.Process.Start(si);
+            if (proc == null)
+                return new HashSet<int>();
+            var read = proc.StandardOutput.ReadToEndAsync();
+            if (!proc.WaitForExit(60000))
+            {
+                try { proc.Kill(); } catch (Exception) { }
+                return new HashSet<int>();
+            }
+            foreach (System.Text.RegularExpressions.Match m in
+                     System.Text.RegularExpressions.Regex.Matches(read.Result, "APIC[^:\\n]*:\\s*(\\d+)"))
+                apics.Add(int.Parse(m.Groups[1].Value));
+        }
+        catch (Exception)
+        {
+            return new HashSet<int>();
+        }
+        var hybrid = fast.Count > 0 && fast.Count < Environment.ProcessorCount;
+        var cpus = new HashSet<int>();
+        foreach (var a in apics)
+            if (hybrid && a < 64)
+            {
+                cpus.Add(2 * (a / 8));
+                cpus.Add(2 * (a / 8) + 1);
+            }
+            else
+                cpus.Add(a);
+        try
+        {
+            File.WriteAllText(cache, "{\"cpus\": [" + string.Join(", ", cpus.OrderBy(x => x)) + "], \"apic\": ["
+                                     + string.Join(", ", apics.OrderBy(x => x)) + "], \"days\": 30}");
+        }
+        catch (Exception)
+        {
+            // no cache: read again next time
+        }
+        return cpus;
+    }
+
     public static ulong Mask(int cpus)
     {
         var fast = PerformanceCpus();
         if (fast.Count == 0)
             return cpus >= 64 ? ulong.MaxValue : (1UL << cpus) - 1UL;
         var take = Math.Max(1, (int)Math.Floor((double)cpus * fast.Count / Math.Max(1, Environment.ProcessorCount)));
+        // brief 12: never a core the machine itself reported for hardware errors (the next ones instead)
+        var bad = FaultyCpus(fast);
+        var usable = fast.Where(i => !bad.Contains(i)).ToList();
+        if (usable.Count == 0)
+            usable = fast;
         ulong mask = 0;
-        foreach (var i in fast.Take(take))
+        foreach (var i in usable.Take(take))
             mask |= 1UL << i;
         return mask;
     }

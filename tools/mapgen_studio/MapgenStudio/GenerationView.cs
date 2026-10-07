@@ -13,7 +13,12 @@ namespace MapgenStudio;
 /// </summary>
 public sealed class GenerationView : DockPanel
 {
-    private static readonly string[] Stages = { "start", "baseline", "plan", "attempt", "judge", "light", "gates", "cover", "done" };
+    private static readonly string[] AllStages = { "start", "baseline", "plan", "attempt", "judge", "light", "gates", "destruction",
+                                                   "cover", "done" };
+
+    /// <summary>The run's stages: the ruin's only when the run asked for one (the PO, 07.10).</summary>
+    private static string[] StagesOf(Generation g) =>
+        (g.Request.Options?.Destruction ?? 0) > 0 ? AllStages : AllStages.Where(s => s != "destruction").ToArray();
 
     private readonly TextBlock _title = Ui.Title("");
     private readonly TextBlock _now = Ui.Text("", 16);
@@ -192,6 +197,7 @@ public sealed class GenerationView : DockPanel
         _stages.Children.Clear();
         // a resumed run replays its ledger: that is the edits stage, gone through again (the PO 05.10 saw every
         // stage waiting while it replayed)
+        var Stages = StagesOf(g);
         var at = Array.IndexOf(Stages, g.Stage is "failed" or "stopped" ? "done" : g.Stage == "resume" ? "attempt" : g.Stage);
         // a run that failed: done is what it passed, the stage it stopped in is crossed out, the rest not reached
         // (the PO's koldduel1, 05.10: refused at its base map's rebuild, every stage showed a tick)

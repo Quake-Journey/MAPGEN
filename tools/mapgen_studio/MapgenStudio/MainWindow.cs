@@ -129,6 +129,23 @@ public sealed partial class MainWindow : Window
     private bool _suggesting;
 
     /// <summary>The form's likeness, seed, families and options into the settings (never from the self-test).</summary>
+    /// <summary>A line of what a button got (press, release, click) into ui_clicks.txt beside the program, kept
+    /// small - the evidence for a click that «did not take».</summary>
+    private static void ClickLog(string what)
+    {
+        try
+        {
+            var f = Path.Combine(Settings.ProgramDir, "ui_clicks.txt");
+            if (File.Exists(f) && new FileInfo(f).Length > 65536)
+                File.Delete(f);
+            File.AppendAllText(f, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {what}\n");
+        }
+        catch (Exception)
+        {
+            // a log that cannot be written is no reason to stop
+        }
+    }
+
     private void KeepForm()
     {
         if (!SelfTesting)
@@ -752,7 +769,16 @@ public sealed partial class MainWindow : Window
             }
             ShowPage();
         };
-        var startHost = new Border { Child = start, HorizontalAlignment = HorizontalAlignment.Left }.Tip("gen.start.tip");
+        // the PO, 07.10: «только с третьего раза нажалась кнопка» - the button's tip and its frame's tip (the frame
+        // carries one so a DISABLED button still says why) were both open over it; the frame's tip is now there only
+        // while the button is disabled. And every press, release and click of it goes to ui_clicks.txt beside the
+        // program: should it ever miss again, the file says whether the press reached it
+        var startHost = new Border { Child = start, HorizontalAlignment = HorizontalAlignment.Left };
+        if (!start.IsEnabled)
+            startHost.Tip("gen.start.tip");
+        start.AddHandler(Avalonia.Input.InputElement.PointerPressedEvent, (_, _) => ClickLog("start pressed"), Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
+        start.AddHandler(Avalonia.Input.InputElement.PointerReleasedEvent, (_, _) => ClickLog("start released"), Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
+        start.Click += (_, _) => ClickLog("start clicked");
         p.Children.Add(startHost);
         return Ui.Page(p);
     }

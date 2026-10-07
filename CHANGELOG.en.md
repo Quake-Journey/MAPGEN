@@ -1,5 +1,13 @@
 # MAPGEN Studio by ly — change log
 
+## 2.5 — 07.10.2026
+
+- Destruction is a stage of its own on the run's page, with its time; its percent is named in the plan's line
+- The map's scheme names stairway annexes and, at the destruction stage, shows every crater, breach, fallen ceiling and debris pile as it is built
+- The Studio maximised comes back maximised after «Back to the Studio»
+- «Start generating» works on the first press (two tooltips were opening over it at once)
+- A generation from the Studio keeps off the processor cores Windows reports hardware errors for
+
 ## 2.4 — 07.10.2026
 
 - Destruction looks more natural: cracks as a non-repeating network and not on every wall, more where it was hit; holes, craters and soot one by one, each in its place, not a pattern over the wall
