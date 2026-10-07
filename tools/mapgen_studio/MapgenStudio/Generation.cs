@@ -899,10 +899,18 @@ public sealed class Generation
                    "x=['--relight-first'] if 'FITTED' in f.stdout else [];" +
                    $"l=subprocess.run([sys.executable,r'{rooms}',r'{candidate}','--job',r'{JobDir}'," +
                    $"'--donor',r'{donor}'{second}]+x,capture_output=True,text=True);" +
+                   // brief 12 L3: the fit asked again of the map as the room step left it, only when the gate reads
+                   // it out of band, the better kept
+                   $"g=subprocess.run([sys.executable,r'{fit}',r'{candidate}',r'{donor}',r'{fitWork}_after','--after-rooms']," +
+                   "capture_output=True,text=True);" +
+                   // a refit moves the whole map's level: the rooms brought to their doors once more under it
+                   $"l2=subprocess.run([sys.executable,r'{rooms}',r'{candidate}','--job',r'{JobDir}','--donor',r'{donor}'{second}]," +
+                   "capture_output=True,text=True) if 'REFITTED' in g.stdout else None;" +
                    $"r=subprocess.run([sys.executable,r'{script}',r'{candidate}','--job',r'{JobDir}'," +
                    $"'--donor',r'{donor}'{second}],capture_output=True,text=True);" +
                    after +
                    $"open(r'{_gatesOut}','w',encoding='utf-8').write(r.stdout+r.stderr+'\\nLIGHT FIT\\n'+f.stdout+f.stderr+'\\nROOM LIGHT\\n'+l.stdout+l.stderr" +
+                   "+'\\nLIGHT REFIT\\n'+g.stdout+g.stderr+('\\nROOM LIGHT AGAIN\\n'+l2.stdout+l2.stderr if l2 else '')" +
                    "+('\\nDESTRUCTION\\n'+d.stdout+d.stderr+'\\n'+r2.stdout+r2.stderr if d else ''));" +
                    "sys.exit(r.returncode or (d.returncode if d else 0) or (r2.returncode if r2 else 0))";
         _gatesJob.Start(python, new[] { "-c", code }, RunDir);

@@ -157,6 +157,141 @@ def scale_panels(bsp: Path, boxes: list, factors: list) -> int:
     return changed
 
 
+def tint_panels(bsp: Path, boxes: list, colours: list, moddir: Path) -> int:
+    """Brief 12 L1: a carried room's glowing panels in its original's colour. A copy of an original lit by its sky
+    (orange q3t2, q2dm1's courtyard rooms) carries the original's white panels underground, and one light of the
+    original's colour drowned in them (row 412m: B/R 0.43..0.77 against 0.12). Each SURF_LIGHT face in a box gets a
+    copy of its texture record naming a copy of its texture multiplied by the colour - written in the game's palette
+    into MODDIR/textures/mgd - so the light pass emits the colour from the panel itself (q2tools takes a light face's
+    colour from its texture) and the panel is drawn in it; its value is kept. Pure Python: a user's may have no numpy."""
+    import struct
+    import zlib
+    from mapgen_destroy import game_file
+    pcx = game_file(moddir, "pics/colormap.pcx") or game_file(Path(GAME), "pics/colormap.pcx")
+    if not pcx:
+        return 0
+    pal = list(pcx[-768:])
+    nearest: dict = {}
+
+    def index_of(r: float, g: float, b: float) -> int:
+        key = (int(r) >> 2, int(g) >> 2, int(b) >> 2)
+        if key not in nearest:
+            nearest[key] = min(range(256), key=lambda i: 3 * (pal[3 * i] - r) ** 2 + 4 * (pal[3 * i + 1] - g) ** 2
+                               + 2 * (pal[3 * i + 2] - b) ** 2)
+        return nearest[key]
+
+    def tinted_wal(orig: str, colour: list) -> str | None:
+        name = f"mgd/t{zlib.crc32((orig + ' ' + ' '.join(f'{c:.3f}' for c in colour)).encode()):08x}"
+        out = moddir / "textures" / f"{name}.wal"
+        if out.is_file():
+            return name
+        data = game_file(moddir, f"textures/{orig}.wal") or game_file(Path(GAME), f"textures/{orig}.wal")
+        if not data or len(data) < 100:
+            return None
+        w, h = struct.unpack_from("<II", data, 32)
+        offs = struct.unpack_from("<4I", data, 40)
+        head = bytearray(data[:100])
+        head[0:32] = name.encode().ljust(32, b"\0")
+        head[56:88] = bytes(32)                       # no animation chain for the copy
+        body = bytearray()
+        at = 100
+        for k in range(4):
+            mw, mh = max(1, w >> k), max(1, h >> k)
+            struct.pack_into("<I", head, 40 + 4 * k, at)
+            for i in data[offs[k]: offs[k] + mw * mh]:
+                body.append(index_of(pal[3 * i] * colour[0], pal[3 * i + 1] * colour[1], pal[3 * i + 2] * colour[2]))
+            at += mw * mh
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(bytes(head) + bytes(body))
+        return name
+
+    d = bytearray(bsp.read_bytes())
+
+    def lump(i):
+        return struct.unpack_from("<ii", d, 8 + 8 * i)
+
+    tio, til = lump(5)
+    fo, fl = lump(6)
+    vo, _ = lump(2)
+    eo, _ = lump(11)
+    so, _ = lump(12)
+    texinfo = [bytes(d[tio + 76 * i: tio + 76 * (i + 1)]) for i in range(til // 76)]
+    added: dict = {}
+    changed = 0
+    for f in range(fl // 20):
+        at = fo + 20 * f
+        _, _, firstedge, numedges, ti = struct.unpack_from("<HHiHH", d, at)
+        flags, value = struct.unpack_from("<ii", texinfo[ti], 32) if ti < len(texinfo) else (0, 0)
+        if not (flags & 1) or value <= 0 or numedges <= 0:
+            continue
+        c = [0.0, 0.0, 0.0]
+        for k in range(numedges):
+            se = struct.unpack_from("<i", d, so + 4 * (firstedge + k))[0]
+            v0, v1 = struct.unpack_from("<HH", d, eo + 4 * abs(se))
+            v = v1 if se < 0 else v0
+            x = struct.unpack_from("<fff", d, vo + 12 * v)
+            for a in range(3):
+                c[a] += x[a] / numedges
+        for box, colour in zip(boxes, colours):
+            if all(box[a] - 1 <= c[a] <= box[a + 3] + 1 for a in range(3)):
+                orig = texinfo[ti][40:72].split(b"\0")[0].decode("latin1")
+                if orig.startswith("mgd/t"):
+                    break                               # tinted already
+                key = (ti, tuple(colour))
+                if key not in added:
+                    name = tinted_wal(orig, colour)
+                    if not name:
+                        break
+                    rec = bytearray(texinfo[ti])
+                    rec[40:72] = name.encode().ljust(32, b"\0")
+                    struct.pack_into("<i", rec, 72, -1)
+                    added[key] = len(texinfo)
+                    texinfo.append(bytes(rec))
+                struct.pack_into("<H", d, at + 10, added[key])
+                changed += 1
+                break
+    if added:
+        new = b"".join(texinfo)
+        while len(d) % 4:
+            d.append(0)
+        struct.pack_into("<ii", d, 8 + 8 * 5, len(d), len(new))
+        d += new
+        bsp.write_bytes(bytes(d))
+    return changed
+
+
+def door_lit(bsp: Path, donor: Path, rooms: list, sources: list, flags: str, keys: dict, work: Path,
+             theirs: set) -> list:
+    """Brief 12 L2: a room still over its band after the rounds, relit with ALL its own lights at nothing (its point
+    lights out, its panels at value 1): what light remains is its door's spill. Over the band alone - the room is lit
+    by its door, not by anything of its own the step could turn down (q2dm1's lamp-panel tunnel at 1896 -24 512 stood
+    x1.28 after eight rounds). Returns [(room, level with its lights, level without)] for those."""
+    if not rooms:
+        return []
+    probe = work / "door_only"
+    probe.mkdir(parents=True, exist_ok=True)
+    copy = probe / "door_only.bsp"
+    shutil.copy2(bsp, copy)
+    text = entity_text(copy.read_bytes())
+
+    def out(m):
+        e = m.group(0)
+        o = ORIGIN.search(e)
+        if not o or o.group(0) in theirs:
+            return e
+        p = [float(v) for v in o.groups()]
+        return "" if any(all(d["box"][i] - 1 <= p[i] <= d["box"][i + 3] + 1 for i in range(3)) for d, _ in rooms) else e
+
+    scale_panels(copy, [d["box"] for d, _ in rooms], [0.0] * len(rooms))
+    relight(copy, LIGHT.sub(out, text), flags, probe, keys)
+    again = measure(copy, donor, [d for d, _ in rooms], sources)
+    lit = []
+    for (d, lv), (_, _, _, alone, *_rest) in zip(rooms, again):
+        if alone and alone[0] / max(1, alone[1]) > LEVEL_BAND[1]:
+            lit.append((d, lv, alone))
+    return lit
+
+
 def relight(bsp: Path, text: str, flags: str, work: Path, keys: dict | None = None, moddir: Path | None = None,
             basedir: Path | None = None) -> None:
     raw = bsp.read_bytes()
@@ -223,6 +358,9 @@ def main() -> int:
         text, err = gates.plan_listing(a.job, work)
         sources = gates.job_sources(a.job, text if not err else "")
     tinted: set = set()
+    # brief 12 L2: each room's own answer to its lights - the level's change over the last round's factor (a lamp-panel
+    # tunnel moved ~6 % a round under «level as the square of the values»: q2dm1's at 1896 -24 512, x1.53 -> x1.27)
+    learnt: dict = {}
     if a.relight_first:
         text, moved = revalue(entity_text(a.map.read_bytes()), flags)
         print(f"relighting under the donor's calibration: flags '{flags}', keys {keys}; {moved} lights the generator"
@@ -230,6 +368,13 @@ def main() -> int:
         relight(a.map, text, flags, work, keys)
     for rnd in range(a.rounds + 1):
         found = measure(a.map, a.donor, digs, sources)
+        for d, ok, said, lv, *_ in found:
+            key = tuple(round(v) for v in d["box"])
+            if lv and key in learnt and learnt[key][0] and abs(learnt[key][1] - 1.0) > 0.02:
+                was, k, _ = learnt[key]
+                import math
+                answer = math.log(max(1, lv[0]) / max(1, was)) / math.log(k)
+                learnt[key] = (was, k, max(0.2, min(2.0, answer)) if answer > 0.05 else 0.2)
         for d, ok, said, *_ in found:
             print(f"round {rnd} {'PASS' if ok else 'FAIL'} {d.get('shape')} {[round(v) for v in d['box'][:3]]}: {said}",
                   flush=True)
@@ -259,40 +404,58 @@ def main() -> int:
                         recoloured += 1
                     target = ref * (LEVEL_BAND[0] + LEVEL_BAND[1]) / 2.0
                     # measured: a room's level goes about as the square of its lights' values (q2dm1's annex: 17 at
-                    # half, 68 at full - q2tools' light is (value - distance), and most of a room is far)
-                    k = max(0.3, min(3.0, (target / max(1, room)) ** 0.5))
+                    # half, 68 at full - q2tools' light is (value - distance), and most of a room is far); a room that
+                    # answered otherwise last round is stepped by its own answer
+                    key = tuple(round(v) for v in b)
+                    power = learnt.get(key, (None, None, 2.0))[2]
+                    k = max(0.15, min(3.0, (target / max(1, room)) ** (1.0 / power)))
+                    learnt[key] = (room, k, power)
                     changed += 1
                     return VALUE.sub(lambda v: f'"light" "{round(float(v.group(1)) * k)}"', e)
             return e
 
         text = LIGHT.sub(scale, text)
         # a carried room whose colour stays off its original's (an original lit by its sky - orange q3t2, q2dm1's
-        # courtyard rooms - copied underground under white lamps): one light of the original's colour in its middle,
-        # its own panels dimmed, once (brief 11 step 1)
-        extra = []
+        # courtyard rooms - copied underground under white panels): its own panels take the original's colour, once
+        # (brief 12 L1: one coloured light added in its middle drowned in the white panels, B/R 0.43..0.77 for 0.12)
+        boxes, colours = [], []
         for d, (room, ref), colour in off:
             key = tuple(round(v) for v in d["box"])
             src = gates.source_of(d, sources, a.donor) if sources else None
-            if not src or not colour or key in tinted or not profile.LAST:
+            if not src or not colour or key in tinted:
                 continue
-            b = d["box"]
-            mid = [(b[0] + b[3]) / 2, (b[1] + b[4]) / 2, b[2] + (b[5] - b[2]) * 0.6]
-            extra.append('{\n"classname" "light"\n"origin" "%.0f %.0f %.0f"\n"light" "%d"\n"_color" "%s"\n}\n'
-                         % (mid[0], mid[1], mid[2], max(150, round(ref * 2.5)), colour))
+            boxes.append(d["box"])
+            colours.append([float(c) for c in colour.split()])
             tinted.add(key)
-        if extra:
-            text = text + "".join(extra)
-            scale_panels(a.map, [d["box"] for d, _, _ in off if tuple(round(v) for v in d["box"]) in tinted],
-                         [0.6] * len(extra))
+        if boxes:
+            print(f"round {rnd}: {tint_panels(a.map, boxes, colours, Path(GAME))} panel faces of {len(boxes)} carried"
+                  f" rooms in their originals' colour", flush=True)
         # and the rooms' own glowing panels, by the level's own ratio (a panel's light goes about as its value)
+        # the panels by the room's own answer too (linear at first): a tunnel lit to the light pass's cap (p90 196 of
+        # -maxlight 196) answers far less than its values move (brief 12: q2dm1's at 1896 -24 512, ~6 % a round)
+        def panel_k(d, room, ref):
+            got = learnt.get(tuple(round(v) for v in d["box"]))
+            power = got[2] if got and got[2] != 2.0 else 1.0       # linear until the room has answered
+            target = ref * (LEVEL_BAND[0] + LEVEL_BAND[1]) / 2.0 / max(1, room)
+            return max(0.15, min(3.0, target ** (1.0 / power)))
         panels = scale_panels(a.map, [d["box"] for d, _, _ in off],
-                              [max(0.3, min(3.0, ref * (LEVEL_BAND[0] + LEVEL_BAND[1]) / 2.0 / max(1, room)))
-                               for _, (room, ref), _ in off])
+                              [panel_k(d, room, ref) for d, (room, ref), _ in off])
         print(f"round {rnd}: {changed} lights and {panels} panel faces rescaled in {len(off)} rooms; relighting",
               flush=True)
         if not changed and not panels:
             break
         relight(a.map, text, flags, work, keys)
+    # brief 12 L2: a room still over its band - its own lights, or its door's light?
+    bright = [(d, lv) for d, ok, said, lv, *_ in found if lv and lv[0] / max(1, lv[1]) > LEVEL_BAND[1]]
+    lit_by_door = door_lit(a.map, a.donor, bright, sources, flags, keys, work, theirs) if bright else []
+    for d, lv, alone in lit_by_door:
+        print(f"LIT BY ITS DOOR {d.get('shape')} {[round(v) for v in d['box'][:3]]}: {lv[0]}/{lv[1]} with its own"
+              f" lights, {alone[0]}/{alone[1]} with none of them - the door's spill alone is over the band", flush=True)
+    if a.job:
+        (a.job / "lit").mkdir(parents=True, exist_ok=True)
+        (a.job / "lit" / "door_lit.txt").write_text(
+            "".join(f"door-lit {' '.join(f'{v:.0f}' for v in d['box'])} with {lv[0]}/{lv[1]} without {al[0]}/{al[1]}\n"
+                    for d, lv, al in lit_by_door), encoding="utf-8")
     # row 410 (brief 7 decision 3): recolouring now means the light pass drifted from the donor - said, not hidden
     if recoloured:
         print(f"RECOLOURED: {recoloured} lights took their door's colour as this map lit it - the light pass does not"

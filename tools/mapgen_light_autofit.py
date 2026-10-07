@@ -1,7 +1,7 @@
 r"""A donor's light fitted once, by itself, on the first map built from it (row 410; the PO: «и что мы будем каждый
 раз по 10 раз генерировать карту чтобы подобрать ей свет???»).
 
-    python tools/mapgen_light_autofit.py LIT.bsp DONOR.bsp WORK_DIR [--rounds N] [--force]
+    python tools/mapgen_light_autofit.py LIT.bsp DONOR.bsp WORK_DIR [--rounds N] [--force | --after-rooms]
 
 A donor already calibrated - by its sha256 in `tools/mapgen_donor_light.json`, or by its own fit beside it
 (`DONOR.light_fit.json`, this tool's) - is left alone: prints KNOWN and exits 0. Otherwise light-only reruns of LIT.bsp
@@ -22,6 +22,12 @@ A donor already calibrated - by its sha256 in `tools/mapgen_donor_light.json`, o
   under every scale while sides and floors matched - a balance one multiplier cannot move; `-bounce` 2..16 moved
   nothing, `-direct 2` took the ceilings 0.60 -> 1.04 and the sides 0.95 -> 1.34 (the ceilings over the sides about
   as `-direct` to the power 0.31); `-scale 1.85 -direct 1.8` put all three in the band (1.17 / 1.12 / 0.82).
+
+--after-rooms (brief 12 L3): the map as the room-light step left it, read by the gate's own measure; when a shared
+orientation stands out of 0.8..1.25 (q2dm1's first map: ceilings 0.88 at the fit, 0.79 after the rooms were brought to
+their doors - a fit centred by a guess, 1.05, could not know by how much), the level and the balance are stepped from
+the donor's current calibration on this map, light-only, up to N rounds, and the best of these and the map as it is
+is kept: the map relit under it and the calibration stored. Prints IN BAND, REFITTED or KEPT.
 
 The fit (flags, keys, FAITHFUL or not, every round's line) goes to DONOR.light_fit.json beside the donor, and the
 Studio's DONOR.light.txt / DONOR.light_keys.txt with it; prints FITTED. Not faithful after N rounds is said - the best
@@ -64,6 +70,73 @@ def flags_of(scale: float, maxlight: int | None, saturate: float | None, direct:
             + (f" -direct {direct:.2f}" if direct else ""))
 
 
+def parse_flags(flags: str) -> tuple[float, int | None, float | None, float | None]:
+    """-scale, -maxlight, -saturation, -direct of a calibration's words (1, none, none, none when absent)."""
+    def word(name: str):
+        m = re.search(rf"(?:^|\s){name}\s+([\d.]+)", flags or "")
+        return float(m.group(1)) if m else None
+    s, ml, sat, di = word("-scale"), word("-maxlight"), word("-saturation"), word("-direct")
+    return (s or 1.0), (int(ml) if ml else None), sat, di
+
+
+def store(donor: Path, fl: str, keys: dict, ok: bool, s: float, table: list) -> None:
+    sha = hashlib.sha256(donor.read_bytes()).hexdigest()
+    fit = {"sha256": sha, "name": donor.stem, "flags": fl, "keys": keys, "faithful": ok, "score": round(s, 3),
+           "table": table}
+    fit_path(donor).write_text(json.dumps(fit, indent=1), encoding="utf-8")
+    donor.with_suffix(".light.txt").write_text(fl + "\n", encoding="utf-8")
+    kp = donor.with_suffix(".light_keys.txt")
+    if keys:
+        kp.write_text(";".join(f"{k}={v}" for k, v in keys.items()) + "\n", encoding="utf-8")
+    elif kp.exists():
+        kp.unlink()
+
+
+def after_rooms(a) -> int:
+    """Brief 12 L3 - see the module's text."""
+    flags, keys = donor_light(a.donor)
+    gate = shared_ratios(a.lit, a.donor)
+    off = lambda g: max((max(0.8 - v, v - 1.25, 0.0) for v in g.values()), default=9.0)  # noqa: E731
+    said = " ".join(f"{k[:4]} {v:.2f}" for k, v in gate.items())
+    if gate and off(gate) == 0.0:
+        print(f"IN BAND {said}")
+        return 0
+    guard.pin_self()
+    scale, maxlight, saturate, direct = parse_flags(flags)
+    raw = a.lit.read_bytes()
+    own = entity_text(raw)
+    table = [f"as left by the room step: flags '{flags}' | gate {said}"]
+    best = (off(gate), None, flags, keys, gate)
+    for rnd in range(a.rounds):
+        g = math.sqrt(max(gate.values()) * min(gate.values())) if gate else 1.0
+        scale = min(SCALE_RANGE[1], max(SCALE_RANGE[0], scale * (1.0 / g) ** (1.0 / LEVEL_POWER)))
+        if "sides" in gate and "ceilings" in gate:
+            bal = gate["ceilings"] / gate["sides"]
+            if bal < BALANCE or bal > 1.0 / BALANCE:
+                was = direct or 1.0
+                aim = BALANCE_AIM if bal < 1.0 else 1.0 / BALANCE_AIM
+                direct = min(DIRECT_RANGE[1], max(DIRECT_RANGE[0], was * (aim / bal) ** (1.0 / BALANCE_POWER)))
+                scale = min(SCALE_RANGE[1], max(SCALE_RANGE[0], scale * (was / direct) ** 0.35))
+        fl = flags_of(scale, maxlight, saturate, direct)
+        code, _, rows = light_only(raw, own, keys, fl, a.work / f"after{rnd}", a.donor)
+        gate = shared_ratios(a.work / f"after{rnd}" / "q2mg.bsp", a.donor) if code == 0 else {}
+        line = f"after-rooms round {rnd} flags '{fl}' | gate " + " ".join(f"{k[:4]} {v:.2f}" for k, v in gate.items())
+        print(line, flush=True)
+        table.append(line)
+        if gate and off(gate) < best[0]:
+            best = (off(gate), a.work / f"after{rnd}" / "q2mg.bsp", fl, keys, gate)
+        if not gate or off(gate) == 0.0:
+            break
+    if best[1] is None:
+        print(f"KEPT '{flags}' - no round read better than the map as it is ({said})")
+        return 0
+    a.lit.write_bytes(best[1].read_bytes())
+    store(a.donor, best[2], best[3], best[0] == 0.0, best[0], table)
+    print(f"REFITTED{' IN BAND' if best[0] == 0.0 else ''} flags '{best[2]}' keys {best[3]} | gate "
+          + " ".join(f"{k[:4]} {v:.2f}" for k, v in best[4].items()))
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("lit", type=Path)
@@ -71,7 +144,12 @@ def main() -> int:
     ap.add_argument("work", type=Path)
     ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--force", action="store_true", help="fit even when the donor is calibrated")
+    ap.add_argument("--after-rooms", action="store_true",
+                    help="brief 12 L3: refit on the map the room-light step left, only when the gate reads it out of"
+                         " the band, keeping the better")
     a = ap.parse_args()
+    if a.after_rooms:
+        return after_rooms(a)
     sha = hashlib.sha256(a.donor.read_bytes()).hexdigest()
     flags, keys = donor_light(a.donor)
     if not a.force and (flags or keys):

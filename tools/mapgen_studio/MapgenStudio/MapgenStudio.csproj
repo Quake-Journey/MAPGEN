@@ -10,7 +10,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>MapgenStudio</AssemblyName>
     <RootNamespace>MapgenStudio</RootNamespace>
-    <Version>2.3.0</Version>
+    <Version>2.4.0</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
     <InvariantGlobalization>false</InvariantGlobalization>

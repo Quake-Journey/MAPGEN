@@ -11,6 +11,29 @@ public static class Versions
 
     public static readonly Entry[] All =
     {
+        new("2.4", "07.10.2026",
+            new[]
+            {
+                "Разрушения выглядят естественнее: трещины — неповторяющейся сеткой и не на всех стенах, а больше там, где был удар; пробоины, воронки и копоть — по одной, на своём месте, а не узором по всей стене",
+                "Обломки — неровные куски того, что разрушилось (пол, стена, потолок), а не одинаковые бруски; лежат у стен, проломов и обвалов, не на ступенях",
+                "Повреждённые поверхности рисуются в том же качестве, что и остальные текстуры игры",
+                "Набор текстур: полосатые панели и доски больше не считаются камнем",
+                "Обвалы потолка — только под настоящим потолком, не под открытым небом; у воды ничего не строится",
+                "Генерация не занимает ядра процессора, на которые жалуется Windows (аппаратные ошибки в журнале): падения генератора на таком процессоре прекратились",
+                "Лестницы: встают вплотную к стене, без щели; место у стены, стоящей над пустотой, больше не выбирается",
+                "Свет: светильники перенесённых комнат окрашиваются в цвет оригинала; тоннели со светящимися панелями выравниваются быстрее; после подстройки света комнат общий свет карты проверяется ещё раз",
+            },
+            new[]
+            {
+                "Destruction looks more natural: cracks as a non-repeating network and not on every wall, more where it was hit; holes, craters and soot one by one, each in its place, not a pattern over the wall",
+                "Debris are irregular pieces of what broke (floor, wall, ceiling), not identical bricks; they lie by walls, breaches and falls, never on steps",
+                "Damaged surfaces are drawn at the same quality as the game's other textures",
+                "The texture pack: striped panels and planks are no longer taken for stone",
+                "Fallen ceilings only under a real ceiling, never under the open sky; nothing is built by water",
+                "The generation keeps off the processor cores Windows reports hardware errors for: the generator's crashes on such a processor stopped",
+                "Stairways stand flush against the wall, no slot; a wall standing over a void is no longer chosen",
+                "Light: carried rooms' lamps take their original's colour; tunnels lit by glowing panels settle faster; after the rooms' light is set the map's shared light is checked once more",
+            }),
         new("2.3", "06.10.2026",
             new[]
             {

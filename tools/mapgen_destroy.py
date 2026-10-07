@@ -54,6 +54,7 @@ def install(game: Path, pack: Path) -> None:
                 n += 1
     print(f"the pack: {n} files copied into {dst}", flush=True)
 # carving kinds by bit (MapGenGeometryEdit_DestroySkip): craters 4, breaches 8, broken 16, collapses 32, ruin 64
+# (rubble 2, patches 128: built, never carved)
 CARVES = 4 | 8 | 16 | 32 | 64
 
 
@@ -86,7 +87,7 @@ def driver(work: Path) -> Path:
     sources = ["tools/mapgen_destroy_driver.c"] + [s for s in SOURCES if s != "tools/mapgen_recut_driver.c"]
     run = guard.run(["gcc", "-std=c17", "-O2", "-I" + str(REPO / "inc"), "-I" + str(REPO / "src" / "mapgen"),
                      "-DUSE_LITTLE_ENDIAN=1", "-DUSE_CLIENT=0", "-DUSE_SERVER=0", "-DUSE_NEW_GAME_API=0"]
-                    + [str(REPO / s) for s in sources] + ["-o", str(exe), "-lm"], capture_output=True, text=True)
+                    + [str(REPO / s) for s in sources] + ["-o", str(exe), "-lz", "-lm"], capture_output=True, text=True)
     if run.returncode or not exe.is_file():
         raise SystemExit("cannot build the destroy driver:\n" + run.stderr[-1500:])
     return exe
@@ -103,8 +104,8 @@ def pack_dir(given: Path | None) -> Path:
 
 def pack_list(pack: Path, out: Path) -> None:
     cat = json.loads((pack / "textures" / "mapgen" / "catalogue.json").read_text(encoding="utf-8"))
-    out.write_text("".join(f"{t['name']} {t['material']} {t['variant']} {t['rgb'][0]} {t['rgb'][1]} {t['rgb'][2]}\n"
-                           for t in cat["textures"]), encoding="utf-8")
+    out.write_text("".join(f"{t['name']} {t['material']} {t['variant']} {t['rgb'][0]} {t['rgb'][1]} {t['rgb'][2]}"
+                           f" {t.get('coherence', 0.0)}\n" for t in cat["textures"]), encoding="utf-8")
 
 
 def compile_lit(mapfile: Path, game: Path, into: Path, flags: str, keys: dict, work: Path) -> tuple[bool, str]:
@@ -173,7 +174,7 @@ def main() -> int:
     own_flags, keys = donor_light(a.donor)
     flags = a.flags if a.flags is not None else own_flags
     said = ""
-    for skip, what in ((0, ""), (CARVES, "the carving kinds left out"), (0x7E, "only the cracks kept")):
+    for skip, what in ((0, ""), (CARVES, "the carving kinds left out"), (0xFE, "only the cracks kept")):
         mapfile = work / "q2mg.map"
         needs = work / "needs.txt"
         r = guard.run([str(exe), str(a.map), str(mapfile), "--destruction", str(a.destruction), "--seed",

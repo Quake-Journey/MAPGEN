@@ -1,5 +1,16 @@
 # MAPGEN Studio by ly — change log
 
+## 2.4 — 07.10.2026
+
+- Destruction looks more natural: cracks as a non-repeating network and not on every wall, more where it was hit; holes, craters and soot one by one, each in its place, not a pattern over the wall
+- Debris are irregular pieces of what broke (floor, wall, ceiling), not identical bricks; they lie by walls, breaches and falls, never on steps
+- Damaged surfaces are drawn at the same quality as the game's other textures
+- The texture pack: striped panels and planks are no longer taken for stone
+- Fallen ceilings only under a real ceiling, never under the open sky; nothing is built by water
+- The generation keeps off the processor cores Windows reports hardware errors for: the generator's crashes on such a processor stopped
+- Stairways stand flush against the wall, no slot; a wall standing over a void is no longer chosen
+- Light: carried rooms' lamps take their original's colour; tunnels lit by glowing panels settle faster; after the rooms' light is set the map's shared light is checked once more
+
 ## 2.3 — 06.10.2026
 
 - «Stairway annexes» (0-10): flights of steps along rooms' walls to new landings, a pickup on each or a ledge it meets; sites found on any base

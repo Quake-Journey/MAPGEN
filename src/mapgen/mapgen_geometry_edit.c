@@ -20949,6 +20949,7 @@ void MapGenGeometryEdit_DigStairways(uint32_t count)
 typedef struct {
     uint32_t looked, no_wall, crooked, floor, wet, low, open_wall, by_entity, by_pad, by_plan, no_lane, no_purpose,
              crossing, dealt, ledges, pickups, stuck;
+    uint32_t ledge_seen;    /* walkways' edges met along a wall at a landing's height (brief 12 L5) */
 } stair_tally_t;
 
 /* The floor at (x, y) is at z (within `slack`), dry, with a player's height of air over it. */
@@ -21016,7 +21017,12 @@ static void stair_scan(const mapgen_bsp_t *g, int ra, float P, float ws, float c
             stair_point(ra, u, P + ws * dd, q);
             face = !donor_air(g, q[0], q[1], z + 40.0f);
         }
-        r->straight[i] = !pillar && face;
+        /* the wall's foot rock under the floor's level too: q2dm1's wall at x 1920 over the room below stands on
+           nothing at the floor's level, and a stairway's back corner on that edge was a crack the transaction
+           refused (brief 12 L4, rows 412m and 412n) - such a wall is no wall for a stairway, another site is dealt */
+        stair_point(ra, u, P + ws * 2.0f, q);
+        const bool footed = !donor_air(g, q[0], q[1], z - 12.0f);
+        r->straight[i] = !pillar && face && footed;
         r->floor[i] = 1u;
         r->wet[i] = 0u;
         r->air[i] = top + STAIR_HEAD;
@@ -21065,7 +21071,7 @@ static void stair_scan(const mapgen_bsp_t *g, int ra, float P, float ws, float c
  * nearest c wins. Fills `s` (no purpose yet); false with the tally of what failed at the nearest start.
  */
 static bool stair_site(const stair_run_t *r, int ra, float rs, float P, float ws, float c, float z, float W, float H,
-                       stairway_t *s, stair_tally_t *t)
+                       int force, stairway_t *s, stair_tally_t *t)
 {
     const uint32_t steps = (uint32_t)(H / STAIR_RISE + 0.5f) - 1u;
     if (steps < 2u || steps > STAIR_STEPS_MAX)
@@ -21075,11 +21081,15 @@ static bool stair_site(const stair_run_t *r, int ra, float rs, float P, float ws
     const int dir = rs > 0.0f ? 1 : -1;
     int found = INT32_MAX;
     uint32_t why[6] = { 0, 0, 0, 0, 0, 0 };   /* straight, floor, wet, lane, low, open */
+    /* `force`: this start alone (a landing placed to meet a walkway), else the nearest start to c */
     for (int off = 0; off <= STAIR_SCAN && found == INT32_MAX; off++)
         for (int sgn = (off ? -1 : 1); sgn <= 1 && found == INT32_MAX; sgn += 2) {
-            const int j0 = off * sgn;
+            const int j0 = force != INT32_MAX ? force : off * sgn;
+            if (force != INT32_MAX && (off || sgn > 1))
+                break;
             bool ok = true;
-            for (int k = -keep; k <= n + keep && ok; k++) {
+            /* a landing placed to meet a walkway ends at it: past its end is the walkway, not a wall to keep */
+            for (int k = -keep; k <= n + (force != INT32_MAX ? 0 : keep) && ok; k++) {
                 const int j = j0 + dir * k;
                 if (j < -STAIR_SCAN || j > STAIR_SCAN) {
                     ok = false;
@@ -21133,6 +21143,64 @@ static bool stair_site(const stair_run_t *r, int ra, float rs, float P, float ws
     s->high = H;
     s->wide = W;
     return true;
+}
+
+/*
+ * The stairway's back into the wall's own rock (brief 12 L4). The site stands its back at the wall's face as met at a
+ * player's chest; where the wall recedes lower down (q2dm1's third stairway at 1920 496 512: a plinth's step back
+ * under the face) a slot opened between the steps and the wall and the transaction refused the crack. Over the whole
+ * back, every 16 along it and up it, the wall's first rock within STAIR_WALL_SLACK; the back goes to the deepest of
+ * them when the rock is unbroken from each sample's first to there - solid into solid. An opening within the slack, or
+ * a wall thinner than that (a room behind), keeps the back at the face.
+ */
+static void stair_back(const mapgen_bsp_t *g, int ra, float ws, float P, stairway_t *s)
+{
+    const int wa = 1 - ra;
+    float first[64][16];
+    int nu = 0;
+    float deepest = 0.0f;
+    for (float u = s->lo[ra] + 4.0f; u <= s->hi[ra] - 3.9f && nu < 64; u += 16.0f, nu++) {
+        int nh = 0;
+        for (float h = 4.0f; h <= s->hi[2] - s->lo[2] - 4.0f && nh < 16; h += 16.0f, nh++) {
+            float d = -1.0f;
+            for (float dd = 0.5f; dd <= STAIR_WALL_SLACK + 0.5f; dd += 1.0f) {
+                float q[2];
+                stair_point(ra, u, P + ws * dd, q);
+                if (!donor_air(g, q[0], q[1], s->lo[2] + h)) {
+                    d = dd - 0.5f;
+                    break;
+                }
+            }
+            if (d < 0.0f)
+                return;                         /* an opening within the slack: the back stays at the face */
+            first[nu][nh] = d;
+            deepest = fmaxf(deepest, d);
+        }
+    }
+    if (deepest < 1.0f)
+        return;
+    int iu = 0;
+    for (float u = s->lo[ra] + 4.0f; u <= s->hi[ra] - 3.9f && iu < 64; u += 16.0f, iu++) {
+        int ih = 0;
+        for (float h = 4.0f; h <= s->hi[2] - s->lo[2] - 4.0f && ih < 16; h += 16.0f, ih++)
+            for (float dd = first[iu][ih] + 0.5f; dd <= deepest + 2.5f; dd += 1.0f) {
+                float q[2];
+                stair_point(ra, u, P + ws * dd, q);
+                if (donor_air(g, q[0], q[1], s->lo[2] + h))
+                    return;                     /* thinner than the slot is deep: a room behind */
+            }
+    }
+    const float back = P + ws * deepest;
+    for (uint32_t i = 0; i < s->num_steps; i++) {
+        if (ws > 0.0f)
+            s->step_hi[i][wa] = back;
+        else
+            s->step_lo[i][wa] = back;
+    }
+    if (ws > 0.0f)
+        s->land_hi[wa] = s->hi[wa] = back;
+    else
+        s->land_lo[wa] = s->lo[wa] = back;
 }
 
 /* A pickup's spot on the landing: its box (32 x 32, from the landing up 56) all air in the donor, the nearest to the
@@ -21284,22 +21352,34 @@ static void deal_stairways(mapgen_geometry_edit_plan_t *plan, const mapgen_geome
                     for (float H = STAIR_H_MAX; H >= STAIR_H_MIN - 0.5f && !ok; H -= STAIR_RISE)
                         for (int w = 0; w < 2 && !ok; w++) {
                             const float W = w ? 64.0f : 96.0f;
-                            const float steps = H / STAIR_RISE - 1.0f;
-                            const float end = c + rs * (steps * STAIR_TREAD + W + STAIR_LAND_EXTRA);
-                            bool ledge = false;
-                            for (float k = 8.0f; k <= STAIR_LEDGE_REACH + 0.5f && !ledge; k += 8.0f) {
-                                float q[2];
-                                stair_point(ra, end + rs * k, P - ws * 0.5f * W, q);
-                                ledge = span_floor_at(ground, q[0], q[1], z + H, NULL);
+                            /* brief 12 L5: the walkway's edge along the wall's own line first, then the start
+                               that brings the landing's end to it - the start found nearest c moved the landing off
+                               the walkway the probe had found past c's end (a ledge never met on five donors) */
+                            const float length = (H / STAIR_RISE - 1.0f) * STAIR_TREAD + W + STAIR_LAND_EXTRA;
+                            for (int j = -STAIR_SCAN + 1; j <= STAIR_SCAN && !ok; j++) {
+                                float q[2], prev[2];
+                                stair_point(ra, c + 16.0f * (float)j, P - ws * 0.5f * W, q);
+                                stair_point(ra, c + 16.0f * (float)j - rs * 16.0f, P - ws * 0.5f * W, prev);
+                                if (!span_floor_at(ground, q[0], q[1], z + H, NULL)
+                                    || span_floor_at(ground, prev[0], prev[1], z + H, NULL))
+                                    continue;           /* not the walkway's edge facing the stairway */
+                                t.ledge_seen++;
+                                for (float k = 16.0f; k <= STAIR_LEDGE_REACH + 0.5f && !ok; k += 16.0f) {
+                                    const float start = c + 16.0f * (float)j - rs * (k + length);
+                                    const int j0 = (int)floorf((start - c) / 16.0f + 0.5f);
+                                    if (j0 < -STAIR_SCAN || j0 > STAIR_SCAN)
+                                        continue;
+                                    if (stair_site(&run[w], ra, rs, P, ws, c, z, W, H, j0, &s, &t))
+                                        ok = stair_ledge(ground, ra, rs, &s);
+                                }
                             }
-                            if (ledge && stair_site(&run[w], ra, rs, P, ws, c, z, W, H, &s, &t))
-                                ok = stair_ledge(ground, ra, rs, &s);
                         }
                     for (float H = H0; H >= STAIR_H_MIN - 0.5f && !ok; H -= STAIR_RISE)
                         for (int w = 0; w < 2 && !ok; w++)
-                            ok = stair_site(&run[w], ra, rs, P, ws, c, z, w ? 64.0f : 96.0f, H, &s, &t);
+                            ok = stair_site(&run[w], ra, rs, P, ws, c, z, w ? 64.0f : 96.0f, H, INT32_MAX, &s, &t);
                     if (!ok)
                         continue;
+                    stair_back(ground, ra, ws, P, &s);
                     /* nothing near it a player meets, no pad's flight, no edit of the plan */
                     bool kept = false;
                     for (uint32_t i = 0; i < keep.num_entities && !kept; i++)
@@ -21478,8 +21558,8 @@ static void deal_stairways(mapgen_geometry_edit_plan_t *plan, const mapgen_geome
                        (double)s->move_from[0], (double)s->move_from[1], (double)s->move_from[2],
                        (double)s->move_to[0], (double)s->move_to[1], (double)s->move_to[2]);
         }
-    refuse(plan, "stairways: %u dealt of %u wanted (%u on a ledge, %u holding a pickup); %u sites of %u looked at",
-           t.dealt, want, t.ledges, t.pickups, num_cand, t.looked);
+    refuse(plan, "stairways: %u dealt of %u wanted (%u on a ledge, %u holding a pickup); %u sites of %u looked at;"
+           " %u walkway edges met", t.dealt, want, t.ledges, t.pickups, num_cand, t.looked, t.ledge_seen);
     refuse(plan, "stairways refused (walls): %u no wall near, %u not straight, %u open behind, %u floor not flat, %u wet,"
                  " %u too low", t.no_wall, t.crooked, t.open_wall, t.floor, t.wet, t.low);
     refuse(plan, "stairways refused (sites): %u no lane, %u an entity near, %u a pad's flight, %u an edit of the plan,"
@@ -29464,8 +29544,14 @@ static bool build_reliquid(mapgen_geometry_t *candidate, const reliquid_t *rq)
  * and pickups. Run once on the finished map (after the transaction, before the light), from its own substream.
  *
  * The ladder (Fable's table), each kind from its D on, in a share growing with D:
- *   1 cracks     a share D/100 of the drawn wall, floor and ceiling faces wear a CRACKED copy of their own texture
- *  10 rubble     piles of 2..5 debris pieces (boxes and tilted wedges, 16..48) on floors by walls
+ *   1 cracks     a share 0.35 D/100 (never over 0.40) of the drawn faces wear a CRACKED copy of their own texture -
+ *                a seamless crack network, one of six, the faces near what was hit first (brief 12: a hole or a blob
+ *                drawn into a tiled copy repeats at the texture's period - «механически», the PO's quake206..211)
+ *  10 patches    a hole's or a burn's picture placed ONCE on a wall, a floor or a ceiling: a thin detail plate 1 off the
+ *                face wearing that face's own texture with the picture drawn in, aligned to the face's own mapping so
+ *                the face goes on unbroken round it; beside breaches, under collapses, by craters, then by seed
+ *  10 rubble     piles of 2..4 chunks (irregular: a box cut by 2..3 planes, turned, sunk, 12..40, all sizes apart)
+ *                wearing what broke - the floor's or the wall's own texture, dusted - by walls, carves and falls
  *  20 craters    octagonal holes in floors, 64..192 across, 16..48 deep, ground of the pack in the bottom
  *  35 breaches   through a wall 8..64 thick to the room behind (jagged), or a gouge into a thick wall to the rock
  *  50 broken     a chunk off a ledge's or a step's edge, rubble under it
@@ -29491,12 +29577,22 @@ static uint32_t g_destroy_skip;     /* a guard's seam: kinds left out, by bit */
 #define DESTROY_MAX_PACK    1024u
 #define DESTROY_MAX_NEEDS   4096u
 
+/* a pack picture whose grain runs one way (slats, planks, panels) is never rock, ground or debris (brief 12: the
+   PO's slatted panel, called stone, dressed the debris in stripes - quake212..214); metal's ribs may stay on a cut */
+#define DESTROY_DIRECTIONAL 0.60f
+
 typedef struct {
     char  name[MAPGEN_BSP_TEXNAME + 1];
     char  material[16];
     char  variant[8];
     float rgb[3];
+    float coherence;
 } destroy_tex_t;
+
+typedef struct {
+    float at[3];        /* a point of the face's plane */
+    int   kind;         /* 0..3 a wall met going DX/DY[kind], 4 a floor, 5 a ceiling */
+} destroy_seed_t;
 
 typedef struct {
     const mapgen_bsp_t *b;
@@ -29515,7 +29611,15 @@ typedef struct {
     char needs_new[DESTROY_MAX_NEEDS][MAPGEN_BSP_TEXNAME + 1];
     char needs_old[DESTROY_MAX_NEEDS][MAPGEN_BSP_TEXNAME + 1];
     char needs_mask[DESTROY_MAX_NEEDS][16];
+    uint8_t needs_rep[DESTROY_MAX_NEEDS];   /* the copy is the original tiled rep x rep (a patch's picture) */
     uint32_t num_needs;
+    float patches[512][3];         /* every patch's middle: two never within DESTROY_PATCH_GAP */
+    uint32_t num_patches;
+    uint32_t no_crack[2048];       /* the faces a patch stands on: not cracked under it */
+    uint32_t num_no_crack;
+    destroy_seed_t seeds[256];     /* where the ruin happened: the patches go there first */
+    uint32_t num_seeds;
+    uint32_t built_before_rubble;  /* the carves' and the falls' boxes: rubble lies by them */
     float built[4096][6];          /* what this pass built or carved, for the keep-outs of later kinds */
     uint32_t sides_cap;            /* the brush sides this kind may grow the map to (its share of the budget) */
     uint32_t num_built;
@@ -29650,6 +29754,8 @@ static const char *destroy_pick(destroy_t *d, const char *const *materials, cons
         const destroy_tex_t *t = &d->pack[i];
         if (strcmp(t->variant, variant))
             continue;
+        if (t->coherence >= DESTROY_DIRECTIONAL && strcmp(t->material, "metal"))
+            continue;
         bool mat = false;
         for (const char *const *m = materials; *m && !mat; m++)
             mat = !strcmp(t->material, *m);
@@ -29724,12 +29830,13 @@ static uint32_t destroy_dress(destroy_t *d, const float lo[3], const float hi[3]
     return n;
 }
 
-/* A cracked copy of a texture of the map: its name in the pack's crack folder (mgd/xxxxxxxx, 12 characters - a
-   texture name holds 31), recorded once for the tool that draws it. */
-static const char *destroy_cracked(destroy_t *d, const char *orig, const char *mask)
+/* A copy of a texture of the map with a mask drawn in: its name in the pack's crack folder (mgd/xxxxxxxx, 12
+   characters - a texture name holds 31), recorded once for the drawing. `rep` > 1: the original tiled rep x rep and
+   the mask drawn once over the whole (a placed patch's picture, brief 12). */
+static const char *destroy_copy(destroy_t *d, const char *orig, const char *mask, uint32_t rep)
 {
     for (uint32_t i = 0; i < d->num_needs; i++)
-        if (!strcmp(d->needs_old[i], orig) && !strcmp(d->needs_mask[i], mask))
+        if (!strcmp(d->needs_old[i], orig) && !strcmp(d->needs_mask[i], mask) && d->needs_rep[i] == rep)
             return d->needs_new[i];
     if (d->num_needs >= DESTROY_MAX_NEEDS)
         return NULL;
@@ -29738,10 +29845,110 @@ static const char *destroy_cracked(destroy_t *d, const char *orig, const char *m
         h = (h ^ (uint8_t)*p) * 0x100000001B3ull;
     for (const char *p = mask; *p; p++)
         h = (h ^ (uint8_t)*p) * 0x100000001B3ull;
+    if (rep > 1u)
+        h = (h ^ (0x80u + rep)) * 0x100000001B3ull;
     snprintf(d->needs_new[d->num_needs], sizeof(d->needs_new[0]), "mgd/%08x", (unsigned)(h ^ (h >> 32)));
     snprintf(d->needs_old[d->num_needs], sizeof(d->needs_old[0]), "%s", orig);
     snprintf(d->needs_mask[d->num_needs], sizeof(d->needs_mask[0]), "%s", mask);
+    d->needs_rep[d->num_needs] = (uint8_t)rep;
     return d->needs_new[d->num_needs++];
+}
+
+static const char *destroy_cracked(destroy_t *d, const char *orig, const char *mask)
+{
+    return destroy_copy(d, orig, mask, 1u);
+}
+
+/* The map's own texture a copy was made from (a name not a copy is its own). */
+static const char *destroy_original(const destroy_t *d, const char *name)
+{
+    for (uint32_t i = 0; i < d->num_needs; i++)
+        if (!strcmp(d->needs_new[i], name))
+            return d->needs_old[i];
+    return name;
+}
+
+/* The flags a texture is drawn with in this map (its first drawn side's), -1 when no side wears it. */
+static int32_t destroy_texture_flags(const destroy_t *d, const char *name)
+{
+    for (uint32_t b = 0; b < MapGenGeometry_NumBrushes(d->g); b++) {
+        const mapgen_geometry_brush_t *br = MapGenGeometry_Brush(d->g, b);
+        if (!br || br->model || !(br->contents & CONTENTS_SOLID_BIT))
+            continue;
+        for (uint32_t s = 0; s < br->num_sides; s++) {
+            const mapgen_geometry_side_t *sd = MapGenGeometry_Side(d->g, br->first_side + s);
+            if (sd && !sd->bevel && !strcmp(sd->texture, name))
+                return sd->flags;
+        }
+    }
+    return -1;
+}
+
+/* A texture's size in texels, from its .wal in the game (loose or in a pak). */
+static bool destroy_texture_size(const char *name, uint32_t *w, uint32_t *h)
+{
+    static struct { char name[MAPGEN_BSP_TEXNAME + 1]; uint32_t w, h; } cache[512];
+    static uint32_t cached;
+    for (uint32_t i = 0; i < cached; i++)
+        if (!strcmp(cache[i].name, name)) {
+            *w = cache[i].w;
+            *h = cache[i].h;
+            return *w && *h;
+        }
+    char file[MAPGEN_BSP_TEXNAME + 32];
+    snprintf(file, sizeof(file), "textures/%s.wal", name);
+    size_t n = 0;
+    uint8_t *wal = game_file(file, &n);
+    uint32_t ww = 0, hh = 0;
+    if (wal && n >= 100u) {
+        memcpy(&ww, wal + 32, 4);
+        memcpy(&hh, wal + 36, 4);
+        if (ww > 1024u || hh > 1024u)
+            ww = hh = 0;
+    }
+    free(wal);
+    if (cached < 512u) {
+        snprintf(cache[cached].name, sizeof(cache[cached].name), "%s", name);
+        cache[cached].w = ww;
+        cache[cached].h = hh;
+        cached++;
+    }
+    *w = ww;
+    *h = hh;
+    return ww && hh;
+}
+
+/* Debris and a fallen piece wear what broke: the map's own texture, dusted (a fine, tiling grime - one copy a
+   texture). NULL when that texture is no material, or a lamp, the sky, a liquid. */
+static const char *destroy_dust_of(destroy_t *d, const char *tex)
+{
+    char orig[MAPGEN_BSP_TEXNAME + 1];
+    snprintf(orig, sizeof(orig), "%s", destroy_original(d, tex ? tex : ""));
+    if (!orig[0] || !MapGenGeometry_TextureIsMaterial(orig))
+        return NULL;
+    const int32_t flags = destroy_texture_flags(d, orig);
+    if (flags >= 0 && (flags & SURF_SPECIAL))
+        return NULL;
+    uint32_t h = 2166136261u;
+    for (const char *p = orig; *p; p++)
+        h = (h ^ (uint8_t)*p) * 16777619u;
+    char mask[8];
+    snprintf(mask, sizeof(mask), "dust%u", 1u + h % 3u);
+    return destroy_cracked(d, orig, mask);
+}
+
+/* The debris at a floor spot: the floor's own (up +1) or the nearest wall's (up 0), dusted; a pack rock of its
+   colour only where the map's own is a lamp, the sky or a liquid. */
+static const char *destroy_debris_tex(destroy_t *d, const float at[3], int up)
+{
+    float rgb[3];
+    char own[MAPGEN_BSP_TEXNAME + 1];
+    snprintf(own, sizeof(own), "%s", destroy_face_texture(d, at, up, rgb));
+    const char *t = destroy_dust_of(d, own);
+    if (t)
+        return t;
+    t = destroy_pick(d, DESTROY_RUBBLE, rgb, "dk");
+    return t ? t : destroy_pick(d, DESTROY_RUBBLE, rgb, "base");
 }
 
 /* A floor spot of a room: a random point of its box, the first floor under its top with STAND_HIGH of air. */
@@ -29842,31 +30049,145 @@ static bool destroy_piece(destroy_t *d, const float lo[3], const float hi[3], co
     return MapGenGeometry_AddBrush(d->g, sides, 6, CONTENTS_SOLID_BIT | DESTROY_DETAIL_BIT, 0) == MAPGEN_GEOMETRY_OK;
 }
 
-/* A pile of 2..5 pieces round (x, y) on the floor z, under STEP_HIGH most of them. */
-static bool destroy_pile(destroy_t *d, float x, float y, float z, const float rgb[3], bool metal)
+/* Liquid in or within `grow` of a box (every 8 over it): nothing is built there - a solid standing in a pool's
+   surface makes a wall of water round it (brief 12: q2dm1 at 100, a crater's rim piece at the edge of a pool). */
+static bool destroy_wet(destroy_t *d, const float lo[3], const float hi[3], float grow)
 {
-    const char *tex = destroy_pick(d, metal ? DESTROY_METAL : DESTROY_RUBBLE, rgb,
-                                   destroy_rand(d) < 0.5f ? "dk" : "base");
-    if (!tex)
-        tex = destroy_pick(d, DESTROY_RUBBLE, rgb, "base");
-    const int n = 2 + (int)(destroy_rand(d) * 4.0f);
-    float plo[3] = { x - 56, y - 56, z }, phi[3] = { x + 56, y + 56, z + 40 };
-    if (!destroy_clear(d, plo, phi, DESTROY_STARTS_KEEP, true))
+    for (float x = lo[0] - grow; x <= hi[0] + grow + 0.1f; x += 8.0f)
+        for (float y = lo[1] - grow; y <= hi[1] + grow + 0.1f; y += 8.0f)
+            for (float z = lo[2] - grow; z <= hi[2] + grow + 0.1f; z += 8.0f) {
+                const float p[3] = { x, y, z };
+                if (MapGenBsp_PointContents(d->b, p) & CONTENTS_LIQUID_BITS)
+                    return true;
+            }
+    return false;
+}
+
+/*
+ * One chunk of debris (brief 12 D7 - «бруски» no more): a box a x b (half sizes) turned about z by a seeded multiple
+ * of 15 degrees, `hgt` over the floor z and sunk `sink` into it, two or three of its top corners cut off by planes
+ * tilted 30..65 degrees - an irregular broken piece, 8 or 9 sides, a detail brush.
+ */
+static bool destroy_chunk(destroy_t *d, const float c[3], float a, float b, float hgt, float sink, const char *tex)
+{
+    if (MapGenGeometry_NumSides(d->g) > d->sides_cap) {
+        d->rep->budget++;
         return false;
+    }
+    const float r = fmaxf(a, b) * 1.42f;
+    const float wlo[3] = { c[0] - r, c[1] - r, c[2] - sink }, whi[3] = { c[0] + r, c[1] + r, c[2] + hgt };
+    if (destroy_wet(d, wlo, whi, 8.0f))
+        return false;
+    mapgen_geometry_side_t skin;
+    if (!tex || !dig_skin(d->g, tex, &skin))
+        return false;
+    const float yaw = 0.2617994f * floorf(destroy_rand(d) * 24.0f);
+    const float cy = cosf(yaw), sy = sinf(yaw);
+    mapgen_geometry_side_t sides[9];
+    int n = 0;
+    plane(&sides[n++], &skin, 0.0f, 0.0f, -1.0f, -(c[2] - sink));
+    plane(&sides[n++], &skin, 0.0f, 0.0f, 1.0f, c[2] + hgt);
+    for (int k = 0; k < 4; k++) {
+        const float ang = yaw + (float)k * 1.5707963f;
+        const float nx = cosf(ang), ny = sinf(ang), half = (k & 1) ? b : a;
+        plane(&sides[n++], &skin, nx, ny, 0.0f, nx * c[0] + ny * c[1] + half);
+    }
+    const int cuts = 2 + (destroy_rand(d) < 0.5f ? 1 : 0);
+    const int first = (int)(destroy_rand(d) * 4.0f) & 3;
+    for (int i = 0; i < cuts; i++) {
+        const int k = (first + i) & 3;
+        const float lx = (k & 1) ? a : -a, ly = (k & 2) ? b : -b;
+        const float px = c[0] + lx * cy - ly * sy, py = c[1] + lx * sy + ly * cy, pz = c[2] + hgt;
+        float hx = px - c[0], hy = py - c[1];
+        const float hl = sqrtf(hx * hx + hy * hy);
+        if (hl < 1e-3f)
+            continue;
+        hx /= hl;
+        hy /= hl;
+        const float tilt = destroy_between(d, 0.52f, 1.13f);
+        const float nx = hx * sinf(tilt), ny = hy * sinf(tilt), nz = cosf(tilt);
+        const float depth = destroy_between(d, 0.3f, 0.6f) * fminf(fminf(a, b), hgt);
+        plane(&sides[n++], &skin, nx, ny, nz, nx * px + ny * py + nz * pz - depth);
+    }
+    /* detail: debris splits no visibility portal (300 pieces of rubble as structure took q2dm1's vis from minutes to
+       past half an hour) and, standing in the map's air, seals nothing either way */
+    return MapGenGeometry_AddBrush(d->g, sides, (uint32_t)n, CONTENTS_SOLID_BIT | DESTROY_DETAIL_BIT, 0)
+        == MAPGEN_GEOMETRY_OK;
+}
+
+/* A floor within 96 of (x, y, z) 10..44 higher or lower: steps - a stairway's or the map's own. No pile there. */
+static bool destroy_on_steps(destroy_t *d, float x, float y, float z)
+{
+    for (int i = 0; i < 12; i++) {
+        const float ang = (float)i * 0.5235988f;
+        for (float r = 24.0f; r <= 96.0f; r += 12.0f) {
+            const float px = x + r * cosf(ang), py = y + r * sinf(ang);
+            if (!donor_air(d->b, px, py, z + 48.0f))
+                break;                                  /* a wall: no step that way */
+            const float df = fabsf(donor_floor(d->b, px, py, z + 48.0f, 96.0f) - z);
+            if (df >= 10.0f && df <= 44.0f)
+                return true;
+        }
+    }
+    return false;
+}
+
+/*
+ * A pile round (x, y) on the floor z (brief 12 D7, D8): 2..4 chunks of sizes apart (12..40, no two within 4), the
+ * biggest nearest the wall it fell from (`wall_dir` 0..3, -1 none), the rest spread 12..48 round it; flat ones
+ * (6..16 high) but for the biggest, one time in three up to 28. Never on steps, never near a start or a pickup.
+ */
+static bool destroy_pile(destroy_t *d, float x, float y, float z, const char *tex, int wall_dir)
+{
+    static const float DX[4] = { 1, -1, 0, 0 }, DY[4] = { 0, 0, 1, -1 };
+    if (!tex)
+        return false;
+    /* the pile's middle clear of the pass's own work; each piece, below, clear of every start and pickup (one box
+       round the whole pile took q3t2's few free floors for its pickups' - 9 piles on it at 100) */
+    float plo[3] = { x - 24, y - 24, z }, phi[3] = { x + 24, y + 24, z + 40 };
+    if (!destroy_clear(d, plo, phi, DESTROY_STARTS_KEEP, true) || destroy_on_steps(d, x, y, z))
+        return false;
+    const int n = 2 + (int)(destroy_rand(d) * 3.0f);
+    float size[4];
+    for (int i = 0; i < n; i++) {
+        size[i] = destroy_between(d, 12.0f, 40.0f);
+        for (int tries = 0; tries < 16; tries++) {
+            bool apart = true;
+            for (int j = 0; j < i && apart; j++)
+                apart = fabsf(size[i] - size[j]) >= 4.0f;
+            if (apart)
+                break;
+            size[i] = destroy_between(d, 12.0f, 40.0f);
+        }
+    }
+    for (int i = 0; i < n; i++)                     /* the biggest first */
+        for (int j = i + 1; j < n; j++)
+            if (size[j] > size[i]) {
+                const float s = size[i];
+                size[i] = size[j];
+                size[j] = s;
+            }
     int made = 0;
     for (int i = 0; i < n; i++) {
-        const float s = destroy_between(d, 16.0f, 48.0f);
-        const float hgt = i == 0 && destroy_rand(d) < 0.4f ? destroy_between(d, 20.0f, 36.0f)
-                                                             : destroy_between(d, 8.0f, 16.0f);
-        const float cx = x + destroy_between(d, -32.0f, 32.0f), cy = y + destroy_between(d, -32.0f, 32.0f);
-        const float lo[3] = { floorf(cx - s / 2), floorf(cy - s * 0.4f), z - 4.0f };
-        const float hi[3] = { lo[0] + floorf(s), lo[1] + floorf(s * 0.8f) + 1, z + floorf(hgt) };
-        /* on the floor, in the room's air */
-        if (!donor_air(d->b, 0.5f * (lo[0] + hi[0]), 0.5f * (lo[1] + hi[1]), z + 4.0f)
-            || fabsf(donor_floor(d->b, 0.5f * (lo[0] + hi[0]), 0.5f * (lo[1] + hi[1]), z + 16.0f, 40.0f) - z) > 8.0f)
+        const float r = i == 0 ? destroy_between(d, 0.0f, 12.0f) : destroy_between(d, 12.0f, 48.0f);
+        const float ang = i == 0 && wall_dir >= 0 ? atan2f(DY[wall_dir], DX[wall_dir])
+                        : destroy_between(d, 0.0f, 6.2831853f);
+        const float c[3] = { x + r * cosf(ang), y + r * sinf(ang), z };
+        if (!donor_air(d->b, c[0], c[1], z + 4.0f) || fabsf(donor_floor(d->b, c[0], c[1], z + 16.0f, 40.0f) - z) > 6.0f)
             continue;
-        if (destroy_piece(d, lo, hi, tex, destroy_rand(d) < 0.5f))
+        const float a = size[i] * 0.5f, b = size[i] * 0.5f * destroy_between(d, 0.6f, 1.0f);
+        const float hgt = fminf(size[i], i == 0 && destroy_rand(d) < 0.34f ? destroy_between(d, 16.0f, 28.0f)
+                                                                            : destroy_between(d, 6.0f, 16.0f));
+        const float clo[3] = { c[0] - a - 2.0f, c[1] - a - 2.0f, z }, chi[3] = { c[0] + a + 2.0f, c[1] + a + 2.0f, z + hgt };
+        if (!destroy_clear(d, clo, chi, DESTROY_STARTS_KEEP, false))
+            continue;
+        if (destroy_chunk(d, c, a, b, hgt, destroy_between(d, 2.0f, 6.0f), tex)) {
             made++;
+            for (int e = 0; e < 3; e++) {
+                plo[e] = fminf(plo[e], clo[e]);
+                phi[e] = fmaxf(phi[e], chi[e]);
+            }
+        }
     }
     if (made)
         destroy_mark(d, plo, phi);
@@ -29895,10 +30216,27 @@ static bool destroy_carve(destroy_t *d, const float lo[3], const float hi[3], fl
     return true;
 }
 
+/*
+ * The cracks (brief 12 D1..D3): a share 0.35 D/100 of the drawn material faces, never over 0.40, each wearing its own
+ * texture with one of six seamless crack networks drawn in - never a hole, a blob or a picture, which a tiled copy
+ * repeats at its period (quake206..211: the same hole four times up one wall, a grid of blobs over a floor). The
+ * faces within 256 of what the ruin carved or built first, the rest by seed; two faces of one texture within 384 not
+ * the same network; no face a start sees within 64, none a patch stands on.
+ */
+#define DESTROY_CRACK_SHARE 0.35f
+#define DESTROY_CRACK_CAP   0.40f
 static void destroy_cracks(destroy_t *d)
 {
-    const float share = d->percent >= 100 ? 0.95f : (float)d->percent / 100.0f;
-    static const char *const MASKS[] = { "crack1", "crack2", "crack3", "hole1", "hole2", "po01", "po03", "po05" };
+    static const char *const MASKS[6] = { "crack1", "crack2", "crack3", "crack4", "crack5", "crack6" };
+    const uint32_t total = MapGenGeometry_NumSides(d->g);
+    uint32_t *cand = malloc((size_t)(total ? total : 1u) * sizeof(*cand));
+    uint8_t *hit = malloc((size_t)(total ? total : 1u));
+    if (!cand || !hit) {
+        free(cand);
+        free(hit);
+        return;
+    }
+    uint32_t nc = 0;
     for (uint32_t b = 0; b < MapGenGeometry_NumBrushes(d->g); b++) {
         const mapgen_geometry_brush_t *br = MapGenGeometry_Brush(d->g, b);
         if (!br || br->model || !(br->contents & CONTENTS_SOLID_BIT))
@@ -29910,40 +30248,329 @@ static void destroy_cracks(destroy_t *d)
                 || !MapGenGeometry_TextureIsMaterial(sd->texture) || !strncmp(sd->texture, "mgd/", 4)
                 || !strncmp(sd->texture, "mapgen/", 7))
                 continue;
-            if (destroy_rand(d) >= share)
-                continue;
+            bool skip = false;
+            for (uint32_t i = 0; i < d->num_no_crack && !skip; i++)
+                skip = d->no_crack[i] == si;
             /* a face near a start keeps its texture: a start sees nothing of the ruin within its keep */
-            bool near = false;
-            for (uint32_t i = 0; i < d->num_starts && !near; i++)
-                near = fabsf(sd->center[0] - d->starts[i][0]) < 64.0f && fabsf(sd->center[1] - d->starts[i][1]) < 64.0f
+            for (uint32_t i = 0; i < d->num_starts && !skip; i++)
+                skip = fabsf(sd->center[0] - d->starts[i][0]) < 64.0f && fabsf(sd->center[1] - d->starts[i][1]) < 64.0f
                     && fabsf(sd->center[2] - d->starts[i][2]) < 64.0f;
-            if (near)
+            if (skip)
                 continue;
-            const uint32_t pick = (uint32_t)(destroy_rand(d) * (float)(sizeof(MASKS) / sizeof(MASKS[0])));
-            const char *mask = MASKS[pick < sizeof(MASKS) / sizeof(MASKS[0]) ? pick : 0];
-            char orig[MAPGEN_BSP_TEXNAME + 1];
-            snprintf(orig, sizeof(orig), "%s", sd->texture);
-            const char *tex = destroy_cracked(d, orig, mask);
-            if (tex && MapGenGeometry_RetextureSide(d->g, si, tex, sd->flags, sd->value) == MAPGEN_GEOMETRY_OK)
-                d->rep->cracks++;
+            bool near = false;
+            for (uint32_t i = 0; i < d->num_built && !near; i++)
+                near = span_boxes_meet(sd->center, sd->center, d->built[i], d->built[i] + 3, 256.0f);
+            hit[nc] = near;
+            cand[nc++] = si;
         }
+    }
+    /* seeded order, the hit faces first */
+    for (uint32_t i = nc; i > 1; i--) {
+        const uint32_t j = (uint32_t)(mix(&d->stream) % i);
+        const uint32_t c = cand[i - 1];
+        const uint8_t h = hit[i - 1];
+        cand[i - 1] = cand[j];
+        hit[i - 1] = hit[j];
+        cand[j] = c;
+        hit[j] = h;
+    }
+    uint32_t front = 0;
+    for (uint32_t i = 0; i < nc; i++)
+        if (hit[i]) {
+            const uint32_t c = cand[front];
+            const uint8_t h = hit[front];
+            cand[front] = cand[i];
+            hit[front] = hit[i];
+            cand[i] = c;
+            hit[i] = h;
+            front++;
+        }
+    const float share = fminf(DESTROY_CRACK_CAP, DESTROY_CRACK_SHARE * (float)d->percent / 100.0f);
+    const uint32_t want = (uint32_t)(share * (float)nc + 0.5f);
+    struct { float c[3]; char orig[MAPGEN_BSP_TEXNAME + 1]; int k; } recent[64];
+    uint32_t nrecent = 0;
+    for (uint32_t i = 0; i < nc && d->rep->cracks < want; i++) {
+        const mapgen_geometry_side_t *sd = MapGenGeometry_Side(d->g, cand[i]);
+        if (!sd)
+            continue;
+        char orig[MAPGEN_BSP_TEXNAME + 1];
+        snprintf(orig, sizeof(orig), "%s", sd->texture);
+        float c[3] = { sd->center[0], sd->center[1], sd->center[2] };
+        int k = (int)(destroy_rand(d) * 6.0f) % 6;
+        for (int tries = 0; tries < 6; tries++) {
+            bool same = false;
+            for (uint32_t r = 0; r < (nrecent < 64u ? nrecent : 64u) && !same; r++)
+                same = recent[r].k == k && !strcmp(recent[r].orig, orig)
+                    && fabsf(recent[r].c[0] - c[0]) < 384.0f && fabsf(recent[r].c[1] - c[1]) < 384.0f
+                    && fabsf(recent[r].c[2] - c[2]) < 384.0f;
+            if (!same)
+                break;
+            k = (k + 1) % 6;
+        }
+        const char *tex = destroy_cracked(d, orig, MASKS[k]);
+        if (tex && MapGenGeometry_RetextureSide(d->g, cand[i], tex, sd->flags, sd->value) == MAPGEN_GEOMETRY_OK) {
+            d->rep->cracks++;
+            const uint32_t r = nrecent++ % 64u;
+            memcpy(recent[r].c, c, sizeof(c));
+            snprintf(recent[r].orig, sizeof(recent[r].orig), "%s", orig);
+            recent[r].k = k;
+        }
+    }
+    free(cand);
+    free(hit);
+}
+
+/* The exact plane of the map's face met going from p along axis ax, way sg: the first solid of the half-unit points
+   from p, the face the whole unit before it. NAN when none within reach. */
+static float destroy_face_at(destroy_t *d, const float p[3], int ax, float sg, float reach)
+{
+    float q[3] = { p[0], p[1], p[2] };
+    const float start = floorf(p[ax]) + 0.5f;
+    for (float t = 0.0f; t <= reach; t += 1.0f) {
+        q[ax] = start + sg * t;
+        if (!donor_air(d->b, q[0], q[1], q[2]))
+            return sg > 0.0f ? q[ax] - 0.5f : q[ax] + 0.5f;
+    }
+    return NAN;
+}
+
+static void destroy_seed(destroy_t *d, const float at[3], int kind)
+{
+    if (d->num_seeds < sizeof(d->seeds) / sizeof(d->seeds[0]) && isfinite(at[0]) && isfinite(at[1])
+        && isfinite(at[2])) {
+        memcpy(d->seeds[d->num_seeds].at, at, 3 * sizeof(float));
+        d->seeds[d->num_seeds++].kind = kind;
     }
 }
 
-static void destroy_rubble(destroy_t *d, uint32_t want)
+/* The drawn side of the world whose face lies on the plane (axis ax, facing nsg, at plane_at) under the point p:
+   a material face of the map's own (no copy, no pack texture, no lamp). UINT32_MAX when none. */
+static uint32_t destroy_face_side(destroy_t *d, int ax, float nsg, float plane_at, const float p[3])
 {
-    for (uint32_t tries = 0; tries < want * 12u && d->rep->rubble < want; tries++) {
+    for (uint32_t b = 0; b < MapGenGeometry_NumBrushes(d->g); b++) {
+        const mapgen_geometry_brush_t *br = MapGenGeometry_Brush(d->g, b);
+        if (!br || br->model || !(br->contents & CONTENTS_SOLID_BIT))
+            continue;
+        bool in = true;
+        for (int e = 0; e < 3 && in; e++)
+            in = e == ax ? (br->mins[e] <= plane_at + 0.6f && br->maxs[e] >= plane_at - 0.6f)
+                         : (p[e] >= br->mins[e] - 0.5f && p[e] <= br->maxs[e] + 0.5f);
+        if (!in || brush_has_sky(d->g, br))
+            continue;
+        for (uint32_t s = 0; s < br->num_sides; s++) {
+            const uint32_t si = br->first_side + s;
+            const mapgen_geometry_side_t *sd = MapGenGeometry_Side(d->g, si);
+            if (!sd || sd->bevel || sd->area <= 0.0f || sd->normal[ax] * nsg < 0.999f
+                || fabsf(sd->dist - nsg * plane_at) > 0.6f || (sd->flags & SURF_SPECIAL)
+                || !MapGenGeometry_TextureIsMaterial(sd->texture) || !strncmp(sd->texture, "mgd/", 4)
+                || !strncmp(sd->texture, "mapgen/", 7))
+                continue;
+            return si;
+        }
+    }
+    return UINT32_MAX;
+}
+
+/*
+ * A PATCH (brief 12 D4): a hole's or a burn's picture placed once on a face of the map - a detail plate 1 thick on
+ * the face, wearing the face's own texture tiled rep x rep (rep 1, 2 or 4: one picture 80..288 across) with the
+ * picture drawn once over it, laid on the face's OWN mapping and on one whole period of it - so round the picture
+ * the plate shows exactly the face it stands on, and the picture is never repeated. The face under it is not cracked.
+ * Refused off a flat stretch of the map's face, near a start or a pickup, within DESTROY_PATCH_GAP of another.
+ */
+#define DESTROY_PATCH_GAP 256.0f
+static bool destroy_patch(destroy_t *d, const float c[3], int ax, float nsg, float plane_at, const char *mask)
+{
+    if (MapGenGeometry_NumSides(d->g) > d->sides_cap) {
+        d->rep->budget++;
+        return false;
+    }
+    if (!isfinite(plane_at) || d->num_patches >= sizeof(d->patches) / sizeof(d->patches[0]))
+        return false;
+    const uint32_t si = destroy_face_side(d, ax, nsg, plane_at, c);
+    if (si == UINT32_MAX)
+        return false;
+    const mapgen_geometry_side_t wall = *MapGenGeometry_Side(d->g, si);
+    uint32_t tw = 0, th = 0;
+    if (!destroy_texture_size(wall.texture, &tw, &th))
+        return false;
+    /* each texture axis runs along one of the face's own two axes (a turned mapping is left alone) */
+    int ia[2] = { -1, -1 };
+    for (int k = 0; k < 2; k++) {
+        const float len = sqrtf(wall.axis[k][0] * wall.axis[k][0] + wall.axis[k][1] * wall.axis[k][1]
+                                + wall.axis[k][2] * wall.axis[k][2]);
+        if (len < 1e-6f)
+            return false;
+        for (int e = 0; e < 3; e++)
+            if (e != ax && fabsf(wall.axis[k][e]) > 0.9999f * len)
+                ia[k] = e;
+        if (ia[k] < 0)
+            return false;
+    }
+    if (ia[0] == ia[1])
+        return false;
+    /* the largest repeat whose period is 64..288 across and fits the map's face whole, then the smaller ones */
+    uint32_t rep = 0;
+    float lo[3], hi[3];
+    for (uint32_t r = 4u; r >= 1u && !rep; r /= 2u) {
+        if (r * tw > 1024u || r * th > 1024u)
+            continue;
+        bool fits = true;
+        for (int k = 0; k < 2 && fits; k++) {
+            const int e = ia[k];
+            const float a = wall.axis[k][e], off = wall.axis[k][3];
+            const float period = (float)(r * (k ? th : tw));
+            const float cell = floorf((a * c[e] + off) / period);
+            const float u0 = (cell * period - off) / a, u1 = ((cell + 1.0f) * period - off) / a;
+            lo[e] = fminf(u0, u1);
+            hi[e] = fmaxf(u0, u1);
+            fits = hi[e] - lo[e] >= 64.0f && hi[e] - lo[e] <= 288.0f;
+        }
+        if (!fits)
+            continue;
+        lo[ax] = nsg > 0.0f ? plane_at : plane_at - 1.0f;
+        hi[ax] = nsg > 0.0f ? plane_at + 1.0f : plane_at;
+        if (!destroy_clear(d, lo, hi, 64.0f, false) || destroy_wet(d, lo, hi, 8.0f))
+            continue;
+        for (uint32_t i = 0; i < d->num_patches && fits; i++) {
+            float dd = 0.0f;
+            for (int e = 0; e < 3; e++)
+                dd += (d->patches[i][e] - 0.5f * (lo[e] + hi[e])) * (d->patches[i][e] - 0.5f * (lo[e] + hi[e]));
+            fits = dd >= DESTROY_PATCH_GAP * DESTROY_PATCH_GAP;
+        }
+        if (!fits)
+            continue;
+        /* the whole plate on the map's face: air in front of every point of it, rock behind */
+        const int e0 = ia[0], e1 = ia[1];
+        const int n0 = (int)ceilf((hi[e0] - lo[e0] - 8.0f) / 16.0f), n1 = (int)ceilf((hi[e1] - lo[e1] - 8.0f) / 16.0f);
+        for (int i0 = 0; i0 <= n0 && fits; i0++)
+            for (int j0 = 0; j0 <= n1 && fits; j0++) {
+                float q[3];
+                q[e0] = lo[e0] + 4.0f + (hi[e0] - lo[e0] - 8.0f) * (float)i0 / (float)(n0 ? n0 : 1);
+                q[e1] = lo[e1] + 4.0f + (hi[e1] - lo[e1] - 8.0f) * (float)j0 / (float)(n1 ? n1 : 1);
+                q[ax] = plane_at + nsg * 4.0f;
+                fits = donor_air(d->b, q[0], q[1], q[2]) && destroy_map_air(d, q[0], q[1], q[2]);
+                q[ax] = plane_at - nsg * 4.0f;
+                fits = fits && !donor_air(d->b, q[0], q[1], q[2]);
+            }
+        if (fits)
+            rep = r;
+    }
+    if (!rep)
+        return false;
+    mapgen_geometry_side_t skin;
+    if (!dig_skin(d->g, wall.texture, &skin))
+        return false;
+    skin.flags = wall.flags;
+    skin.value = wall.value;
+    const char *tex = destroy_copy(d, wall.texture, mask, rep);
+    if (!tex)
+        return false;
+    mapgen_geometry_side_t sides[6];
+    for (int a = 0; a < 3; a++) {
+        float n[3] = { 0, 0, 0 };
+        n[a] = -1.0f;
+        plane(&sides[2 * a], &skin, n[0], n[1], n[2], -lo[a]);
+        n[a] = 1.0f;
+        plane(&sides[2 * a + 1], &skin, n[0], n[1], n[2], hi[a]);
+    }
+    mapgen_geometry_side_t *front = &sides[2 * ax + (nsg > 0.0f ? 1 : 0)];
+    memset(front->texture, 0, sizeof(front->texture));
+    snprintf(front->texture, sizeof(front->texture), "%s", tex);
+    memcpy(front->axis, wall.axis, sizeof(wall.axis));
+    if (MapGenGeometry_AddBrush(d->g, sides, 6, CONTENTS_SOLID_BIT | DESTROY_DETAIL_BIT, 0) != MAPGEN_GEOMETRY_OK)
+        return false;
+    if (d->num_no_crack < sizeof(d->no_crack) / sizeof(d->no_crack[0]))
+        d->no_crack[d->num_no_crack++] = si;
+    for (int e = 0; e < 3; e++)
+        d->patches[d->num_patches][e] = 0.5f * (lo[e] + hi[e]);
+    d->num_patches++;
+    d->rep->patches++;
+    return true;
+}
+
+/* The patches: where the ruin happened first (beside breaches, under falls, by craters), then on the map's long
+   blank walls by seed; `want` of them. Walls take the PO's crater pictures and soot, floors soot and craters seen
+   from above, ceilings soot and holes. */
+static void destroy_patches(destroy_t *d, uint32_t want)
+{
+    static const float DX[4] = { 1, -1, 0, 0 }, DY[4] = { 0, 0, 1, -1 };
+    static const char *const WALL[] = { "po01", "po02", "po03", "po04", "po05", "po06", "po07", "po08", "po09", "po10",
+                                        "po11", "soot1", "soot2", "soot3" };
+    static const char *const FLOOR[] = { "soot1", "soot2", "soot3", "po02", "po04", "po08" };
+    static const char *const CEIL[] = { "soot1", "soot2", "soot3", "po01", "po03" };
+#define DESTROY_ONE_OF(list) list[(uint32_t)(destroy_rand(d) * (float)(sizeof(list) / sizeof(list[0]))) \
+                                  % (uint32_t)(sizeof(list) / sizeof(list[0]))]
+    for (uint32_t i = 0; i < d->num_seeds && d->rep->patches < want; i++) {
+        const destroy_seed_t *s = &d->seeds[i];
+        if (s->kind < 4) {
+            const int ax = DX[s->kind] ? 0 : 1;
+            const float sg = DX[s->kind] ? DX[s->kind] : DY[s->kind];
+            destroy_patch(d, s->at, ax, -sg, s->at[ax], DESTROY_ONE_OF(WALL));
+        } else {
+            destroy_patch(d, s->at, 2, s->kind == 4 ? 1.0f : -1.0f, s->at[2],
+                          s->kind == 4 ? DESTROY_ONE_OF(FLOOR) : DESTROY_ONE_OF(CEIL));
+        }
+    }
+    for (uint32_t tries = 0; tries < want * 16u && d->rep->patches < want; tries++) {
         float at[3];
         int dir = 0;
         float dist = 0.0f;
-        /* by a wall below half; anywhere on a floor from half up - the debris of a level in ruins lies everywhere */
-        if (!destroy_floor_spot(d, at) || (d->percent < 50 && !destroy_wall(d, at, 96.0f, &dir, &dist)))
+        if (!destroy_floor_spot(d, at) || !destroy_wall(d, at, 256.0f, &dir, &dist))
             continue;
-        if (!destroy_flat(d, at[0], at[1], at[2], 40.0f, 8.0f))
+        const int ax = DX[dir] ? 0 : 1;
+        const float sg = DX[dir] ? DX[dir] : DY[dir];
+        float p[3] = { at[0], at[1], at[2] + destroy_between(d, 56.0f, 128.0f) };
+        const float face = destroy_face_at(d, p, ax, sg, dist + 64.0f);
+        if (!isfinite(face))
             continue;
-        float rgb[3];
-        const char *floor_tex = destroy_face_texture(d, at, 1, rgb);
-        if (destroy_pile(d, at[0], at[1], at[2], rgb, destroy_metal_name(floor_tex)))
+        p[ax] = face;
+        destroy_patch(d, p, ax, -sg, face, DESTROY_ONE_OF(WALL));
+    }
+#undef DESTROY_ONE_OF
+}
+
+/* The exact floor plane under (x, y) near z (a floor spot's z is the probe's, within 4). */
+static float destroy_floor_plane(destroy_t *d, float x, float y, float z)
+{
+    const float p[3] = { x, y, z + 8.0f };
+    return destroy_face_at(d, p, 2, -1.0f, 24.0f);
+}
+
+/* Rubble (brief 12 D8): piles where something fell - by a wall (its own texture, it fell from there) or by what the
+   ruin carved or dropped (the floor's) - never in the middle of an empty floor, never on steps. */
+static void destroy_rubble(destroy_t *d, uint32_t want)
+{
+    for (uint32_t tries = 0; tries < want * 16u && d->rep->rubble < want; tries++) {
+        float at[3];
+        int dir = -1;
+        float dist = 0.0f;
+        if (!destroy_floor_spot(d, at))
+            continue;
+        static const float DX[4] = { 1, -1, 0, 0 }, DY[4] = { 0, 0, 1, -1 };
+        const bool wall = destroy_wall(d, at, 96.0f, &dir, &dist);
+        bool near = false;
+        for (uint32_t i = 0; i < d->built_before_rubble && !near; i++)
+            near = span_boxes_meet(at, at, d->built[i], d->built[i] + 3, 96.0f);
+        if (!wall && !near)
+            continue;
+        bool flat = false;
+        if (wall) {
+            /* the pile's middle 28 off the wall it fell from (a flat ring round a spot by the wall is in the wall),
+               or further out past the wall's foot (q3t2's walls stand on curbs and plinths) */
+            const float from[2] = { at[0], at[1] };
+            for (float off = 28.0f; off <= 76.0f && !flat; off += 16.0f) {
+                at[0] = from[0] + DX[dir] * (dist - off);
+                at[1] = from[1] + DY[dir] * (dist - off);
+                flat = destroy_flat(d, at[0], at[1], at[2], 20.0f, 12.0f);
+            }
+        } else {
+            flat = destroy_flat(d, at[0], at[1], at[2], 20.0f, 12.0f);
+        }
+        if (!flat)
+            continue;
+        const char *tex = destroy_debris_tex(d, at, wall && destroy_rand(d) < 0.5f ? 0 : 1);
+        if (destroy_pile(d, at[0], at[1], at[2], tex, wall ? dir : -1))
             d->rep->rubble++;
     }
 }
@@ -29961,21 +30588,26 @@ static bool destroy_crater_patch(destroy_t *d, const float at[3], float r, const
         return false;
     }
     static const char *const MASKS[] = { "crater1", "crater2", "crater3", "po02", "po04", "po06", "po08" };
+    const float plo[3] = { at[0] - r - 24.0f, at[1] - r - 24.0f, at[2] - 2.0f },
+                phi[3] = { at[0] + r + 24.0f, at[1] + r + 24.0f, at[2] + 16.0f };
+    if (destroy_wet(d, plo, phi, 8.0f))
+        return false;
     const char *ground = destroy_pick(d, DESTROY_GROUND, rgb, "base");
     if (!ground)
         return false;
     const uint32_t k = (uint32_t)(destroy_rand(d) * 7.0f) % 7u;
     const char *tex = destroy_cracked(d, ground, MASKS[k]);
-    mapgen_geometry_side_t skin;
-    if (!tex || !dig_skin(d->g, tex, &skin))
+    mapgen_geometry_side_t skin, rim_skin;
+    if (!tex || !dig_skin(d->g, tex, &skin) || !dig_skin(d->g, ground, &rim_skin))
         return false;
     mapgen_geometry_side_t sides[10];
-    plane(&sides[0], &skin, 0, 0, -1.0f, -(at[2] - 1.0f));
+    plane(&sides[0], &rim_skin, 0, 0, -1.0f, -(at[2] - 1.0f));
     plane(&sides[1], &skin, 0, 0, 1.0f, at[2] + 2.0f);
+    /* its edges the plain ground: the picture once, on its top (brief 12) */
     for (int i = 0; i < 8; i++) {
         const float a = (float)i * 0.785398f + 0.3927f;
         const float nx = cosf(a), ny = sinf(a);
-        plane(&sides[2 + i], &skin, nx, ny, 0.0f, nx * at[0] + ny * at[1] + r);
+        plane(&sides[2 + i], &rim_skin, nx, ny, 0.0f, nx * at[0] + ny * at[1] + r);
     }
     /* the picture on the top: its 256 texels over the patch's width, its middle at the patch's middle */
     const float scale = 256.0f / (2.0f * r * 1.04f);
@@ -29997,9 +30629,12 @@ static bool destroy_crater_patch(destroy_t *d, const float at[3], float r, const
         const float cx = at[0] + rr * cosf(a), cy = at[1] + rr * sinf(a);
         const float lo[3] = { floorf(cx - s / 2), floorf(cy - s / 2), at[2] - 2.0f };
         const float hi[3] = { lo[0] + floorf(s), lo[1] + floorf(s), at[2] + floorf(destroy_between(d, 5.0f, 12.0f)) };
+        const float cc[3] = { cx, cy, at[2] };
+        (void)lo;
         if (donor_air(d->b, cx, cy, at[2] + 4.0f)
             && fabsf(donor_floor(d->b, cx, cy, at[2] + 16.0f, 40.0f) - at[2]) <= 8.0f)
-            destroy_piece(d, lo, hi, rim, true);
+            destroy_chunk(d, cc, s * 0.5f, s * 0.5f * destroy_between(d, 0.6f, 1.0f), hi[2] - at[2],
+                          destroy_between(d, 2.0f, 4.0f), rim);
     }
     return true;
 }
@@ -30080,11 +30715,19 @@ static void destroy_craters(destroy_t *d, uint32_t want)
                         continue;
                     char orig[MAPGEN_BSP_TEXNAME + 1];
                     snprintf(orig, sizeof(orig), "%s", sd->texture);
-                    const char *ct = destroy_cracked(d, orig, "crater1");
+                    /* a crack network (a crater's picture tiled round it was a stamp repeated: brief 12) */
+                    char net[8];
+                    snprintf(net, sizeof(net), "crack%u", 1u + (unsigned)(destroy_rand(d) * 6.0f) % 6u);
+                    const char *ct = destroy_cracked(d, orig, net);
                     if (ct)
                         MapGenGeometry_RetextureSide(d->g, si, ct, sd->flags, sd->value);
                 }
             }
+            /* a burn beside it */
+            const float ang = destroy_between(d, 0.0f, 6.2831853f);
+            const float bx = at[0] + (r + 72.0f) * cosf(ang), by = at[1] + (r + 72.0f) * sinf(ang);
+            const float burn[3] = { bx, by, destroy_floor_plane(d, bx, by, at[2]) };
+            destroy_seed(d, burn, 4);
         }
     }
 }
@@ -30120,7 +30763,8 @@ static void destroy_breaches(destroy_t *d, uint32_t want)
         lo[2] = base;
         hi[2] = base + H;
         float rgb[3];
-        const char *wall_tex = destroy_face_texture(d, at, 0, rgb);
+        char wall_tex[MAPGEN_BSP_TEXNAME + 1];
+        snprintf(wall_tex, sizeof(wall_tex), "%s", destroy_face_texture(d, at, 0, rgb));
         const bool metal = destroy_metal_name(wall_tex);
         const char *edge = destroy_pick(d, metal ? DESTROY_METAL : DESTROY_ROCK, rgb, "dk");
         bool through = false;
@@ -30163,11 +30807,19 @@ static void destroy_breaches(destroy_t *d, uint32_t want)
             bhi[2] = blo[2] + bh;
             destroy_carve(d, blo, bhi, NULL, NULL, 6, edge);
         }
-        /* rubble at its foot on this side */
+        /* rubble at its foot on this side: the wall's own, dusted */
         float foot[3] = { at[0], at[1], at[2] };
         foot[ax] = face - sg * 40.0f;
         foot[cr] = 0.5f * (lo[cr] + hi[cr]);
-        destroy_pile(d, foot[0], foot[1], at[2], rgb, metal);
+        const char *own = destroy_dust_of(d, wall_tex);
+        destroy_pile(d, foot[0], foot[1], at[2], own ? own : destroy_debris_tex(d, foot, 1), dir);
+        /* a hole's picture on the wall beside it */
+        float side[3] = { at[0], at[1], at[2] + destroy_between(d, 56.0f, 112.0f) };
+        side[cr] = destroy_rand(d) < 0.5f ? lo[cr] - destroy_between(d, 72.0f, 144.0f)
+                                          : hi[cr] + destroy_between(d, 72.0f, 144.0f);
+        const float plane_at = destroy_face_at(d, side, ax, sg, dist + 64.0f);
+        side[ax] = plane_at;
+        destroy_seed(d, side, dir);
     }
 }
 
@@ -30217,7 +30869,8 @@ static void destroy_edges(destroy_t *d, uint32_t want)
         if (!destroy_clear(d, lo, hi, DESTROY_STARTS_KEEP, true))
             continue;
         float rgb[3];
-        const char *ft = destroy_face_texture(d, at, 1, rgb);
+        char ft[MAPGEN_BSP_TEXNAME + 1];
+        snprintf(ft, sizeof(ft), "%s", destroy_face_texture(d, at, 1, rgb));
         const char *tex = destroy_pick(d, destroy_metal_name(ft) ? DESTROY_METAL : DESTROY_ROCK, rgb, "dk");
         if (!destroy_carve(d, lo, hi, NULL, NULL, 6, tex))
             continue;
@@ -30227,8 +30880,10 @@ static void destroy_edges(destroy_t *d, uint32_t want)
         below[ax] = e + sg * 40.0f;
         below[cr] = 0.5f * (lo[cr] + hi[cr]);
         const float fz = donor_floor(d->b, below[0], below[1], at[2] - 8.0f, 512.0f);
-        if (fz > at[2] - 500.0f)
-            destroy_pile(d, below[0], below[1], fz, rgb, destroy_metal_name(ft));
+        if (fz > at[2] - 500.0f) {
+            const char *own = destroy_dust_of(d, ft);
+            destroy_pile(d, below[0], below[1], fz, own ? own : destroy_debris_tex(d, below, 1), -1);
+        }
     }
 }
 
@@ -30240,6 +30895,20 @@ static void destroy_collapses(destroy_t *d, uint32_t want)
             continue;
         const float ceil_z = donor_ceiling(d->b, at[0], at[1], at[2] + 8.0f, 512.0f);
         if (ceil_z - at[2] < 128.0f || ceil_z - at[2] > 480.0f)
+            continue;
+        /* the ceiling is the map's rock, not its sky: brief 12 found falls under q2dm1's open courtyards */
+        bool sky = false;
+        for (int i = 0; i < 9 && !sky; i++) {
+            const float p[3] = { at[0] + (float)(i % 3 - 1) * 48.0f, at[1] + (float)(i / 3 - 1) * 48.0f, ceil_z + 4.0f };
+            for (uint32_t b = 0; b < MapGenGeometry_NumBrushes(d->g) && !sky; b++) {
+                const mapgen_geometry_brush_t *br = MapGenGeometry_Brush(d->g, b);
+                if (br && !br->model && p[0] >= br->mins[0] - 1 && p[0] <= br->maxs[0] + 1 && p[1] >= br->mins[1] - 1
+                    && p[1] <= br->maxs[1] + 1 && p[2] >= br->mins[2] - 1 && p[2] <= br->maxs[2] + 1)
+                    sky = brush_has_sky(d->g, br);
+            }
+            sky = sky || (MapGenBsp_PointContents(d->b, p) == 0 && !destroy_map_air(d, p[0], p[1], p[2]));
+        }
+        if (sky)
             continue;
         const float S = 32.0f * floorf(destroy_between(d, 4.0f, 8.0f));
         /* the ceiling flat over the square and the floor flat under it */
@@ -30269,16 +30938,37 @@ static void destroy_collapses(destroy_t *d, uint32_t want)
         if (recess ? !destroy_carve(d, lo, hi, NULL, NULL, 6, rock) : false)
             continue;
         if (!recess) {
-            /* a thin ceiling: no recess - the ceiling's faces over the slab take their own texture holed, and the
-               slab and its rubble lie below */
-            const float clo[3] = { lo[0], lo[1], ceil_z - 4.0f }, chi[3] = { hi[0], hi[1], ceil_z + 4.0f };
-            if (ceil_tex[0] && strncmp(ceil_tex, "mgd/", 4) && strncmp(ceil_tex, "mapgen/", 7))
-                destroy_dress(d, clo, chi, destroy_cracked(d, ceil_tex, "hole1"), false);
+            /* a thin ceiling: no recess - a hole's picture placed once on it over the fall (a tiled hole repeated
+               over the whole ceiling face: brief 12), the pieces below */
+            const float up[3] = { at[0], at[1], ceil_z - 8.0f };
+            float hole[3] = { at[0], at[1], destroy_face_at(d, up, 2, 1.0f, 24.0f) };
+            destroy_seed(d, hole, 5);
         }
-        destroy_pile(d, slab_hi[0] + 24.0f, 0.5f * (slab_lo[1] + slab_hi[1]), at[2], rgb, destroy_metal_name(ceil_tex));
-        /* the slab, fallen and lying tilted, in the ceiling's own texture */
-        destroy_piece(d, slab_lo, slab_hi, ceil_tex[0] ? ceil_tex : rock, true);
+        /* the ceiling in pieces (brief 12 D7): one big chunk, a quarter of the fall, and 8..12 more across it, in
+           the ceiling's own texture, dusted; its rubble beside; a burn on the floor next to it */
+        const char *own = destroy_dust_of(d, ceil_tex);
+        const char *slab = own ? own : rock;
+        const float span[2] = { slab_hi[0] - slab_lo[0], slab_hi[1] - slab_lo[1] };
+        const float bc[3] = { slab_lo[0] + span[0] * destroy_between(d, 0.3f, 0.7f),
+                              slab_lo[1] + span[1] * destroy_between(d, 0.3f, 0.7f), at[2] };
+        destroy_chunk(d, bc, span[0] * 0.25f, span[1] * 0.25f, destroy_between(d, 16.0f, 24.0f),
+                      destroy_between(d, 2.0f, 6.0f), slab);
+        const int pieces = 8 + (int)(destroy_rand(d) * 5.0f);
+        for (int k = 0; k < pieces; k++) {
+            const float pc[3] = { destroy_between(d, slab_lo[0], slab_hi[0]), destroy_between(d, slab_lo[1], slab_hi[1]),
+                                  at[2] };
+            if (!donor_air(d->b, pc[0], pc[1], at[2] + 4.0f)
+                || fabsf(donor_floor(d->b, pc[0], pc[1], at[2] + 16.0f, 40.0f) - at[2]) > 6.0f)
+                continue;
+            const float s = destroy_between(d, 14.0f, 40.0f);
+            destroy_chunk(d, pc, s * 0.5f, s * 0.5f * destroy_between(d, 0.6f, 1.0f),
+                          fminf(s, destroy_between(d, 6.0f, 16.0f)), destroy_between(d, 2.0f, 6.0f), slab);
+        }
         destroy_mark(d, slab_lo, slab_hi);
+        destroy_pile(d, slab_hi[0] + 24.0f, 0.5f * (slab_lo[1] + slab_hi[1]), at[2], slab, -1);
+        const float bx = slab_lo[0] - 72.0f, by = 0.5f * (slab_lo[1] + slab_hi[1]);
+        const float burn[3] = { bx, by, destroy_floor_plane(d, bx, by, at[2]) };
+        destroy_seed(d, burn, 4);
         d->rep->collapses++;
     }
 }
@@ -30313,12 +31003,16 @@ static void destroy_ruin(destroy_t *d, uint32_t want)
                 hi[2] = top + 4.0f;
                 if (!destroy_clear(d, lo, hi, DESTROY_STARTS_KEEP + 64.0f, true))
                     continue;
-                float rgb[3];
-                const char *ft = destroy_face_texture(d, at, 1, rgb);
-                const char *tex = destroy_pick(d, destroy_metal_name(ft) ? DESTROY_METAL : DESTROY_RUBBLE, rgb, "dk");
+                const char *tex = destroy_debris_tex(d, at, 0);
                 if (destroy_piece(d, lo, hi, tex, false)) {
                     destroy_mark(d, lo, hi);
                     d->rep->ruins++;
+                    /* its slopes: chunks spilled before both of its faces */
+                    for (int side = 0; side < 2; side++) {
+                        float foot[3] = { at[0], at[1], at[2] };
+                        foot[1 - ax] = side ? hi[1 - ax] + 28.0f : lo[1 - ax] - 28.0f;
+                        destroy_pile(d, foot[0], foot[1], at[2], tex, -1);
+                    }
                 }
                 break;
             }
@@ -30354,8 +31048,9 @@ static void destroy_read_pack(destroy_t *d, const char *path)
     char line[256];
     while (fgets(line, sizeof(line), f) && d->num_pack < DESTROY_MAX_PACK) {
         destroy_tex_t *t = &d->pack[d->num_pack];
-        if (sscanf(line, "%31s %15s %7s %f %f %f", t->name, t->material, t->variant, &t->rgb[0], &t->rgb[1],
-                   &t->rgb[2]) == 6)
+        t->coherence = 0.0f;
+        if (sscanf(line, "%31s %15s %7s %f %f %f %f", t->name, t->material, t->variant, &t->rgb[0], &t->rgb[1],
+                   &t->rgb[2], &t->coherence) >= 6)
             d->num_pack++;
     }
     fclose(f);
@@ -30432,7 +31127,9 @@ mapgen_geometry_result_t MapGenGeometryEdit_Destroy(mapgen_geometry_t *g, const 
     const float D = (float)d->percent / 100.0f;
     /* each kind's share grows from its own step of the ladder to all of it at 100 */
 #define DESTROY_SHARE(from) (d->percent < (from) ? 0.0f : ((float)d->percent - (float)(from) + 1.0f) / (101.0f - (float)(from)))
-    const uint32_t n_rubble = (uint32_t)(nrooms * 2.0f * DESTROY_SHARE(10) + 0.5f);
+    /* brief 12 D8: fewer piles and placed (one a unit at 100, was two); the patches half a unit */
+    const uint32_t n_rubble = (uint32_t)(nrooms * 1.0f * DESTROY_SHARE(10) + 0.5f);
+    const uint32_t n_patches = (uint32_t)(nrooms * 0.5f * DESTROY_SHARE(10) + 0.5f);
     const uint32_t n_craters = (uint32_t)(nrooms * 0.8f * DESTROY_SHARE(20) + 0.5f);
     const uint32_t n_breaches = (uint32_t)(nrooms * 0.6f * DESTROY_SHARE(35) + 0.5f);
     const uint32_t n_edges = (uint32_t)(nrooms * 0.8f * DESTROY_SHARE(50) + 0.5f);
@@ -30460,6 +31157,10 @@ mapgen_geometry_result_t MapGenGeometryEdit_Destroy(mapgen_geometry_t *g, const 
     DESTROY_CAP(0.16f);
     if (!(g_destroy_skip & 0x04u))
         destroy_craters(d, n_craters);
+    DESTROY_CAP(0.06f);
+    if (!(g_destroy_skip & 0x80u))
+        destroy_patches(d, n_patches);
+    d->built_before_rubble = d->num_built;
     d->sides_cap = DESTROY_SIDES_MAX;          /* the rest of the room is the rubble's */
     if (!(g_destroy_skip & 0x02u))
         destroy_rubble(d, n_rubble);
@@ -30474,7 +31175,7 @@ mapgen_geometry_result_t MapGenGeometryEdit_Destroy(mapgen_geometry_t *g, const 
     rep->wanted[5] = n_ruins;
     FILE *f = needs_path ? fopen(needs_path, "w") : NULL;
     for (uint32_t i = 0; f && i < d->num_needs; i++)
-        fprintf(f, "%s %s %s\n", d->needs_new[i], d->needs_old[i], d->needs_mask[i]);
+        fprintf(f, "%s %s %s %u\n", d->needs_new[i], d->needs_old[i], d->needs_mask[i], (unsigned)d->needs_rep[i]);
     if (f)
         fclose(f);
     rep->needs = d->num_needs;
@@ -30528,6 +31229,77 @@ static uint8_t crack_nearest(const uint8_t pal[768], const float rgb[3], int16_t
     return (uint8_t)best;
 }
 
+/* brief 12: the game's own pictures. The client draws a texture's .png (pak99's, 4x a .wal's size) over its .wal,
+   and a copy drawn from the .wal alone stood coarse and off-colour among them; a codec (the destroy driver's, with
+   zlib) reads the original's .png and writes the copy's - none set, the .wal alone, as before. */
+static uint8_t *(*g_image_decode)(const uint8_t *data, size_t len, uint32_t *w, uint32_t *h);
+static bool (*g_image_encode)(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h);
+
+void MapGenGeometryEdit_SetImageCodec(uint8_t *(*decode)(const uint8_t *, size_t, uint32_t *, uint32_t *),
+                                      bool (*encode)(const char *, const uint8_t *, uint32_t, uint32_t))
+{
+    g_image_decode = decode;
+    g_image_encode = encode;
+}
+
+/* A mask (256 x 256, wrapping) at u, v in 0..1, bilinear. */
+static float crack_mask_at(const uint8_t *m, float u, float v)
+{
+    u = u * 256.0f - 0.5f;
+    v = v * 256.0f - 0.5f;
+    const float fu = floorf(u), fv = floorf(v);
+    const int x0 = (((int)fu % 256) + 256) % 256, y0 = (((int)fv % 256) + 256) % 256;
+    const int x1 = (x0 + 1) & 255, y1 = (y0 + 1) & 255;
+    const float tx = u - fu, ty = v - fv;
+    const float a = m[y0 * 256 + x0] * (1.0f - tx) + m[y0 * 256 + x1] * tx;
+    const float b = m[y1 * 256 + x0] * (1.0f - tx) + m[y1 * 256 + x1] * tx;
+    return (a * (1.0f - ty) + b * ty) / 255.0f;
+}
+
+/* A mask drawn once over a picture W x H (rgb floats): a crack network darkens by half with a light lip beside it;
+   dust darkens all over, unevenly, no lip; a placed stamp (a hole, a crater, a burn) darkens deep, with its lip. */
+static void crack_draw(float *rgb, uint32_t W, uint32_t H, const uint8_t *m, const char *mask)
+{
+    const int kind = !strncmp(mask, "crack", 5) ? 0 : !strncmp(mask, "dust", 4) ? 1 : 2;
+    const float strength = kind == 0 ? 0.5f : kind == 1 ? 0.42f : 0.8f;
+    const float lipw = kind == 0 ? 28.0f : kind == 1 ? 0.0f : 40.0f;
+    for (uint32_t y = 0; y < H; y++)
+        for (uint32_t x = 0; x < W; x++) {
+            const float u = ((float)x + 0.5f) / (float)W, v = ((float)y + 0.5f) / (float)H;
+            const float mv = crack_mask_at(m, u, v);
+            const float nb = lipw > 0.0f ? crack_mask_at(m, u + 1.0f / 256.0f, v + 1.0f / 256.0f) : mv;
+            const float lip = nb - mv > 0.0f ? nb - mv : 0.0f;
+            for (int c = 0; c < 3; c++)
+                rgb[((size_t)y * W + x) * 3 + c] = rgb[((size_t)y * W + x) * 3 + c] * (1.0f - strength * mv)
+                                                  + lipw * lip;
+        }
+}
+
+/* A file of the game, else of INTO (the pack's textures live there). The caller frees. */
+static uint8_t *crack_source(const char *into, const char *name, size_t *n)
+{
+    uint8_t *data = game_file(name, n);
+    if (data)
+        return data;
+    char own[1400];
+    snprintf(own, sizeof(own), "%s/%s", into, name);
+    FILE *of = fopen(own, "rb");
+    if (!of)
+        return NULL;
+    fseek(of, 0, SEEK_END);
+    const long len = ftell(of);
+    fseek(of, 0, SEEK_SET);
+    data = len > 0 ? malloc((size_t)len) : NULL;
+    if (data && fread(data, 1, (size_t)len, of) == (size_t)len)
+        *n = (size_t)len;
+    else {
+        free(data);
+        data = NULL;
+    }
+    fclose(of);
+    return data;
+}
+
 uint32_t MapGenGeometryEdit_DrawCracks(const char *needs, const char *masks, const char *into, uint32_t *missing)
 {
     uint32_t made = 0, lost = 0;
@@ -30552,31 +31324,15 @@ uint32_t MapGenGeometryEdit_DrawCracks(const char *needs, const char *masks, con
     char line[512];
     while (fgets(line, sizeof(line), f)) {
         char nw[64], orig[64], mask[32];
-        if (sscanf(line, "%63s %63s %31s", nw, orig, mask) != 3)
+        unsigned rep = 1u;
+        if (sscanf(line, "%63s %63s %31s %u", nw, orig, mask, &rep) < 3)
             continue;
-        char file[160];
+        if (rep < 1u || rep > 8u)
+            rep = 1u;
+        char file[1400];
         snprintf(file, sizeof(file), "textures/%s.wal", orig);
         size_t n = 0;
-        uint8_t *wal = game_file(file, &n);
-        if (!wal) {
-            /* a texture of the pack (a crater drawn into its ground): installed in INTO, not in the game */
-            char own[1200];
-            snprintf(own, sizeof(own), "%s/textures/%s.wal", into, orig);
-            FILE *of = fopen(own, "rb");
-            if (of) {
-                fseek(of, 0, SEEK_END);
-                const long len = ftell(of);
-                fseek(of, 0, SEEK_SET);
-                wal = len > 0 ? malloc((size_t)len) : NULL;
-                if (wal && fread(wal, 1, (size_t)len, of) == (size_t)len)
-                    n = (size_t)len;
-                else {
-                    free(wal);
-                    wal = NULL;
-                }
-                fclose(of);
-            }
-        }
+        uint8_t *wal = crack_source(into, file, &n);
         snprintf(file, sizeof(file), "%s/%s.raw", masks, mask);
         FILE *mf = fopen(file, "rb");
         uint8_t *m = malloc(65536);
@@ -30595,8 +31351,11 @@ uint32_t MapGenGeometryEdit_DrawCracks(const char *needs, const char *masks, con
             free(m);
             continue;
         }
-        float *rgb = malloc((size_t)w * h * 3 * sizeof(float));
-        uint8_t *out = malloc(100u + (size_t)w * h * 2u);
+        if (w * rep > 1024u || h * rep > 1024u)
+            rep = 1u;
+        const uint32_t W = w * rep, H = h * rep;
+        float *rgb = malloc((size_t)W * H * 3 * sizeof(float));
+        uint8_t *out = malloc(100u + (size_t)W * H * 2u);
         if (!rgb || !out) {
             free(rgb);
             free(out);
@@ -30605,32 +31364,33 @@ uint32_t MapGenGeometryEdit_DrawCracks(const char *needs, const char *masks, con
             lost++;
             continue;
         }
-        for (uint32_t y = 0; y < h; y++)
-            for (uint32_t x = 0; x < w; x++) {
-                const uint8_t idx = wal[o + y * w + x];
-                const uint32_t mx = x * 256u / w, my = y * 256u / h;
-                const float mv = m[my * 256u + mx] / 255.0f;
-                const float nb = m[((my + 1u) & 255u) * 256u + ((mx + 1u) & 255u)] / 255.0f;
-                const float lip = nb - mv > 0.0f ? nb - mv : 0.0f;
+        for (uint32_t y = 0; y < H; y++)
+            for (uint32_t x = 0; x < W; x++) {
+                const uint8_t idx = wal[o + (y % h) * w + (x % w)];
                 for (int c = 0; c < 3; c++)
-                    rgb[(y * w + x) * 3 + c] = pal[idx * 3 + c] * (1.0f - 0.75f * mv) + 40.0f * lip;
+                    rgb[((size_t)y * W + x) * 3 + c] = pal[idx * 3 + c];
             }
-        /* the header as the original's: its flags, contents and value; the new name; the four mips */
+        crack_draw(rgb, W, H, m, mask);
+        /* the header as the original's: its flags, contents and value; the new name and size, no animation chain
+           (a copy of an animated texture would step into the original's next frame); the four mips */
         memcpy(out, wal, 100u);
         memset(out, 0, 32);
         snprintf((char *)out, 32, "%s", nw);
+        memcpy(out + 32, &W, 4);
+        memcpy(out + 36, &H, 4);
+        memset(out + 56, 0, 32);
         uint32_t at = 100u;
         for (uint32_t k = 0; k < 4u; k++) {
-            const uint32_t mw = w >> k ? w >> k : 1u, mh = h >> k ? h >> k : 1u, s = 1u << k;
+            const uint32_t mw = W >> k ? W >> k : 1u, mh = H >> k ? H >> k : 1u, s = 1u << k;
             memcpy(out + 40 + 4 * k, &at, 4);
             for (uint32_t y = 0; y < mh; y++)
                 for (uint32_t x = 0; x < mw; x++) {
                     float acc[3] = { 0, 0, 0 };
                     uint32_t cnt = 0;
-                    for (uint32_t yy = y * s; yy < (y + 1u) * s && yy < h; yy++)
-                        for (uint32_t xx = x * s; xx < (x + 1u) * s && xx < w; xx++, cnt++)
+                    for (uint32_t yy = y * s; yy < (y + 1u) * s && yy < H; yy++)
+                        for (uint32_t xx = x * s; xx < (x + 1u) * s && xx < W; xx++, cnt++)
                             for (int c = 0; c < 3; c++)
-                                acc[c] += rgb[(yy * w + xx) * 3 + c];
+                                acc[c] += rgb[((size_t)yy * W + xx) * 3 + c];
                     for (int c = 0; c < 3; c++)
                         acc[c] /= (float)(cnt ? cnt : 1u);
                     out[at + y * mw + x] = crack_nearest(pal, acc, cache);
@@ -30647,6 +31407,40 @@ uint32_t MapGenGeometryEdit_DrawCracks(const char *needs, const char *masks, con
             fclose(wf);
         free(rgb);
         free(out);
+        /* and at the game's own resolution, where the game has the original's picture */
+        if (g_image_decode && g_image_encode) {
+            snprintf(file, sizeof(file), "textures/%s.png", orig);
+            size_t len = 0;
+            uint8_t *png = crack_source(into, file, &len);
+            uint32_t pw = 0, ph = 0;
+            uint8_t *px = png ? g_image_decode(png, len, &pw, &ph) : NULL;
+            free(png);
+            if (px && pw % w == 0 && ph % h == 0 && pw / w == ph / h && pw * rep <= 2048u && ph * rep <= 2048u) {
+                const uint32_t PW = pw * rep, PH = ph * rep;
+                float *big = malloc((size_t)PW * PH * 3 * sizeof(float));
+                uint8_t *rgba = malloc((size_t)PW * PH * 4);
+                if (big && rgba) {
+                    for (uint32_t y = 0; y < PH; y++)
+                        for (uint32_t x = 0; x < PW; x++)
+                            for (int c = 0; c < 3; c++)
+                                big[((size_t)y * PW + x) * 3 + c] = px[(((size_t)(y % ph) * pw) + (x % pw)) * 4 + c];
+                    crack_draw(big, PW, PH, m, mask);
+                    for (size_t p = 0; p < (size_t)PW * PH; p++) {
+                        const uint32_t y = (uint32_t)(p / PW), x = (uint32_t)(p % PW);
+                        for (int c = 0; c < 3; c++) {
+                            const float v = big[p * 3 + c];
+                            rgba[p * 4 + c] = (uint8_t)(v < 0.0f ? 0.0f : v > 255.0f ? 255.0f : v + 0.5f);
+                        }
+                        rgba[p * 4 + 3] = px[(((size_t)(y % ph) * pw) + (x % pw)) * 4 + 3];
+                    }
+                    snprintf(file, sizeof(file), "%s/textures/%s.png", into, nw);
+                    g_image_encode(file, rgba, PW, PH);
+                }
+                free(big);
+                free(rgba);
+            }
+            free(px);
+        }
         free(wal);
         free(m);
     }

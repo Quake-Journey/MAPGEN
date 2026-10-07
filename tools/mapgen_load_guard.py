@@ -116,6 +116,56 @@ def performance_cpus() -> list[int]:
         return []
 
 
+FAULTY_DAYS = 30
+
+
+def faulty_cpus() -> set:
+    """The logical CPUs of the cores the machine itself reported for hardware errors: WHEA-Logger's machine checks in
+    the System log (events 17, 18, 19) of the last FAULTY_DAYS, by their «APIC ID», read once a day (a small cache in
+    LOCALAPPDATA). Brief 12, 07.10: three generator crashes in a row (0xC0000005, the CPU executing at its own branch
+    target with bit 31 and a low bit set - an address no instruction of ours computes) while the System log held 80
+    corrected «internal parity error» machine checks of the core at APIC ID 0 in 30 days, three of them during those
+    runs - and that core was the first the share took. Both threads of a reported core are left out. On Intel's hybrid
+    parts (12th..14th) a P-core's APIC IDs are 8 apart and its two threads the logical CPUs 2k and 2k+1; elsewhere the
+    APIC ID is taken for the logical index."""
+    if sys.platform != "win32":
+        return set()
+    import json
+    import re
+    import tempfile
+    cache = os.path.join(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir(), "mapgen_faulty_cpus.json")
+    try:
+        if time.time() - os.path.getmtime(cache) < 86400:
+            with open(cache, encoding="utf-8") as f:
+                return set(json.load(f)["cpus"])
+    except (OSError, ValueError, KeyError):
+        pass
+    apics: set = set()
+    try:
+        ps = ("Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-WHEA-Logger'; "
+              f"StartTime=(Get-Date).AddDays(-{FAULTY_DAYS})}} -ErrorAction SilentlyContinue | "
+              "ForEach-Object { $_.Message }")
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True,
+                             text=True, errors="replace", timeout=60).stdout
+        apics = {int(m) for m in re.findall(r"APIC[^:\n]*:\s*(\d+)", out)}
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    fast = performance_cpus()
+    hybrid = bool(fast) and len(fast) < logical_cpus()
+    cpus = set()
+    for a in apics:
+        if hybrid and a < 64:
+            cpus |= {2 * (a // 8), 2 * (a // 8) + 1}
+        else:
+            cpus.add(a)
+    try:
+        with open(cache, "w", encoding="utf-8") as f:
+            json.dump({"cpus": sorted(cpus), "apic": sorted(apics), "days": FAULTY_DAYS}, f)
+    except OSError:
+        pass
+    return cpus
+
+
 def affinity_mask(now: datetime | None = None) -> int:
     """`allowed_cpus()` of the performance cores, lowest first (the top cores are left to the PO), never an E-core;
     the low bits on a machine with one class of core."""
@@ -126,8 +176,11 @@ def affinity_mask(now: datetime | None = None) -> int:
     # 32 logical CPUs (19 by day) taken from 16 P-cores, so every P-core went to the run; the share is of the P-cores
     # themselves now - 9 of 16 by day, 4 at night - and the fast cores he works on are never all taken
     take = max(1, int(math.floor(share_now(now) * len(fast))))
+    # brief 12: never a core the machine reported for hardware errors (`faulty_cpus`) - the next ones instead
+    bad = faulty_cpus()
+    usable = [i for i in fast if i not in bad] or fast
     mask = 0
-    for i in fast[:take]:
+    for i in usable[:take]:
         mask |= 1 << i
     return mask
 

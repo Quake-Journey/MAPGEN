@@ -10,9 +10,13 @@ footer band and its caption (a texture under it), and one made here too small. A
 * the footer is trimmed: no row of the accepted texture made from the banded picture is as dark as the band;
 * the too-small one is refused, with its reason in the catalogue, and nothing is accepted without its source's sha256;
 * every mask fades to nothing at its border (no halo, no edge can show) and the PO's crater pictures are among them;
-* `install` copies the pack into a game folder; `crack` draws a mask into a game texture of the same size and palette.
-RED, three: the band trimming taken out - the band reaches the texture; a 200x200 wal - the size check fails; a wal
-written in a palette not the game's - the colour check fails.
+* `install` copies the pack into a game folder; `crack` draws a mask into a game texture of the same size and palette;
+* brief 12: a picture whose grain runs one way (drawn slats, as the PO's slatted panel that dressed the debris in
+  stripes) is classified wood or panel - never stone, rock, concrete, gravel, ground or brick - on a wall and on a
+  floor; a real stone picture of the fixture is not; the six crack networks and the three dusts tile (they are drawn
+  tiled over whole faces), the stamps (holes aside, craters, soot, the PO's pictures) are placed once and fade out.
+RED, four: the band trimming taken out - the band reaches the texture; a 200x200 wal - the size check fails; a wal
+written in a palette not the game's - the colour check fails; the grain's test taken out - the slats are stone.
 
     python tools/check_mapgen_textures.py [--work DIR]
 """
@@ -102,6 +106,27 @@ def build(work: Path, tag: str, only: list) -> tuple[Path, dict]:
     return tex, json.loads((tex / "catalogue.json").read_text(encoding="utf-8"))
 
 
+def slat_picture(path: Path) -> Path:
+    """Dark grey slats 24 wide on near-black gaps, a little noise - the PO's slatted panel as the classifier saw it."""
+    rng = np.random.default_rng(12)
+    x = np.arange(1000)
+    row = np.where((x % 32) < 24, 120.0, 30.0)
+    a = np.tile(row, (1000, 1))[..., None].repeat(3, axis=2) + rng.normal(0, 14, (1000, 1000, 3))
+    Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).save(path)
+    return path
+
+
+def seam(path: Path) -> float:
+    """A mask's step across the wrap over the largest step between two neighbouring rows (columns) inside: at most 1
+    when it tiles (a sparse network's mean step is no measure - one crack running along the border doubles it)."""
+    m = np.asarray(Image.open(path)).astype(np.float32)
+    worst = 0.0
+    for b in (m, m.T):
+        inner = np.abs(np.diff(b, axis=0)).mean(axis=1).max() + 1e-3
+        worst = max(worst, float(np.abs(b[0] - b[-1]).mean() / inner))
+    return worst
+
+
 def band_reached(tex: Path, cat: dict) -> float:
     """The flattest run of rows of the base made from the banded picture: the least detail in 24 rows (the mean step
     between neighbours) over the picture's median - a footer is flat but for its caption, a surface is not."""
@@ -145,6 +170,19 @@ def main() -> int:
     check("the masks: generated cracks, craters, holes, soot and the PO's pictures; a picture's fades out at its border",
           not halo and {"crack", "crater", "hole", "soot", "picture"} <= {m["kind"] for m in masks},
           f"{len(masks)} masks" + (f"; edge shows on {halo}" if halo else ""))
+    # brief 12: the grain's direction
+    slats = slat_picture(a.work / "src_slats.png")
+    said = {where: tx.surface(slats, where)[1].get("material", "refused") for where in ("wall", "floor")}
+    check("slats (a grain one way) are wood or a panel, never rock, on a wall and on a floor",
+          all(m in ("wood", "panel") for m in said.values()), str(said))
+    stone = tx.surface(only[0][0], "floor")[1]
+    check("a real stone/gravel picture is not taken for slats", stone.get("material") in tx.ROCKISH,
+          f"{stone.get('material')} (coherence {stone.get('coherence')})")
+    networks = [m["name"] for m in masks if m["kind"] in ("crack", "dust")]
+    seamy = [n for n in networks if seam(tex / "masks" / f"{n}.png") > 1.0]
+    check("six crack networks and three dusts, each tiling (drawn tiled over whole faces)",
+          len([n for n in networks if n.startswith("crack")]) == 6 and len([n for n in networks if n.startswith("dust")]) == 3
+          and not seamy, f"{networks}" + (f"; a seam on {seamy}" if seamy else ""))
     game = a.work / "game"
     if game.exists():
         shutil.rmtree(game)
@@ -192,6 +230,15 @@ def main() -> int:
     shutil.copy2(some.with_suffix(".jpg"), other.with_suffix(".jpg"))
     other.write_bytes(tx.wal_bytes(Image.open(some.with_suffix(".jpg")).resize((256, 256)), grey, "mapgen/" + some.stem))
     check("RED: a wal in a palette not the game's is caught", "palette" in wal_ok(other, pal), wal_ok(other, pal)[:90])
+    # RED 4: the grain's test taken out
+    keep = tx.DIRECTIONAL
+    tx.DIRECTIONAL = 2.0
+    try:
+        mat = tx.surface(slats, "wall")[1].get("material")
+        check("RED: without the grain's test the slats are stone - the case above goes red", mat in tx.ROCKISH,
+              str(mat))
+    finally:
+        tx.DIRECTIONAL = keep
     print(f"{TOTAL - FAILED}/{TOTAL} passed")
     return 0 if FAILED == 0 else 1
 

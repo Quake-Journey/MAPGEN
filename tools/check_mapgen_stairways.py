@@ -9,9 +9,14 @@ ambition 58, `--stairways 3`):
   at its middle and its four corners (nothing floats - brief 9's lesson), every step is solid from the floor, there is
   a player's headroom over the landing, and the pickup it was dealt for stands on it (floor under its feet, air at
   its origin);
+* its back meets the wall: one unit behind its back, along the flight and the landing, low and high, is rock - no
+  slot between the steps and a wall that recedes under its face (brief 12 L4: q2dm1's third stairway was refused by
+  the transaction for that crack);
 * with no `--stairways` the plan deals none (0 is the default and draws nothing).
 RED: the same generator with the landing's support taken out (`g_stair_support`, a sandbox copy): the landing is a
-slab in the air - the case above goes red.
+slab in the air - the case above goes red. The back's check has no RED here: none of the five stairways dealt on the
+two donors at 42/58 stands at a receding wall, with the back's reach or without it (measured 07.10) - its proof is the
+generated q2dm1 20/42, whose third stairway the transaction refused for that crack (row 412m).
 
     python tools/check_mapgen_stairways.py [--work DIR] [--no-red]
 """
@@ -50,6 +55,37 @@ def check(name: str, ok: bool, detail: str = "") -> bool:
 def drive(exe: Path, *args: str) -> str:
     r = subprocess.run([str(exe), *args], capture_output=True, text=True, errors="replace", timeout=3600)
     return r.stdout + r.stderr
+
+
+def slot_behind(tree, s: dict, box: list[float]) -> str:
+    """Air one unit behind the stairway's back (the side of its box against the wall), along it, low and high."""
+    lo, hi = box[:3], box[3:]
+    fx, fy, tx, ty = s["foot"][0], s["foot"][1], s["top"][0], s["top"][1]
+    ra = 0 if abs(tx - fx) >= abs(ty - fy) else 1
+    wa = 1 - ra
+    floor = s["foot"][2]
+    mid_u = (lo[ra] + hi[ra]) / 2
+    sides = []
+    for edge, out in ((lo[wa], -1.0), (hi[wa], 1.0)):
+        p = [0.0, 0.0, floor + 40.0]
+        p[ra] = mid_u
+        p[wa] = edge + out * 1.0
+        sides.append((tree_solid(tree, tuple(p)), edge, out))
+    walls = [x for x in sides if x[0]]
+    if len(walls) != 1:
+        return ""                                   # no single wall side met at the middle: not this question
+    _, edge, out = walls[0]
+    # the whole body is solid from the floor to its first tread's top (16): behind it, at 4 and 12 over the floor
+    u = lo[ra] + 6.0
+    while u <= hi[ra] - 6.0:
+        for z in (floor + 4.0, floor + 12.0):
+            p = [0.0, 0.0, z]
+            p[ra] = u
+            p[wa] = edge + out * 1.0
+            if not tree_solid(tree, tuple(p)):
+                return f"a slot behind it at {p[0]:.0f} {p[1]:.0f} {p[2]:.0f}"
+        u += 8.0
+    return ""
 
 
 def standing(tree, s: dict) -> list[str]:
@@ -107,10 +143,11 @@ def run(exe: Path, work: Path, tag: str) -> dict:
         results = []
         for k, s in enumerate(plan):
             L = s["landing"]
-            edit = next((m.group(1) for m in edits
+            hit = next((m for m in edits
                          if all(abs(float(m.group(2 + i)) - v) <= 1.0 for i, v in enumerate([L[0], L[1]]))
                          or (float(m.group(2)) - 1 <= L[0] and L[3] <= float(m.group(5)) + 1
                              and float(m.group(3)) - 1 <= L[1] and L[4] <= float(m.group(6)) + 1)), None)
+            edit = hit.group(1) if hit else None
             if edit is None:
                 results.append((s, ["no edit found for it"]))
                 continue
@@ -129,8 +166,9 @@ def run(exe: Path, work: Path, tag: str) -> dict:
                 continue
             tree = bsp_tree(out_bsp)
             bad = standing(tree, s)
+            slot = slot_behind(tree, s, [float(hit.group(2 + i)) for i in range(6)])
             stand = pickup_stands(tree, mp, s)
-            results.append((s, bad + ([stand] if stand else [])))
+            results.append((s, bad + ([slot] if slot else []) + ([stand] if stand else [])))
         out[donor] = (text, results)
     return out
 

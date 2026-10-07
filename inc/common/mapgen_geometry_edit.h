@@ -1085,11 +1085,12 @@ void MapGenGeometryEdit_DigStairways(uint32_t count);
  * Brief 11 D2: DESTRUCTION of a finished map, D percent 1..100 (0 does nothing): cracks (its own textures cracked),
  * rubble, craters, breaches and gouges, broken edges, collapses, ruin - a ladder of kinds by D, from the seed's own
  * substream, nothing within reach of a start or on a pickup, every carve sealed by the map's own brushes. `pack` is
- * the texture pack as `name material variant r g b` lines; the cracked copies the map now wears are written to
- * `needs_path` as `new original mask` lines for tools/mapgen_textures.py to draw.
+ * the texture pack as `name material variant r g b [coherence]` lines; the cracked copies the map now wears are
+ * written to `needs_path` as `new original mask rep` lines (rep: the original tiled rep x rep, a patch's picture).
  */
 typedef struct {
     uint32_t cracks, rubble, craters, breaches, gouges, broken, collapses, ruins;
+    uint32_t patches;           /* brief 12: a hole's or a burn's picture placed once on a face */
     uint32_t refused;           /* carves refused: they would have reached the outside, or the carve declined */
     uint32_t pack, rooms, needs;
     uint32_t wanted[6];         /* rubble, craters, breaches, broken, collapses, ruins the ladder asked for */
@@ -1101,8 +1102,12 @@ mapgen_geometry_result_t MapGenGeometryEdit_Destroy(struct mapgen_geometry_s *g,
                                                     uint32_t percent, uint64_t seed, const char *pack,
                                                     const char *needs_path, mapgen_destroy_report_t *rep);
 /* A guard's seam: the kinds to leave out, by bit (1 cracks, 2 rubble, 4 craters, 8 breaches, 16 broken, 32
-   collapses, 64 ruin). */
+   collapses, 64 ruin, 128 patches). */
 void MapGenGeometryEdit_DestroySkip(uint32_t kinds);
+/* Brief 12: a picture codec for DrawCracks - decode a .png to 8-bit RGBA, encode RGBA to a .png file. Set by the
+   destroy driver (it links zlib); unset, the copies are drawn as .wal only. */
+void MapGenGeometryEdit_SetImageCodec(uint8_t *(*decode)(const uint8_t *data, size_t len, uint32_t *w, uint32_t *h),
+                                      bool (*encode)(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h));
 /* Brief 11 D2: the cracked copies a destroyed map wears, drawn from the game's own textures and the pack's masks
    (MASKS/<mask>.raw) into INTO/textures/<new>.wal; returns how many, `missing` those without an original. */
 uint32_t MapGenGeometryEdit_DrawCracks(const char *needs, const char *masks, const char *into, uint32_t *missing);

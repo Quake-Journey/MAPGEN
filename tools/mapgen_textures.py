@@ -67,6 +67,8 @@ WEB = {"rock": (["rock"], 8), "concrete": (["concrete", "plaster-concrete"], 6),
        "metal": (["metal"], 8), "ground": (["terrain"], 6), "gravel": (["gravel"], 5), "sand": (["sand"], 4),
        "wood": (["raw wood"], 4), "stone": (["cobblestone"], 5)}
 CAN_MOSS = {"rock", "stone", "concrete", "brick", "ground", "gravel"}
+# the families the ruin takes for rock, ground and debris (the destroy driver's lists): never a directional picture
+ROCKISH = {"rock", "stone", "concrete", "gravel", "ground", "sand", "brick", "moss"}
 
 
 # ---- the game's format -----------------------------------------------------------------------------------------
@@ -188,9 +190,31 @@ def hsv_mean(a: np.ndarray) -> tuple[float, float, float]:
     return hue, float(h[:, 1].mean() / 255.0), float(h[:, 2].mean())
 
 
+# a picture whose grain runs one way (slats, planks, a fluted or wavy panel, logs, bamboo) is never rock: brief 12 -
+# the PO's slatted wall panel was called «stone» (dull, grainy) and dressed the debris in hard stripes (quake212..214).
+# Measured over the pack of 07.10: every slat/plank/panel picture 0.64..0.99, every brick, stone, rock and ground
+# 0.00..0.59 (brick courses run one way too, the most of them: 0.58)
+DIRECTIONAL = 0.60
+
+
+def coherence(a: np.ndarray) -> float:
+    """How much the picture's grain runs one way: the structure tensor's coherence over the whole picture (0 no
+    direction, 1 all edges one way), after a light blur so a pixel's noise does not count."""
+    g = np.asarray(Image.fromarray(a.astype(np.uint8)).convert("L").filter(ImageFilter.GaussianBlur(1.0)))
+    g = g.astype(np.float32)
+    gx, gy = np.diff(g, axis=1)[:-1, :], np.diff(g, axis=0)[:, :-1]
+    jxx, jyy, jxy = float((gx * gx).mean()), float((gy * gy).mean()), float((gx * gy).mean())
+    tr, det = jxx + jyy, jxx * jyy - jxy * jxy
+    root = math.sqrt(max(tr * tr / 4 - det, 0.0))
+    return float(2 * root / (tr + 1e-6))
+
+
 def classify(a: np.ndarray, where: str) -> tuple[str, str]:
     """The material by colour and grain, and why not when it is no Quake II surface."""
     hue, sat, val = hsv_mean(a)
+    if coherence(a) >= DIRECTIONAL:
+        # slats, planks, logs, panels: wood when warm, a panel otherwise - never stone, rock, concrete or ground
+        return ("wood" if 15 <= hue < 60 and sat > 0.2 else "panel"), ""
     g = a.mean(axis=2)
     gx, gy = np.abs(np.diff(g, axis=1)).mean(), np.abs(np.diff(g, axis=0)).mean()
     grain = (gx + gy) / 2
@@ -249,10 +273,11 @@ def surface(src: Path, where: str) -> tuple[Image.Image | None, dict]:
     s = seam_score(sq)
     if s > 2.5:
         return None, {**info, "status": "refused", "why": f"a seam stays ({s:.1f})"}
-    mat, why = classify(np.asarray(sq).astype(np.float32), where)
+    arr = np.asarray(sq).astype(np.float32)
+    mat, why = classify(arr, where)
     if not mat:
         return None, {**info, "status": "refused", "why": why}
-    return sq, {**info, "material": mat, "seam": round(s, 2), "trimmed": bands}
+    return sq, {**info, "material": mat, "seam": round(s, 2), "trimmed": bands, "coherence": round(coherence(arr), 3)}
 
 
 # ---- generated masks ----------------------------------------------------------------------------------------
@@ -268,8 +293,9 @@ def crack_mask(seed: int, cells: int = 24, width: float = 2.5, size: int = WAL) 
         d.append(np.hypot(dx, dy))
     d = np.sort(np.stack(d), axis=0)
     edge = np.clip(1.0 - (d[1] - d[0]) / width, 0, 1)
-    keep = np.asarray(Image.fromarray((rng.random((8, 8)) > 0.35).astype(np.uint8) * 255)
-                      .resize((size, size), Image.BILINEAR)).astype(np.float32) / 255
+    # which edges stay: blotches of a noise that TILES (an 8x8 grid scaled up did not wrap - brief 12 found a seam
+    # line across two of the three networks where the face repeats them)
+    keep = np.clip((smooth_noise(size, seed + 7, waves=24, top=4) - 0.30) * 4.0, 0, 1)
     return np.clip(edge * keep * 1.4, 0, 1)
 
 
@@ -295,6 +321,12 @@ def hole_mask(seed: int, size: int = WAL) -> np.ndarray:
         r = np.hypot(np.minimum(np.abs(x - cx), size - np.abs(x - cx)), np.minimum(np.abs(y - cy), size - np.abs(y - cy)))
         m = np.maximum(m, np.clip(1 - (r - rad) / 4, 0, 1))
     return m
+
+
+def dust_mask(seed: int, size: int = WAL) -> np.ndarray:
+    """Dust and grime over a broken piece: fine blotches that TILE (12..20 cycles a picture - no blob the eye
+    counts), never under half, so the piece is darker all over and uneven."""
+    return 0.5 + 0.5 * smooth_noise(size, seed, waves=40, top=20)
 
 
 def soot_mask(seed: int, size: int = WAL) -> np.ndarray:
@@ -331,6 +363,9 @@ def masks() -> dict[str, np.ndarray]:
     out = {}
     for k in range(3):
         out[f"crack{k + 1}"] = crack_mask(101 + k, cells=16 + 8 * k, width=2.0 + k)
+        # brief 12: three more networks, other cell counts and widths - a face's crack is one of six, never a stamp
+        out[f"crack{k + 4}"] = crack_mask(111 + k, cells=12 + 12 * k, width=1.5 + k)
+        out[f"dust{k + 1}"] = dust_mask(501 + k)
         out[f"crater{k + 1}"] = crater_mask(201 + k)
         out[f"hole{k + 1}"] = hole_mask(301 + k)
         out[f"soot{k + 1}"] = soot_mask(401 + k)
@@ -361,7 +396,9 @@ def smooth_noise(size: int, seed: int, waves: int = 24, top: int = 6) -> np.ndar
 def variant(im: Image.Image, kind: str, seed: int) -> Image.Image:
     a = np.asarray(im).astype(np.float32)
     lum = a.mean(axis=2, keepdims=True)
-    n = smooth_noise(im.size[0], seed)[..., None]
+    # fine noise, 10..16 cycles a picture: a variant's blotches at a tile's period are a grid on a big floor
+    # (brief 12, quake210: the soot variant's six big blotches a tile, repeated over a ruined floor)
+    n = smooth_noise(im.size[0], seed, waves=40, top=16)[..., None]
     if kind == "dk":
         a = a * 0.62
     elif kind == "wet":
@@ -374,11 +411,11 @@ def variant(im: Image.Image, kind: str, seed: int) -> Image.Image:
         spot = np.clip(n * 1.8 - 0.55, 0, 1)
         a = a * (1 - 0.75 * spot) + np.array([120, 58, 26], np.float32) * (0.5 + lum / 255) * 0.75 * spot
     elif kind == "soot":
-        a = a * (1 - 0.65 * np.clip(n * 1.4 - 0.1, 0, 1))
+        a = a * (0.50 + 0.18 * n)
     return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
 
 
-def cracked(im: Image.Image, mask: np.ndarray, strength: float = 0.75) -> Image.Image:
+def cracked(im: Image.Image, mask: np.ndarray, strength: float = 0.5) -> Image.Image:
     """A crack drawn into a texture: dark in the crack, a light lip on one side (light from above-left)."""
     w, h = im.size
     m = np.asarray(Image.fromarray((mask * 255).astype(np.uint8)).resize((w, h), Image.LANCZOS)).astype(np.float32) / 255
@@ -444,6 +481,8 @@ def build(out: Path, fetch: bool, moddir: Path, only: list | None = None, sheets
         im, info = surface(src, "wall" if where == "wall" else "floor")
         if im is not None and fam:
             info["material"] = fam                     # the source's own family, not a guess
+            if fam in ROCKISH and info["coherence"] >= DIRECTIONAL:
+                info["material"] = "panel"             # a family's picture with a grain one way: no rock
         if im is None:
             cat["refused"].append(info)
             continue
@@ -474,6 +513,7 @@ def build(out: Path, fetch: bool, moddir: Path, only: list | None = None, sheets
                     "kind": "ground" if mat in ("ground", "gravel", "sand", "moss") else "wall",
                     "rgb": [round(float(c), 1) for c in a.reshape(-1, 3).mean(axis=0)],
                     "lum": round(float(a.mean()), 1), "seam": info["seam"], "source": info["source"],
+                    "coherence": info.get("coherence", 0.0),
                     "sha256": info["sha256"], "status": "accepted"})
     for name, m in masks().items():
         Image.fromarray((m * 255).astype(np.uint8)).save(tex / "masks" / f"{name}.png")
@@ -547,7 +587,8 @@ def install(moddir: Path, pack: Path) -> int:
 
 
 def crack(moddir: Path, needs: Path, pack: Path, read_from: Path | None = None) -> int:
-    """NEEDS: one line a variant, `NEW ORIGINAL MASK` (a texture name, a texture name, a mask of the pack). Each is
+    """NEEDS: one line a variant, `NEW ORIGINAL MASK [REP]` (a texture name, a texture name, a mask of the pack, the
+    original tiled REP x REP under it - a placed patch's picture). Each is
     the original's own .wal - loose or in a pak of MODDIR - with the mask drawn in, same size, same palette, written
     to MODDIR/textures/NEW.wal. The map then wears its own textures, cracked."""
     src = read_from or moddir
@@ -556,9 +597,10 @@ def crack(moddir: Path, needs: Path, pack: Path, read_from: Path | None = None) 
     made = missing = 0
     for line in needs.read_text(encoding="utf-8").splitlines():
         parts = line.split()
-        if len(parts) != 3:
+        if len(parts) not in (3, 4):
             continue
-        new, orig, mask = parts
+        new, orig, mask = parts[:3]
+        rep = int(parts[3]) if len(parts) == 4 else 1
         data = game_file(moddir, f"textures/{orig}.wal") or game_file(src, f"textures/{orig}.wal")
         mp = mdir / f"{mask}.png"
         if not data or not mp.is_file():
@@ -566,6 +608,12 @@ def crack(moddir: Path, needs: Path, pack: Path, read_from: Path | None = None) 
             continue
         m = np.asarray(Image.open(mp).convert("L")).astype(np.float32) / 255
         im = wal_image(data, pal)
+        if rep > 1:
+            tiled = Image.new("RGB", (im.size[0] * rep, im.size[1] * rep))
+            for i in range(rep):
+                for j in range(rep):
+                    tiled.paste(im, (i * im.size[0], j * im.size[1]))
+            im = tiled
         out = moddir / "textures" / f"{new}.wal"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(wal_bytes(cracked(im, m), pal, new))

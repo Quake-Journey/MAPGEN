@@ -238,6 +238,13 @@ def ask_light(bsp: Path, job: Path | None, donor: Path, work: Path | None = None
     digs = static_digs(job, work) if job and work else (accepted_digs(job) if job else [])
     text, err = plan_listing(job, work) if job and work else ("", "")
     sources = job_sources(job, text if not err else "")
+    # brief 12 L2: rooms the room-light step found lit by their doors (their own lights at nothing still over the band)
+    lit_by_door = []
+    if job and (job / "lit" / "door_lit.txt").is_file():
+        for line in (job / "lit" / "door_lit.txt").read_text(encoding="utf-8").splitlines():
+            m = re.match(r"door-lit ((?:-?\d+ ){6})with (\S+) without (\S+)", line)
+            if m:
+                lit_by_door.append(([float(v) for v in m.group(1).split()], m.group(3)))
     rooms = []
     for d in digs:
         doors = [d["from"]] if d.get("own_room_end") == "to" else [d["from"], d["to"]]
@@ -245,6 +252,21 @@ def ask_light(bsp: Path, job: Path | None, donor: Path, work: Path | None = None
         src = source_of(d, sources, donor)
         lit, how = room_against_source(bsp, src[0], d["box"], src[1]) if src else \
             room_against_door(bsp, donor, d["box"], doors)
+        door = next((alone for box, alone in lit_by_door if all(abs(box[i] - d["box"][i]) <= 1.0 for i in range(6))),
+                    None)
+        level = re.search(r"all (\d+)/(\d+)", how)
+        over = bool(level) and int(level.group(1)) / max(1, int(level.group(2))) > 1.25
+        if not lit and door and over:
+            how += f"; lit by its door - with none of its own lights {door}, over the band by the door's light alone"
+            lit = True
+        # brief 12 L1, the decision: a carried room is judged by its level and contrast against its original; its
+        # tint is said, never failed on - q2dm1's courtyard copied underground stayed B/R 0.77..0.82 for 0.12 with its
+        # panels in the original's colour and its lights recoloured (rows 412m, 412n)
+        if not lit and src and " - " in how:
+            faults = how.split(" - ", 1)[1].split(" | ")[0]
+            if all(f.strip().startswith("tint") for f in faults.split(";") if f.strip()):
+                how += " (tint said, not judged: a carried room)"
+                lit = True
         rooms.append(f"{d.get('shape') or 'dig'} at {coords(d['box'][:3])}: {how}")
         if not lit:
             bad.append(rooms[-1])
@@ -818,6 +840,7 @@ def _same_finding(mine: str, theirs: set) -> bool:
 
 def gate_water(bsp: Path, work: Path, donor: Path | None = None) -> None:
     from check_mapgen_standing_water import build, PROBE_SRC
+    work.mkdir(parents=True, exist_ok=True)      # its folder made here: a guard's fresh work tree has none
     try:
         exe = prebuilt("water_probe.exe") or build(REPO, work, "water_probe", PROBE_SRC)
     except SystemExit as e:

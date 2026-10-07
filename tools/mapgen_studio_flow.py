@@ -97,6 +97,12 @@ def main() -> int:
     fit = step([TOOLS / "mapgen_light_autofit.py", cand, base, a.work / "light_fit"])
     rooms = step([TOOLS / "mapgen_room_light.py", cand, "--job", job, "--donor", base]
                  + (["--relight-first"] if "FITTED" in fit.stdout or a.relight else []))
+    # brief 12 L3: the fit asked again of the map as the room step left it (only when the gate reads it out of band)
+    refit = step([TOOLS / "mapgen_light_autofit.py", cand, base, a.work / "light_refit", "--after-rooms"])
+    # a refit moves the whole map's level: the rooms are brought to their doors once more under it
+    if "REFITTED" in refit.stdout:
+        again = step([TOOLS / "mapgen_room_light.py", cand, "--job", job, "--donor", base])
+        refit.stdout += "\nROOM LIGHT AGAIN\n" + again.stdout + again.stderr
     gates = step([TOOLS / "mapgen_delivery_gates.py", cand, "--job", job, "--donor", base])
     after = ""
     if a.destruction > 0:
@@ -107,7 +113,7 @@ def main() -> int:
                    "finished,axes,water,starts"])
         after = "\nDESTRUCTION\n" + d.stdout + d.stderr + "\n" + g2.stdout + g2.stderr
     all_text = (gates.stdout + gates.stderr + "\nLIGHT FIT\n" + fit.stdout + fit.stderr + "\nROOM LIGHT\n"
-                + rooms.stdout + rooms.stderr + after)
+                + rooms.stdout + rooms.stderr + "\nLIGHT REFIT\n" + refit.stdout + refit.stderr + after)
     (a.work / "gates.txt").write_text(all_text, encoding="utf-8")
     passed = len(re.findall(r"^\s+PASS\s", all_text, re.M))
     failed = re.findall(r"^\s+FAIL\s+(.*?)(?:  --|$)", all_text, re.M)
