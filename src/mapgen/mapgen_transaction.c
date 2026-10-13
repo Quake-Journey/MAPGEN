@@ -28,6 +28,9 @@
 static const bool g_txn_skin_gap_spared = true;
 /* row 371: a skinned dig is asked the sky (the RED's mutation point) */
 static const bool g_txn_sky_check = true;
+static const bool g_txn_seam_moved_spared = true;   /* brief 17: the RED's mutation point */
+#define SEAM_MOVED_CLEAR  64.0f                      /* a seam this far from every changed brush is the compile's */
+#define SEAM_MAX_TOUCHED  16384u
 /* whether the attempt being judged dressed a dig in a sky skin */
 static bool s_attempt_skinned;
 #include <string.h>
@@ -403,6 +406,8 @@ bool MapGenTransaction_SeenThroughSky(const mapgen_bsp_t *built,
    of it. */
 static const float g_txn_donor_seam_reach = 1.0f;   /* the RED's mutation point */
 
+#define MAPGEN_TXN_DRY_REFUSALS 64u
+
 struct mapgen_transaction_s {
     char     job_root[MAPCOMPILE_MAX_PATH];
     char     map_name[64];
@@ -447,6 +452,11 @@ struct mapgen_transaction_s {
        machines' travel is inside the world: the floors an edit is held to. */
     uint32_t           donor_standing_water;
     uint32_t           donor_mover_travel;
+    /* each carrying machine of the map as last accepted (the donor's at the start): its kind, its box and its own
+       travel clearance (permille in solid); and the candidate's, measured by the judge, taken on its acceptance */
+    struct { int kind; float mins[3], maxs[3]; uint32_t travel; } donor_machine[64], pending_machine[64];
+    uint32_t           num_donor_machines, num_pending_machines;
+    bool               pending_measured;
     /* And the seams the compiler left in the donor's own file, by place: the
        set an edit's own compile is held to. A candidate may keep any of them
        and may remove any of them; it may not add one that is not here. */
@@ -464,6 +474,10 @@ struct mapgen_transaction_s {
      */
     float            (*climb)[3];
     uint32_t           num_climbs;
+    /* brief 16 D2: the base's own architecture cells, the metric's denominator, measured once; and the metric's
+       counts on the accepted map against the base (0 before anything is accepted) */
+    uint32_t           value_donor_cells;
+    uint32_t           accepted_changed, accepted_cells;
 
     /*
      * And the flights an accepted lift REPLACED.
@@ -518,6 +532,27 @@ struct mapgen_transaction_s {
      */
     mapgen_reach_t    *parent_reach;
     bool               parent_reach_tried;
+    /*
+     * Brief 18: what the plan's own trial builds refused (MapGenTransaction_PlanDryBuild) - the edit, the verdict its
+     * build at its turn would end in, and why. Such an edit is answered from here at its turn, with no build: on
+     * mg_b18_q2dm1 the dig whose trial build leaked was built again to leak again, and two annexes that left a machine
+     * nothing can operate were each built and walked to be told so. Of the plan in hand alone: a new deal clears it.
+     *
+     * `stood`: the edits accepted when the trial build was made. A build that FAILED says it of that map alone - a
+     * leak is the whole map's seal, not the dig's own space: mg_b18_q2dm3's tunnel and lift from -150 -146 367 leaks
+     * alone on its base (first of its sky's digs, it builds the lifted sky and its skin, and the skin's gap at
+     * -372 -172 164 is open to the void) and is sealed after the storey room under the same sky - accepted at its
+     * turn before this table (12.10, 15:49), refused from it after 27 edits (12.10, 22:34), and with it went the
+     * armour annex the walk then could not reach. So a failed build is tried again once the map has changed (it
+     * costs a second); what the compiled map says of the dig's own machine, pickup and sky stands, as measured.
+     */
+    struct {
+        uint32_t                     index;
+        mapgen_transaction_verdict_t verdict;
+        uint32_t                     stood;
+        char                         why[160];
+    } dry_refused[MAPGEN_TXN_DRY_REFUSALS];
+    uint32_t           num_dry_refused;
     bool               parent_is_baseline;
     /* row 400: the donor's plain rebuild was refused for what it draws, the faithful one accepted */
     bool               faithful_skins;
@@ -685,6 +720,7 @@ static bool baseline_from(const mapgen_geometry_t *geometry,
                           const mapcompile_adapter_t *adapter,
                           char out_path[MAPCOMPILE_MAX_PATH],
                           char out_sha256[MAPCOMPILE_SHA256_HEX]);
+static void know_donor_textures(const mapgen_bsp_t *bsp);
 
 /*
  * Build the reference and prove it is the donor.
@@ -709,6 +745,7 @@ bool MapGenTransaction_BuildBaselineChecked(const char *donor_bsp,
     mapgen_bsp_t *bsp = load_bsp(donor_bsp);
     if (!bsp)
         return false;
+    know_donor_textures(bsp);
     mapgen_geometry_t *geometry = NULL;
     if (MapGenGeometry_FromBsp(bsp, &geometry) != MAPGEN_GEOMETRY_OK) {
         MapGenBsp_Free(bsp);
@@ -818,6 +855,31 @@ static bool build_baseline(mapgen_transaction_t *txn)
     return false;
 }
 
+/*
+ * Why the last baseline did not compile (the donor survey, 09.10: 14 of 56 maps of the PO's game were refused at
+ * the first step with no axis and no word - the copy's compile had failed and its own output was thrown away).
+ */
+static char g_baseline_compile_why[768];
+
+/* Every texture a donor's compiled map names, known to the compile check (see MapCompile_AddKnownTexture). */
+static void know_donor_textures(const mapgen_bsp_t *bsp)
+{
+    for (uint32_t i = 0; bsp && i < MapGenBsp_NumTexInfo(bsp); i++) {
+        const mapgen_bsp_texinfo_t *ti = MapGenBsp_TexInfo(bsp, i);
+        if (ti)
+            MapCompile_AddKnownTexture(ti->texture);
+    }
+}
+
+const char *MapGenTransaction_LastBaselineCompileWhy(void)
+{
+    return g_baseline_compile_why;
+}
+
+static bool compile_geometry_in(const mapgen_geometry_t *geometry, const char *dir, const char *map_name,
+                                const char *moddir, const mapcompile_adapter_t *adapter,
+                                char out_path[MAPCOMPILE_MAX_PATH], char out_sha256[MAPCOMPILE_SHA256_HEX]);
+
 static bool baseline_from(const mapgen_geometry_t *geometry,
                           const char *job_root, const char *map_name,
                           const char *moddir,
@@ -826,18 +888,37 @@ static bool baseline_from(const mapgen_geometry_t *geometry,
                           char out_sha256[MAPCOMPILE_SHA256_HEX])
 {
     char dir[MAPCOMPILE_MAX_PATH];
+    if (snprintf(dir, sizeof(dir), "%s/baseline", job_root) >= (int)sizeof(dir))
+        return false;
+    return compile_geometry_in(geometry, dir, map_name, moddir, adapter, out_path, out_sha256);
+}
+
+bool MapGenTransaction_CompileGeometry(const mapgen_geometry_t *geometry, const char *dir, const char *map_name,
+                                       const char *moddir, const mapcompile_adapter_t *adapter,
+                                       char out_path[MAPCOMPILE_MAX_PATH])
+{
+    char sha[MAPCOMPILE_SHA256_HEX];
+    return geometry && dir && map_name && adapter
+        && compile_geometry_in(geometry, dir, map_name, moddir ? moddir : dir, adapter, out_path, sha);
+}
+
+/* A geometry written as a .map into `dir` and compiled there: the baseline's build, and the warped base's. */
+static bool compile_geometry_in(const mapgen_geometry_t *geometry, const char *dir, const char *map_name,
+                                const char *moddir, const mapcompile_adapter_t *adapter,
+                                char out_path[MAPCOMPILE_MAX_PATH], char out_sha256[MAPCOMPILE_SHA256_HEX])
+{
+    g_baseline_compile_why[0] = '\0';
     char map_path[MAPCOMPILE_MAX_PATH];
-    if (snprintf(dir, sizeof(dir), "%s/baseline", job_root)
-            >= (int)sizeof(dir)
-        || snprintf(map_path, sizeof(map_path), "%s/%s.map", dir,
-                    map_name) >= (int)sizeof(map_path))
+    if (snprintf(map_path, sizeof(map_path), "%s/%s.map", dir, map_name) >= (int)sizeof(map_path))
         return false;
     if (!MapGenFs_MakeDir(dir, map_name))       /* row 411: a folder, or the base's sections in memory */
         return false;
 
     if (MapGenGeometry_WriteValve220(geometry, map_path)
-        != MAPGEN_GEOMETRY_OK)
+        != MAPGEN_GEOMETRY_OK) {
+        snprintf(g_baseline_compile_why, sizeof(g_baseline_compile_why), "the copy could not be written as a .map");
         return false;
+    }
 
     mapcompile_request_t request;
     memset(&request, 0, sizeof(request));
@@ -856,6 +937,35 @@ static bool baseline_from(const mapgen_geometry_t *geometry,
     memset(&compiled, 0, sizeof(compiled));
     const mapcompile_result_t rc =
         MapCompile_RunProfile(adapter, &request, &compiled);
+    if (rc != MAPCOMPILE_OK) {
+        /* the compiler's result, the failing stage's exit and the last of its own words */
+        int last = compiled.num_stages - 1;
+        const char *tail = "";
+        int32_t code = 0;
+        if (last >= 0) {
+            code = compiled.stages[last].exit_code;
+            const char *out = compiled.stages[last].stdout_captured;
+            const size_t n = out ? compiled.stages[last].stdout_captured_bytes : 0u;
+            tail = out ? (n > 360u ? out + n - 360u : out) : "";
+            /* a texture not found: that line, not the tail */
+            const char *loc = NULL;
+            for (int s = 0; s < compiled.num_stages && !loc; s++)
+                if (compiled.stages[s].stdout_captured)
+                {
+                    static const char *const said[] = { "ERROR", "Error", "error:", "locate", "ouldn't find",
+                                                         "ould not find", "leaked" };
+                    for (int k = 0; k < 7 && !loc; k++)
+                        loc = strstr(compiled.stages[s].stdout_captured, said[k]);
+                    if (loc)
+                        loc = loc - compiled.stages[s].stdout_captured > 40 ? loc - 40 : compiled.stages[s].stdout_captured;
+                }
+            if (loc)
+                tail = loc;
+        }
+        snprintf(g_baseline_compile_why, sizeof(g_baseline_compile_why),
+                 "the copy did not compile: %s, stage %d of %d, exit %d: %s", MapCompile_ResultName(rc), last + 1,
+                 compiled.num_stages, (int)code, tail);
+    }
     for (int i = 0; i < compiled.num_stages; i++)
         free(compiled.stages[i].stdout_captured);
     if (rc != MAPCOMPILE_OK)
@@ -1036,6 +1146,8 @@ begin_impl(const char *donor_bsp, const char *job_root,
         free(txn);
         return MAPGEN_TXN_ERR_DONOR;
     }
+    MapCompile_ClearKnownTextures();
+    know_donor_textures(txn->donor_bsp);
     /* What the donor itself already keeps in the water, so an edit is held
        to not ADDING to it - the same shape of rule as surface faults. */
     if (MapGenGeometry_FromBsp(txn->donor_bsp, &txn->donor)
@@ -1055,6 +1167,16 @@ begin_impl(const char *donor_bsp, const char *job_root,
             MapGenMovers_MeasureClearance(movers, txn->donor_bsp);
             MapGenMovers_WorstClearance(movers, &txn->donor_mover_travel,
                                         NULL);
+            for (uint32_t m = 0; m < movers->num_movers && txn->num_donor_machines < 64u; m++) {
+                const mapgen_mover_t *mv = &movers->movers[m];
+                if (!mv->carries)
+                    continue;
+                const uint32_t k = txn->num_donor_machines++;
+                txn->donor_machine[k].kind = (int)mv->kind;
+                memcpy(txn->donor_machine[k].mins, mv->mins, sizeof(mv->mins));
+                memcpy(txn->donor_machine[k].maxs, mv->maxs, sizeof(mv->maxs));
+                txn->donor_machine[k].travel = mv->body_permille;
+            }
         }
         free(movers);
     }
@@ -1074,6 +1196,7 @@ begin_impl(const char *donor_bsp, const char *job_root,
         mapgen_bsp_t *bsp = load_bsp(other_donors[i]);
         if (!bsp)
             continue;
+        know_donor_textures(bsp);       /* the rooms copied from it wear its textures */
         mapgen_geometry_t *g = NULL;
         if (MapGenGeometry_FromBsp(bsp, &g) != MAPGEN_GEOMETRY_OK) {
             MapGenBsp_Free(bsp);
@@ -1478,6 +1601,19 @@ edit_effect(mapgen_transaction_t *txn, const mapgen_geometry_t *candidate,
      * parent's, and no route is measured for it. Everything else the attempt
      * judges - the walk, the drowned rule, the band - has already run.
      */
+    /*
+     * Brief 16 D2: a liquid swapped - water become lava, slime become water - moves no cell the metric counts, and
+     * the eye sees it at once. The compile differs from its parent's (the bytes above), so it did something: 22 of
+     * mg_10_6695's 48 liquid swaps were refused NO_EFFECT after a build and a walk each. It is the finishing pass's
+     * now, judged by everything else the attempt asked - the walk refuses a pool turned into a trap.
+     */
+    if (step->edit.kind == MAPGEN_EDIT_RELIQUID) {
+        step->structural_measured = true;
+        step->structural_routes = false;
+        step->structural_cells = 0;
+        return EDIT_MOVED;
+    }
+
     uint32_t named[2];
     const uint32_t num_named =
         MapGenGeometryEdit_NamedEntities(txn->plan, step->edit.target, named,
@@ -1529,6 +1665,79 @@ edit_effect(mapgen_transaction_t *txn, const mapgen_geometry_t *candidate,
 /* ---- one attempt --------------------------------------------------------------- */
 
 /*
+ * The deathmatch starts of a compiled map that stand over no floor, as the delivery gates ask it (`ask_starts`): the
+ * game puts the player 9 over the origin, and a floor is solid within 32 under his feet (24 under that).
+ */
+static uint32_t starts_floating(const mapgen_bsp_t *bsp, float (*out)[3], uint32_t cap)
+{
+    uint32_t length = 0, n = 0;
+    const char *text = bsp ? MapGenBsp_Entities(bsp, &length) : NULL;
+    const char *stop = text ? text + length : NULL;
+    for (const char *at = text; at && at < stop && (at = memchr(at, '{', (size_t)(stop - at))) != NULL;) {
+        const char *end = memchr(at, '}', (size_t)(stop - at));
+        if (!end)
+            break;
+        char block[1024];
+        const size_t len = (size_t)(end - at) < sizeof(block) - 1u ? (size_t)(end - at) : sizeof(block) - 1u;
+        memcpy(block, at, len);
+        block[len] = '\0';
+        at = end + 1;
+        const char *org = strstr(block, "\"origin\"");
+        float o[3];
+        if (!strstr(block, "\"info_player_deathmatch\"") || !org
+            || sscanf(org + 8, " \"%f %f %f\"", &o[0], &o[1], &o[2]) != 3)
+            continue;
+        bool floor = false;
+        for (float dz = 2.0f; dz < 34.0f && !floor; dz += 4.0f) {
+            const float p[3] = { o[0], o[1], o[2] + 9.0f - 24.0f - dz };
+            floor = (MapGenBsp_PointContents(bsp, p) & 1) != 0;
+        }
+        if (!floor && n < cap)
+            memcpy(out[n++], o, sizeof(o));
+    }
+    return n;
+}
+
+/*
+ * The glass of a compiled map that looks into rock, as the delivery gates ask it («pane in rock»): every brush model
+ * with a see-through face, the middle of it, and solid 2 past either face or 40 off it on its thin axis.
+ */
+static uint32_t panes_in_rock(const mapgen_bsp_t *bsp, float (*out)[3], uint32_t cap)
+{
+    uint32_t n = 0;
+    for (uint32_t m = 1; bsp && m < MapGenBsp_NumModels(bsp); m++) {
+        const mapgen_bsp_model_t *mod = MapGenBsp_Model(bsp, m);
+        if (!mod)
+            continue;
+        bool glass = false;
+        for (int32_t f = 0; f < mod->numfaces && !glass; f++) {
+            const mapgen_bsp_face_t *face = MapGenBsp_Face(bsp, (uint32_t)(mod->firstface + f));
+            const mapgen_bsp_texinfo_t *ti = face ? MapGenBsp_TexInfo(bsp, (uint32_t)face->texinfo) : NULL;
+            glass = ti && (ti->flags & (0x10 | 0x20));                      /* SURF_TRANS33 | SURF_TRANS66 */
+        }
+        if (!glass)
+            continue;
+        float size[3], mid[3];
+        int thin = 0;
+        for (int a = 0; a < 3; a++) {
+            size[a] = mod->maxs[a] - mod->mins[a];
+            mid[a] = 0.5f * (mod->mins[a] + mod->maxs[a]);
+            if (size[a] < size[thin])
+                thin = a;
+        }
+        bool rock = false;
+        for (int k = 0; k < 4 && !rock; k++) {
+            float q[3] = { mid[0], mid[1], mid[2] };
+            q[thin] += ((k & 1) ? 1.0f : -1.0f) * ((k & 2) ? 40.0f : 0.5f * size[thin] + 2.0f);
+            rock = (MapGenBsp_PointContents(bsp, q) & 1) != 0;
+        }
+        if (rock && n < cap)
+            memcpy(out[n++], mid, sizeof(mid));
+    }
+    return n;
+}
+
+/*
  * Steps three to six on a candidate somebody else prepared.
  *
  * Shared by an attempt and by materialising, because they are the same six
@@ -1561,6 +1770,27 @@ static bool route_replaced(const mapgen_reach_t *reach, const float p[3]);
  * replaces the parent. Its time is charged to `parent_ms`, apart from the
  * pairs it answers.
  */
+/*
+ * Brief 16 D5: every walk the judge takes keeps what it simulated, and a candidate's walk takes from its parent's every
+ * place the edit could not have touched (`mapgen_reach_options_t.parent`). Off - every walk whole, as before - for a
+ * run that asks for it (`MapGenTransaction_SetWholeWalks`, the A/B and the final oracle's reference).
+ */
+static bool g_txn_whole_walks;
+
+void MapGenTransaction_SetWholeWalks(bool whole)
+{
+    g_txn_whole_walks = whole;
+}
+
+static mapgen_reach_result_t walk_kept(const mapgen_bsp_t *bsp, const mapgen_reach_t *parent, mapgen_reach_t **out)
+{
+    mapgen_reach_options_t o;
+    memset(&o, 0, sizeof(o));
+    o.keep = !g_txn_whole_walks;
+    o.parent = g_txn_whole_walks ? NULL : parent;
+    return MapGenReach_ExploreWith(bsp, MAPGEN_REACH_BUDGET, &o, out);
+}
+
 static mapgen_reach_t *baseline_walk(mapgen_transaction_t *txn,
                                      mapgen_transaction_step_t *step)
 {
@@ -1568,8 +1798,7 @@ static mapgen_reach_t *baseline_walk(mapgen_transaction_t *txn,
         txn->baseline_reach_tried = true;
         const clock_t began = clock();
         if (!txn->baseline_bsp
-            || MapGenReach_Explore(txn->baseline_bsp, 40000u,
-                                   &txn->baseline_reach)
+            || walk_kept(txn->baseline_bsp, NULL, &txn->baseline_reach)
                != MAPGEN_REACH_OK) {
             MapGenReach_Free(txn->baseline_reach);
             txn->baseline_reach = NULL;
@@ -1590,8 +1819,7 @@ static mapgen_reach_t *parent_walk(mapgen_transaction_t *txn,
         txn->parent_reach_tried = true;
         const clock_t began = clock();
         if (!txn->accepted_map
-            || MapGenReach_Explore(txn->accepted_map, 40000u,
-                                   &txn->parent_reach)
+            || walk_kept(txn->accepted_map, txn->baseline_reach, &txn->parent_reach)
                != MAPGEN_REACH_OK) {
             MapGenReach_Free(txn->parent_reach);
             txn->parent_reach = NULL;
@@ -2026,6 +2254,1016 @@ uint32_t MapGenTransaction_SpawnsInMoverColumns(const mapgen_bsp_t *bsp,
     return blocked;
 }
 
+/* ---- brief 16 D1: the proof before the build ----------------------------------------------------------------- */
+
+/*
+ * The PO, 10.10 (mg_10_6695, 2 h 42 min for 27 %): «"вначале выкопаю яму, а потом проверю, а можно ли из неё
+ * выбраться", а изначально можно было понимать можно ли из неё выбраться или нет». 23 of that run's builds were
+ * refused REJECTED_BURIED_ROUTE after a compile and a minute's walk, every one naming a climb place inside the very
+ * box the edit had changed - a question the geometry answers in microseconds.
+ *
+ * So an edit is PROVED before it is built: the brushes it changed are found (the accepted geometry and the edited
+ * clone, compared brush by brush), and every climb place near them is asked the gate's own question - does it still
+ * stand: clear where it is, solid eight under, clear at the head - of the brushes themselves. A place that stood and
+ * no longer does, outside every box where a machine, a flood or a tunnel may answer for it (those need the walk), is
+ * the gate's refusal, given without the build. Proved means only "not refused here": the compiled map is still judged
+ * by every gate.
+ */
+static bool g_txn_prove = true;
+/* brief 18, the RED seam (MapGenTransaction_SetDryRefusals): false - what the plan's trial builds refused is built
+   again at its turn, as before */
+static bool g_txn_dry_refusals = true;
+static bool g_txn_dry_failed_stands = false;    /* RED: a trial build that failed is not tried again */
+
+void MapGenTransaction_SetProof(bool on)
+{
+    g_txn_prove = on;
+}
+
+/* Inside one solid brush, as the compiled tree answers: a point ON a side's plane is inside when that side faces
+   down an axis - the tree keeps every plane facing up its own dominant axis and puts a point on it in front (the
+   floor's own top: air; the ceiling's underside: rock). */
+static bool geo_in_brush(const mapgen_geometry_t *g, const mapgen_geometry_brush_t *b, const float p[3])
+{
+    for (int a = 0; a < 3; a++)
+        if (p[a] < b->mins[a] - 0.5f || p[a] > b->maxs[a] + 0.5f)
+            return false;
+    for (uint32_t s = 0; s < b->num_sides; s++) {
+        const mapgen_geometry_side_t *side = MapGenGeometry_Side(g, b->first_side + s);
+        if (!side)
+            return false;
+        const float d = side->normal[0] * p[0] + side->normal[1] * p[1] + side->normal[2] * p[2] - side->dist;
+        if (d > 0.01f)
+            return false;
+        if (d >= -0.01f) {
+            int big = 0;
+            for (int a = 1; a < 3; a++)
+                if (fabsf(side->normal[a]) > fabsf(side->normal[big]))
+                    big = a;
+            if (side->normal[big] > 0.0f)
+                return false;
+        }
+    }
+    return true;
+}
+
+/* Does a brush meet the cube of half-side `h` round `p`? Every plane pushed out by the cube's support - a little
+   generous at a slanted edge, which is the side to err on for a wall that must not be stepped through. */
+static bool geo_meets_brush(const mapgen_geometry_t *g, const mapgen_geometry_brush_t *b, const float p[3], float h)
+{
+    for (int a = 0; a < 3; a++)
+        if (p[a] + h < b->mins[a] || p[a] - h > b->maxs[a])
+            return false;
+    for (uint32_t s = 0; s < b->num_sides; s++) {
+        const mapgen_geometry_side_t *side = MapGenGeometry_Side(g, b->first_side + s);
+        if (!side)
+            return false;
+        const float reach = h * (fabsf(side->normal[0]) + fabsf(side->normal[1]) + fabsf(side->normal[2]));
+        if (side->normal[0] * p[0] + side->normal[1] * p[1] + side->normal[2] * p[2] - side->dist > reach)
+            return false;
+    }
+    return true;
+}
+
+static bool geo_solid(const mapgen_geometry_t *g, const float p[3])
+{
+    for (uint32_t b = 0; b < MapGenGeometry_NumBrushes(g); b++) {
+        const mapgen_geometry_brush_t *brush = MapGenGeometry_Brush(g, b);
+        if (brush && brush->model == 0 && (brush->contents & MAPGEN_CONTENTS_SOLID) && geo_in_brush(g, brush, p))
+            return true;
+    }
+    return false;
+}
+
+/* `MapGenBsp_Stands`, of the brushes */
+static bool geo_stands(const mapgen_geometry_t *g, const float p[3])
+{
+    const float below[3] = { p[0], p[1], p[2] - 8.0f };
+    const float head[3] = { p[0], p[1], p[2] + 46.0f };
+    return !geo_solid(g, p) && geo_solid(g, below) && !geo_solid(g, head);
+}
+
+static uint64_t geo_brush_hash(const mapgen_geometry_t *g, const mapgen_geometry_brush_t *b)
+{
+    uint64_t h = 1469598103934665603ull;
+    const uint8_t *k = (const uint8_t *)&b->contents;
+    for (size_t i = 0; i < sizeof(b->contents); i++)
+        h = (h ^ k[i]) * 1099511628211ull;
+    k = (const uint8_t *)&b->model;
+    for (size_t i = 0; i < sizeof(b->model); i++)
+        h = (h ^ k[i]) * 1099511628211ull;
+    for (uint32_t s = 0; s < b->num_sides; s++) {
+        const mapgen_geometry_side_t *side = MapGenGeometry_Side(g, b->first_side + s);
+        if (!side)
+            continue;
+        const uint8_t *n = (const uint8_t *)side->normal;
+        for (size_t i = 0; i < sizeof(side->normal); i++)
+            h = (h ^ n[i]) * 1099511628211ull;
+        n = (const uint8_t *)&side->dist;
+        for (size_t i = 0; i < sizeof(side->dist); i++)
+            h = (h ^ n[i]) * 1099511628211ull;
+    }
+    return h;
+}
+
+typedef struct {
+    uint64_t hash;
+    uint32_t brush;
+} geo_print_t;
+
+static int geo_print_order(const void *a, const void *b)
+{
+    const geo_print_t *x = a, *y = b;
+    return x->hash < y->hash ? -1 : x->hash > y->hash ? 1 : (x->brush < y->brush ? -1 : x->brush > y->brush);
+}
+
+static geo_print_t *geo_prints(const mapgen_geometry_t *g, uint32_t *count)
+{
+    const uint32_t n = MapGenGeometry_NumBrushes(g);
+    geo_print_t *p = calloc(n ? n : 1u, sizeof(*p));
+    if (!p)
+        return NULL;
+    for (uint32_t b = 0; b < n; b++) {
+        const mapgen_geometry_brush_t *brush = MapGenGeometry_Brush(g, b);
+        p[b].hash = brush ? geo_brush_hash(g, brush) : 0;
+        p[b].brush = b;
+    }
+    qsort(p, n, sizeof(*p), geo_print_order);
+    *count = n;
+    return p;
+}
+
+/*
+ * The boxes of the brushes one geometry has and the other has not (a multiset of the brushes' hashes, compared), up
+ * to `cap`; the count of them all. A brush moved is two: where it was and where it is.
+ */
+#define PROOF_MAX_CHANGED 512u
+
+static uint32_t geo_changed(const mapgen_geometry_t *was, const mapgen_geometry_t *now, float (*boxes)[6],
+                            uint32_t cap)
+{
+    uint32_t na = 0, nb = 0;
+    geo_print_t *a = geo_prints(was, &na), *b = geo_prints(now, &nb);
+    uint32_t i = 0, j = 0, n = 0;
+    while (a && b && (i < na || j < nb)) {
+        if (i < na && j < nb && a[i].hash == b[j].hash) {
+            i++;
+            j++;
+            continue;
+        }
+        const bool from_a = j >= nb || (i < na && a[i].hash < b[j].hash);
+        const mapgen_geometry_brush_t *brush = from_a ? MapGenGeometry_Brush(was, a[i++].brush)
+                                                      : MapGenGeometry_Brush(now, b[j++].brush);
+        if (brush && n < cap) {
+            memcpy(boxes[n], brush->mins, sizeof(brush->mins));
+            memcpy(boxes[n] + 3, brush->maxs, sizeof(brush->maxs));
+        }
+        n++;
+    }
+    free(a);
+    free(b);
+    return n;
+}
+
+/* Brief 18: the machines of a compiled map nothing can operate - as the walk counts them, with no walk: a mover
+   nothing names, one whose rider's column or whose own travel the map stands in (MapGenMovers_MeasureClearance). */
+static uint32_t inoperable_machines(const mapgen_bsp_t *bsp)
+{
+    mapgen_movers_t *movers = bsp ? calloc(1, sizeof(*movers)) : NULL;
+    uint32_t n = 0;
+    if (movers && MapGenMovers_Read(bsp, movers)) {
+        MapGenMovers_MeasureClearance(movers, bsp);
+        for (uint32_t i = 0; i < movers->num_movers; i++)
+            n += movers->movers[i].inoperable ? 1u : 0u;
+    }
+    free(movers);
+    return n;
+}
+
+static void dry_refuse(mapgen_transaction_t *txn, uint32_t index, mapgen_transaction_verdict_t verdict, const char *why)
+{
+    for (uint32_t i = 0; i < txn->num_dry_refused; i++)
+        if (txn->dry_refused[i].index == index)
+            return;
+    if (txn->num_dry_refused >= MAPGEN_TXN_DRY_REFUSALS)
+        return;
+    txn->dry_refused[txn->num_dry_refused].index = index;
+    txn->dry_refused[txn->num_dry_refused].verdict = verdict;
+    txn->dry_refused[txn->num_dry_refused].stood = txn->accepted_count;
+    snprintf(txn->dry_refused[txn->num_dry_refused].why, sizeof(txn->dry_refused[0].why), "%s", why ? why : "");
+    txn->num_dry_refused++;
+}
+
+/* The verdict the plan's trial build gave edit `index`, with its words; MAPGEN_TXN_ACCEPTED when it refused nothing. */
+static mapgen_transaction_verdict_t dry_refused(const mapgen_transaction_t *txn, uint32_t index, char *why, size_t cap)
+{
+    if (!g_txn_dry_refusals)
+        return MAPGEN_TXN_ACCEPTED;
+    for (uint32_t i = 0; i < txn->num_dry_refused; i++)
+        if (txn->dry_refused[i].index == index) {
+            /* a build that failed, and the map has changed since: built again at its turn */
+            if (txn->dry_refused[i].verdict == MAPGEN_TXN_REJECTED_COMPILE && !g_txn_dry_failed_stands
+                && txn->dry_refused[i].stood != txn->accepted_count)
+                return MAPGEN_TXN_ACCEPTED;
+            if (why && cap)
+                snprintf(why, cap, "%s (its build alone, at the plan)", txn->dry_refused[i].why);
+            return txn->dry_refused[i].verdict;
+        }
+    return MAPGEN_TXN_ACCEPTED;
+}
+
+static bool proof_point_in(const float p[3], const float lo[3], const float hi[3], float grow)
+{
+    for (int a = 0; a < 3; a++)
+        if (p[a] < lo[a] - grow || p[a] > hi[a] + grow)
+            return false;
+    return true;
+}
+
+/*
+ * The proof of one applied edit, before its build: ACCEPTED when nothing here refuses it - its build then answers the
+ * rest - or the verdict the compiled gate would give, with its reason. `step->proof_*` say what was asked.
+ */
+static mapgen_transaction_verdict_t prove(mapgen_transaction_t *txn, const mapgen_geometry_t *candidate,
+                                          mapgen_transaction_step_t *step, char *why, size_t why_size)
+{
+    const clock_t began = clock();
+    float (*changed)[6] = calloc(PROOF_MAX_CHANGED, sizeof(*changed));
+    if (!changed)
+        return MAPGEN_TXN_ACCEPTED;
+    const uint32_t num_changed = geo_changed(txn->accepted, candidate, changed, PROOF_MAX_CHANGED);
+    step->proof_brushes = num_changed;
+    mapgen_transaction_verdict_t verdict = MAPGEN_TXN_ACCEPTED;
+
+    /* the boxes where a place lost is answered by the walk, not here: a lift that replaced a flight, the flood's
+       footprint and the tunnel's segments of this edit (grown as the gate grows them), and every box an accepted
+       one left */
+    float answer[2u + MAPGEN_TXN_MAX_DIG_SEGS][6];
+    uint32_t num_answer = 0;
+    float rise = 0.0f;
+    if (MapGenGeometryEdit_ReplacedFlight(txn->plan, txn->donor, step->edit.target, answer[num_answer],
+                                          answer[num_answer] + 3, &rise))
+        num_answer++;
+    if (step->edit.kind == MAPGEN_EDIT_FLOOD) {
+        float lo[3], hi[3];
+        if (MapGenGeometryEdit_FloodFootprint(txn->plan, step->edit.target, lo, hi)
+            || MapGenGeometryEdit_BoxOf(txn->plan, txn->accepted_map ? txn->accepted_map : txn->donor_bsp,
+                                        txn->donor, step->edit.target, lo, hi)) {
+            for (int a = 0; a < 3; a++) {
+                answer[num_answer][a] = lo[a] - 24.0f;
+                answer[num_answer][3 + a] = hi[a] + 24.0f;
+            }
+            num_answer++;
+        } else {
+            num_answer = UINT32_MAX;            /* a flood with no box: nothing here can be said */
+        }
+    }
+    if (step->edit.kind == MAPGEN_EDIT_DIG && num_answer != UINT32_MAX) {
+        const mapgen_geometry_edit_t *de = MapGenGeometryEdit_At(txn->plan, step->edit.target);
+        float boxes[6u * MAPGEN_TXN_MAX_DIG_SEGS];
+        const uint32_t segs = de ? MapGenGeometryEdit_DigBoxes(txn->plan, de->target, boxes, MAPGEN_TXN_MAX_DIG_SEGS)
+                                 : 0u;
+        for (uint32_t s = 0; s < segs; s++, num_answer++)
+            for (int a = 0; a < 3; a++) {
+                answer[num_answer][a] = boxes[6u * s + (uint32_t)a] - 24.0f;
+                answer[num_answer][3 + a] = boxes[6u * s + 3u + (uint32_t)a] + 24.0f;
+            }
+    }
+
+    if (num_changed && num_changed <= PROOF_MAX_CHANGED && num_answer != UINT32_MAX) {
+        for (uint32_t c = 0; c < txn->num_climbs && verdict == MAPGEN_TXN_ACCEPTED; c++) {
+            const float *p = txn->climb[c];
+            bool near = false;
+            for (uint32_t k = 0; k < num_changed && !near; k++)
+                near = proof_point_in(p, changed[k], changed[k] + 3, 64.0f);
+            if (!near)
+                continue;
+            bool answered = false;
+            for (uint32_t k = 0; k < num_answer && !answered; k++)
+                answered = proof_point_in(p, answer[k], answer[k] + 3, 0.0f);
+            for (uint32_t f = 0; f < txn->num_forgiven && !answered; f++)
+                answered = proof_point_in(p, txn->forgiven[f].lo, txn->forgiven[f].hi, 0.0f);
+            if (answered)
+                continue;
+            step->proof_places++;
+            if (!geo_stands(txn->accepted, p) || geo_stands(candidate, p))
+                continue;
+            snprintf(why, why_size, "buried a climb place at %.0f %.0f %.0f (proved before the build)",
+                     (double)p[0], (double)p[1], (double)p[2]);
+            verdict = MAPGEN_TXN_REJECTED_BURIED_ROUTE;
+        }
+    }
+    free(changed);
+    step->proof_ms = TXN_MS_SINCE(began);
+    return verdict;
+}
+
+/*
+ * Brief 16 D2: what an edit is WORTH, before its build.
+ *
+ * The run's metric is `MapGenDivergence`: the share of the base's 32-unit architecture cells that changed - a cell
+ * counts when it is solid with air beside it (the shell), or holds a drawn surface. So the brushes an edit changed are
+ * rasterised on that same lattice, in the accepted geometry and in the edited clone, solid sampled at each cell's
+ * centre as the metric samples the compiled map, and the cells whose shell changed are counted - with a cell of
+ * either side of the change, which is where its faces are. An estimate: it is checked against the run's own deltas
+ * (the dry replay prints both), and it is an upper bound per edit, not a promise.
+ */
+#define VALUE_CELL      32.0f
+#define VALUE_MAX_CELLS (1u << 21)
+
+/* The brushes one geometry has and the other has not, by index: what `was` lost and what `now` gained. */
+static void geo_diff(const mapgen_geometry_t *was, const mapgen_geometry_t *now, uint32_t *lost, uint32_t *num_lost,
+                     uint32_t *gained, uint32_t *num_gained, uint32_t cap)
+{
+    *num_lost = *num_gained = 0;
+    uint32_t na = 0, nb = 0;
+    geo_print_t *a = geo_prints(was, &na), *b = geo_prints(now, &nb);
+    uint32_t i = 0, j = 0;
+    while (a && b && (i < na || j < nb)) {
+        if (i < na && j < nb && a[i].hash == b[j].hash) {
+            i++;
+            j++;
+            continue;
+        }
+        if (j >= nb || (i < na && a[i].hash < b[j].hash)) {
+            if (*num_lost < cap)
+                lost[(*num_lost)++] = a[i].brush;
+            i++;
+        } else {
+            if (*num_gained < cap)
+                gained[(*num_gained)++] = b[j].brush;
+            j++;
+        }
+    }
+    free(a);
+    free(b);
+}
+
+/*
+ * The cells an applied edit changes. The accepted side is the accepted COMPILED map's own answer at each cell's
+ * centre - the metric's own sample, the void outside the map solid as the compiler fills it. The edited side is the
+ * same, changed only where the edit changed brushes: inside a brush of the edited geometry - solid; inside a brush it
+ * removed, or inside the box a dig opened, and in no brush - air; anywhere else as before.
+ */
+/* ---- a brush side's polygon, clipped into the metric's cells (brief 16 D2) ------------------------------------- */
+
+#define VALUE_POLY 64
+
+/* The polygon of side `s` of brush `b`: a large square on its plane, cut by every other side. Its corner count. */
+static uint32_t value_side_poly(const mapgen_geometry_t *g, const mapgen_geometry_brush_t *b, uint32_t s,
+                                float out[VALUE_POLY][3])
+{
+    const mapgen_geometry_side_t *side = MapGenGeometry_Side(g, b->first_side + s);
+    if (!side)
+        return 0;
+    const float *nrm = side->normal;
+    /* two axes on the plane */
+    float u[3], v[3];
+    const float ax = fabsf(nrm[0]), ay = fabsf(nrm[1]), az = fabsf(nrm[2]);
+    const float ref[3] = { az >= ax && az >= ay ? 1.0f : 0.0f, 0.0f, az >= ax && az >= ay ? 0.0f : 1.0f };
+    u[0] = ref[1] * nrm[2] - ref[2] * nrm[1];
+    u[1] = ref[2] * nrm[0] - ref[0] * nrm[2];
+    u[2] = ref[0] * nrm[1] - ref[1] * nrm[0];
+    float lu = sqrtf(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+    if (lu < 1e-6f)
+        return 0;
+    for (int a = 0; a < 3; a++)
+        u[a] /= lu;
+    v[0] = nrm[1] * u[2] - nrm[2] * u[1];
+    v[1] = nrm[2] * u[0] - nrm[0] * u[2];
+    v[2] = nrm[0] * u[1] - nrm[1] * u[0];
+    const float big = 16384.0f;
+    float org[3];
+    for (int a = 0; a < 3; a++)
+        org[a] = nrm[a] * side->dist;
+    float poly[2][VALUE_POLY][3];
+    uint32_t count = 4;
+    for (int a = 0; a < 3; a++) {
+        poly[0][0][a] = org[a] - big * u[a] - big * v[a];
+        poly[0][1][a] = org[a] + big * u[a] - big * v[a];
+        poly[0][2][a] = org[a] + big * u[a] + big * v[a];
+        poly[0][3][a] = org[a] - big * u[a] + big * v[a];
+    }
+    int cur = 0;
+    for (uint32_t k = 0; k < b->num_sides && count >= 3; k++) {
+        if (k == s)
+            continue;
+        const mapgen_geometry_side_t *o = MapGenGeometry_Side(g, b->first_side + k);
+        if (!o)
+            continue;
+        uint32_t made = 0;
+        for (uint32_t i = 0; i < count && made + 1 < VALUE_POLY; i++) {
+            const float *p = poly[cur][i], *q = poly[cur][(i + 1) % count];
+            const float dp = o->normal[0] * p[0] + o->normal[1] * p[1] + o->normal[2] * p[2] - o->dist;
+            const float dq = o->normal[0] * q[0] + o->normal[1] * q[1] + o->normal[2] * q[2] - o->dist;
+            if (dp <= 0.01f)
+                memcpy(poly[!cur][made++], p, sizeof(poly[0][0]));
+            if ((dp > 0.01f) != (dq > 0.01f) && made < VALUE_POLY) {
+                const float f = dp / (dp - dq);
+                for (int a = 0; a < 3; a++)
+                    poly[!cur][made][a] = p[a] + (q[a] - p[a]) * f;
+                made++;
+            }
+        }
+        cur = !cur;
+        count = made;
+    }
+    if (count < 3)
+        return 0;
+    memcpy(out, poly[cur], count * sizeof(poly[0][0]));
+    return count;
+}
+
+/* The area of a polygon inside one cell (half-open, as the metric's). */
+static float value_cell_area(const float pts[][3], uint32_t n, const int32_t cell[3])
+{
+    float buf[2][VALUE_POLY + 8][3];
+    uint32_t count = n < VALUE_POLY ? n : VALUE_POLY;
+    memcpy(buf[0], pts, count * sizeof(buf[0][0]));
+    int cur = 0;
+    for (int axis = 0; axis < 3; axis++)
+        for (int side = 0; side < 2; side++) {
+            const float bound = (float)(cell[axis] + side) * VALUE_CELL;
+            const float sign = side ? -1.0f : 1.0f;
+            uint32_t out = 0;
+            for (uint32_t i = 0; i < count && out + 1 < VALUE_POLY + 8; i++) {
+                const float *a = buf[cur][i], *b = buf[cur][(i + 1) % count];
+                const float da = sign * (a[axis] - bound), db = sign * (b[axis] - bound);
+                const bool a_in = side ? da > 0.0f : da >= 0.0f, b_in = side ? db > 0.0f : db >= 0.0f;
+                if (a_in)
+                    memcpy(buf[!cur][out++], a, sizeof(buf[0][0]));
+                if (a_in != b_in) {
+                    const float f = da / (da - db);
+                    for (int k = 0; k < 3; k++)
+                        buf[!cur][out][k] = a[k] + (b[k] - a[k]) * f;
+                    out++;
+                }
+            }
+            cur = !cur;
+            count = out;
+            if (count < 3)
+                return 0.0f;
+        }
+    float sum[3] = { 0, 0, 0 };
+    for (uint32_t i = 0; i < count; i++) {
+        const float *a = buf[cur][i], *b = buf[cur][(i + 1) % count];
+        sum[0] += a[1] * b[2] - a[2] * b[1];
+        sum[1] += a[2] * b[0] - a[0] * b[2];
+        sum[2] += a[0] * b[1] - a[1] * b[0];
+    }
+    return 0.5f * sqrtf(sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2]);
+}
+
+typedef struct {
+    const mapgen_transaction_t *txn;
+    const mapgen_geometry_t    *now;
+    const mapgen_bsp_t         *bsp;
+    const uint32_t             *near, *lost;
+    uint32_t                    num_near, num_lost;
+    /* the boxes a dig opens - its passage's and its room's own segments - or none */
+    float                       open[MAPGEN_TXN_MAX_DIG_SEGS][6];
+    uint32_t                    num_open;
+    /*
+     * The edited map's air, as the compiler would find it: a fine grid over the region - three points a cell a side,
+     * the middle one the cell's centre - where every point no brush of the edited map holds and the old air reaches
+     * (the compiler fills from the inside out) is air; the rest - rock, and the void outside the map - is solid. NULL
+     * when the region was too large: the box rules above stand in for it.
+     */
+    uint8_t                    *air;
+    float                       flo[3];
+    int32_t                     fn[3];
+} value_world_t;
+
+#define VALUE_FINE      (VALUE_CELL / 3.0f)
+#define VALUE_MAX_FINE  (1u << 24)
+
+static bool value_before(const value_world_t *w, const float p[3])
+{
+    return (MapGenBsp_PointContents(w->bsp, p) & MAPGEN_CONTENTS_SOLID) != 0;
+}
+
+/* The edited map at a point: a brush of it there - solid; else what the compiled map had, unless the edit removed
+   the brush that made it solid, or a dig opened the void there. */
+static bool value_after(const value_world_t *w, const float p[3])
+{
+    if (w->air) {
+        int32_t f[3];
+        bool in = true;
+        for (int a = 0; a < 3 && in; a++) {
+            f[a] = (int32_t)floorf((p[a] - w->flo[a]) / VALUE_FINE);
+            in = f[a] >= 0 && f[a] < w->fn[a];
+        }
+        if (in)
+            return !w->air[((size_t)f[2] * (size_t)w->fn[1] + (size_t)f[1]) * (size_t)w->fn[0] + (size_t)f[0]];
+    }
+    for (uint32_t k = 0; k < w->num_near; k++)
+        if (geo_in_brush(w->now, MapGenGeometry_Brush(w->now, w->near[k]), p))
+            return true;
+    if (!value_before(w, p))
+        return false;
+    for (uint32_t k = 0; k < w->num_open; k++)
+        if (proof_point_in(p, w->open[k], w->open[k] + 3, 0.0f))
+            return false;
+    for (uint32_t k = 0; k < w->num_lost; k++) {
+        const mapgen_geometry_brush_t *b = MapGenGeometry_Brush(w->txn->accepted, w->lost[k]);
+        if (b && b->model == 0 && (b->contents & MAPGEN_CONTENTS_SOLID) && geo_in_brush(w->txn->accepted, b, p))
+            return false;
+    }
+    return true;
+}
+
+/*
+ * The cells an applied edit changes, as the metric flags a cell: SHELL - solid, with air beside it - and SURFACE -
+ * a drawn face in it. The accepted side is the accepted COMPILED map's own answer at each cell's centre (the void
+ * outside the map is solid, as the compiler fills it); the edited side is the same, changed where the edit changed
+ * brushes (`value_after`). A face on the lattice's boundary belongs to the cell above it (the metric's cells are
+ * half-open), so a cell has surface when it differs from its neighbour below on any axis; and every visible side of a
+ * brush the edit added or removed marks the cells it lies in - which is how a wall thinner than a cell is seen.
+ */
+/* brief 17 D5: when set, every cell value_cells counts is kept here too (see mapgen_plan_value_t.keys) */
+static uint64_t *g_value_keys;
+static uint32_t g_value_num_keys, g_value_cap_keys;
+static bool g_value_collect;
+
+static void value_key(int32_t cx, int32_t cy, int32_t cz, bool added)
+{
+    if (g_value_num_keys == g_value_cap_keys) {
+        const uint32_t want = g_value_cap_keys ? 2u * g_value_cap_keys : 65536u;
+        uint64_t *grown = realloc(g_value_keys, (size_t)want * sizeof(*grown));
+        if (!grown)
+            return;
+        g_value_keys = grown;
+        g_value_cap_keys = want;
+    }
+    g_value_keys[g_value_num_keys++] = ((uint64_t)(uint16_t)(cx + 32768) << 32) | ((uint64_t)(uint16_t)(cy + 32768) << 16)
+                                     | (uint64_t)(uint16_t)(cz + 32768) | (added ? (1ull << 63) : 0ull);
+}
+
+static uint32_t value_cells(const mapgen_transaction_t *txn, const mapgen_geometry_t *now, const float (*dig)[6],
+                            uint32_t num_dig, uint32_t *added)
+{
+    if (added)
+        *added = 0;
+    const mapgen_geometry_t *was = txn->accepted;
+    value_world_t w;
+    memset(&w, 0, sizeof(w));
+    w.txn = txn;
+    w.now = now;
+    w.bsp = txn->accepted_map ? txn->accepted_map : txn->baseline_bsp;
+    for (uint32_t k = 0; k < num_dig && k < MAPGEN_TXN_MAX_DIG_SEGS; k++)
+        memcpy(w.open[w.num_open++], dig[k], sizeof(w.open[0]));
+    uint32_t *lost = calloc(PROOF_MAX_CHANGED, sizeof(*lost)), *gained = calloc(PROOF_MAX_CHANGED, sizeof(*gained));
+    uint32_t num_lost = 0, num_gained = 0;
+    if (!lost || !gained || !w.bsp) {
+        free(lost);
+        free(gained);
+        return 0;
+    }
+    geo_diff(was, now, lost, &num_lost, gained, &num_gained, PROOF_MAX_CHANGED);
+    w.lost = lost;
+    w.num_lost = num_lost;
+    float lo[3] = { 1e30f, 1e30f, 1e30f }, hi[3] = { -1e30f, -1e30f, -1e30f };
+    for (uint32_t k = 0; k < num_lost + num_gained; k++) {
+        const mapgen_geometry_brush_t *b = k < num_lost ? MapGenGeometry_Brush(was, lost[k])
+                                                        : MapGenGeometry_Brush(now, gained[k - num_lost]);
+        for (int a = 0; b && a < 3; a++) {
+            lo[a] = fminf(lo[a], b->mins[a]);
+            hi[a] = fmaxf(hi[a], b->maxs[a]);
+        }
+    }
+    /* a dig opens its own segments - the passage and the room it carves, in rock or out in the void */
+    for (uint32_t k = 0; k < w.num_open; k++)
+        for (int a = 0; a < 3; a++) {
+            lo[a] = fminf(lo[a], w.open[k][a]);
+            hi[a] = fmaxf(hi[a], w.open[k][3 + a]);
+        }
+    int32_t c0[3], n[3];
+    uint64_t total = 1;
+    for (int a = 0; a < 3; a++) {
+        c0[a] = (int32_t)floorf(lo[a] / VALUE_CELL) - 2;
+        n[a] = (int32_t)floorf(hi[a] / VALUE_CELL) + 2 - c0[a] + 1;
+        if (lo[a] > hi[a] || n[a] <= 0 || n[a] > 4096)
+            total = 0;
+        else
+            total *= (uint64_t)n[a];
+    }
+    if (!total || total > VALUE_MAX_CELLS) {
+        free(lost);
+        free(gained);
+        return 0;
+    }
+    uint8_t *solid[2] = { calloc((size_t)total, 1), calloc((size_t)total, 1) };
+    float *face = calloc((size_t)total, sizeof(*face));     /* drawn area gained less drawn area lost, per cell */
+    uint32_t *near = calloc(MapGenGeometry_NumBrushes(now) + 1u, sizeof(*near));
+    if (!solid[0] || !solid[1] || !face || !near) {
+        free(solid[0]);
+        free(solid[1]);
+        free(face);
+        free(near);
+        free(lost);
+        free(gained);
+        return 0;
+    }
+    const float rlo[3] = { c0[0] * VALUE_CELL, c0[1] * VALUE_CELL, c0[2] * VALUE_CELL };
+    const float rhi[3] = { (c0[0] + n[0]) * VALUE_CELL, (c0[1] + n[1]) * VALUE_CELL, (c0[2] + n[2]) * VALUE_CELL };
+    for (uint32_t b = 0; b < MapGenGeometry_NumBrushes(now); b++) {
+        const mapgen_geometry_brush_t *brush = MapGenGeometry_Brush(now, b);
+        if (!brush || brush->model != 0 || !(brush->contents & MAPGEN_CONTENTS_SOLID))
+            continue;
+        bool meets = true;
+        for (int a = 0; a < 3 && meets; a++)
+            meets = brush->maxs[a] >= rlo[a] - 4.0f && brush->mins[a] <= rhi[a] + 4.0f;
+        if (meets)
+            near[w.num_near++] = b;
+    }
+    w.near = near;
+    /*
+     * The edited map's air as the compiler finds it (see `value_world_t`). It fills from the OUTSIDE in: the void
+     * beyond the hull is solid, and a pocket the hull encloses stays air - the gap a dig leaves between its room and
+     * its skin is one (MEASURED on mg_10_6695's annex: air at z -64 under its floor, 948 of the metric's 1583 cells
+     * there were the gap's). So the outside is flooded: from every point of the region no brush of either map holds
+     * and the accepted compiled map calls solid - the void as it was - through every point no brush of the edited map
+     * holds. What it reaches is the void still; every other point no brush holds is air.
+     */
+    const uint64_t fine = total * 27u;
+    uint8_t *held = fine <= VALUE_MAX_FINE ? calloc((size_t)fine, 1) : NULL;
+    uint8_t *held_was = held ? calloc((size_t)fine, 1) : NULL;
+    /* the edited map's brushes as the flood's BARRIER: each fine point whose own cube a brush meets - a skin of 8
+       stepped between two points of the grid, and the void ran on into the gap it closes */
+    uint8_t *wall = held_was ? calloc((size_t)fine, 1) : NULL;
+    uint8_t *outside = wall ? calloc((size_t)fine, 1) : NULL;
+    uint32_t *queue = outside ? malloc((size_t)fine * sizeof(*queue)) : NULL;
+    uint32_t *near_was = queue ? calloc(MapGenGeometry_NumBrushes(was) + 1u, sizeof(*near_was)) : NULL;
+    w.air = near_was ? calloc((size_t)fine, 1) : NULL;
+    if (w.air) {
+        for (int a = 0; a < 3; a++) {
+            w.flo[a] = rlo[a];
+            w.fn[a] = n[a] * 3;
+        }
+        uint32_t num_near_was = 0;
+        for (uint32_t b = 0; b < MapGenGeometry_NumBrushes(was); b++) {
+            const mapgen_geometry_brush_t *brush = MapGenGeometry_Brush(was, b);
+            if (!brush || brush->model != 0 || !(brush->contents & MAPGEN_CONTENTS_SOLID))
+                continue;
+            bool meets = true;
+            for (int a = 0; a < 3 && meets; a++)
+                meets = brush->maxs[a] >= rlo[a] - 4.0f && brush->mins[a] <= rhi[a] + 4.0f;
+            if (meets)
+                near_was[num_near_was++] = b;
+        }
+        const size_t fx = (size_t)w.fn[0], fxy = (size_t)w.fn[0] * (size_t)w.fn[1];
+        for (int g = 0; g < 2; g++) {
+            const mapgen_geometry_t *geo = g ? was : now;
+            const uint32_t *list = g ? near_was : near;
+            const uint32_t count = g ? num_near_was : w.num_near;
+            uint8_t *mark = g ? held_was : held;
+            for (uint32_t k = 0; k < count; k++) {
+                const mapgen_geometry_brush_t *b = MapGenGeometry_Brush(geo, list[k]);
+                int32_t f0[3], f1[3];
+                for (int a = 0; a < 3; a++) {
+                    f0[a] = (int32_t)floorf((b->mins[a] - w.flo[a]) / VALUE_FINE - 0.5f);
+                    f1[a] = (int32_t)ceilf((b->maxs[a] - w.flo[a]) / VALUE_FINE - 0.5f);
+                    if (f0[a] < 0)
+                        f0[a] = 0;
+                    if (f1[a] > w.fn[a] - 1)
+                        f1[a] = w.fn[a] - 1;
+                }
+                for (int32_t z = f0[2]; z <= f1[2]; z++)
+                    for (int32_t y = f0[1]; y <= f1[1]; y++)
+                        for (int32_t x = f0[0]; x <= f1[0]; x++) {
+                            const size_t at = (size_t)z * fxy + (size_t)y * fx + (size_t)x;
+                            if (mark[at] && (g || wall[at]))
+                                continue;
+                            const float p[3] = { w.flo[0] + (x + 0.5f) * VALUE_FINE,
+                                                 w.flo[1] + (y + 0.5f) * VALUE_FINE,
+                                                 w.flo[2] + (z + 0.5f) * VALUE_FINE };
+                            if (geo_in_brush(geo, b, p))
+                                mark[at] = 1;
+                            if (!g && !wall[at] && geo_meets_brush(geo, b, p, 0.5f * VALUE_FINE))
+                                wall[at] = 1;
+                        }
+            }
+        }
+        /* where the edit changed anything - the box round all its brushes and a dig's own segments, a fine step
+           round: the void is seeded only away from it, so a pocket the edit closed - the gap round a room, the air
+           a sky skin roofs over - is not taken for the void it was cut out of */
+        uint8_t *zone = calloc((size_t)fine, 1);
+        if (zone) {
+            float zlo[3] = { 1e30f, 1e30f, 1e30f }, zhi[3] = { -1e30f, -1e30f, -1e30f };
+            for (uint32_t k = 0; k < num_lost + num_gained + w.num_open; k++) {
+                const float *blo, *bhi;
+                if (k < num_lost + num_gained) {
+                    const mapgen_geometry_brush_t *b = k < num_lost ? MapGenGeometry_Brush(was, lost[k])
+                                                                    : MapGenGeometry_Brush(now, gained[k - num_lost]);
+                    if (!b)
+                        continue;
+                    blo = b->mins;
+                    bhi = b->maxs;
+                } else {
+                    blo = w.open[k - num_lost - num_gained];
+                    bhi = w.open[k - num_lost - num_gained] + 3;
+                }
+                for (int a = 0; a < 3; a++) {
+                    zlo[a] = fminf(zlo[a], blo[a]);
+                    zhi[a] = fmaxf(zhi[a], bhi[a]);
+                }
+            }
+            int32_t f0[3], f1[3];
+            bool any = zlo[0] <= zhi[0];
+            for (int a = 0; a < 3 && any; a++) {
+                f0[a] = (int32_t)floorf((zlo[a] - VALUE_FINE - w.flo[a]) / VALUE_FINE);
+                f1[a] = (int32_t)floorf((zhi[a] + VALUE_FINE - w.flo[a]) / VALUE_FINE);
+                if (f0[a] < 0)
+                    f0[a] = 0;
+                if (f1[a] > w.fn[a] - 1)
+                    f1[a] = w.fn[a] - 1;
+                any = f0[a] <= f1[a];
+            }
+            for (int32_t z = any ? f0[2] : 1; any && z <= f1[2]; z++)
+                for (int32_t y = f0[1]; y <= f1[1]; y++)
+                    memset(zone + (size_t)z * fxy + (size_t)y * fx + (size_t)f0[0], 1, (size_t)(f1[0] - f0[0] + 1));
+        }
+        size_t head = 0, tail = 0;
+        for (int32_t z = 0; z < w.fn[2]; z++)
+            for (int32_t y = 0; y < w.fn[1]; y++)
+                for (int32_t x = 0; x < w.fn[0]; x++) {
+                    const size_t at = (size_t)z * fxy + (size_t)y * fx + (size_t)x;
+                    const float p[3] = { w.flo[0] + (x + 0.5f) * VALUE_FINE, w.flo[1] + (y + 0.5f) * VALUE_FINE,
+                                         w.flo[2] + (z + 0.5f) * VALUE_FINE };
+                    /* `outside` holds 2 for a point the compiled map called solid - the only ground the void may
+                       spread over (a map with the void reaching its old air leaks, and is refused at its build) */
+                    if (!value_before(&w, p))
+                        continue;
+                    outside[at] = 2;
+                    if (wall[at] || held_was[at] || (zone && zone[at]))
+                        continue;
+                    outside[at] = 1;
+                    queue[tail++] = (uint32_t)at;
+                }
+        while (head < tail) {
+            const size_t at = queue[head++];
+            const int32_t x = (int32_t)(at % fx), y = (int32_t)((at / fx) % (size_t)w.fn[1]),
+                          z = (int32_t)(at / fxy);
+            const int32_t nb[6][3] = { { x + 1, y, z }, { x - 1, y, z }, { x, y + 1, z },
+                                       { x, y - 1, z }, { x, y, z + 1 }, { x, y, z - 1 } };
+            for (int s = 0; s < 6; s++) {
+                if (nb[s][0] < 0 || nb[s][1] < 0 || nb[s][2] < 0 || nb[s][0] >= w.fn[0] || nb[s][1] >= w.fn[1]
+                    || nb[s][2] >= w.fn[2])
+                    continue;
+                const size_t to = (size_t)nb[s][2] * fxy + (size_t)nb[s][1] * fx + (size_t)nb[s][0];
+                if (wall[to] || outside[to] != 2)
+                    continue;
+                outside[to] = 1;
+                queue[tail++] = (uint32_t)to;
+            }
+        }
+        /* and the barrier's own margin on the void's side, one step: a point no brush holds, beside the void, is it */
+        for (size_t q = 0; q < tail; q++) {
+            const size_t at = queue[q];
+            const int32_t x = (int32_t)(at % fx), y = (int32_t)((at / fx) % (size_t)w.fn[1]),
+                          z = (int32_t)(at / fxy);
+            const int32_t nb[6][3] = { { x + 1, y, z }, { x - 1, y, z }, { x, y + 1, z },
+                                       { x, y - 1, z }, { x, y, z + 1 }, { x, y, z - 1 } };
+            for (int s = 0; s < 6; s++) {
+                if (nb[s][0] < 0 || nb[s][1] < 0 || nb[s][2] < 0 || nb[s][0] >= w.fn[0] || nb[s][1] >= w.fn[1]
+                    || nb[s][2] >= w.fn[2])
+                    continue;
+                const size_t to = (size_t)nb[s][2] * fxy + (size_t)nb[s][1] * fx + (size_t)nb[s][0];
+                if (outside[to] == 2 && !held[to])
+                    outside[to] = 3;            /* the margin: void, not spread from */
+            }
+        }
+        for (uint64_t f = 0; f < fine; f++)
+            w.air[f] = !held[f] && outside[f] != 1 && outside[f] != 3;
+        /* away from the edit the map is as it was: a void pocket the region's box cut off from the rest is still void */
+        for (uint64_t f = 0; zone && f < fine; f++)
+            if (!zone[f] && !held[f] && outside[f] == 2)
+                w.air[f] = 0;
+        free(zone);
+    }
+    free(held);
+    free(held_was);
+    free(wall);
+    free(outside);
+    free(queue);
+    free(near_was);
+    for (int32_t z = 0; z < n[2]; z++)
+        for (int32_t y = 0; y < n[1]; y++)
+            for (int32_t x = 0; x < n[0]; x++) {
+                const float p[3] = { (c0[0] + x + 0.5f) * VALUE_CELL, (c0[1] + y + 0.5f) * VALUE_CELL,
+                                     (c0[2] + z + 0.5f) * VALUE_CELL };
+                const size_t at = ((size_t)z * (size_t)n[1] + (size_t)y) * (size_t)n[0] + (size_t)x;
+                solid[0][at] = value_before(&w, p) ? 1u : 0u;
+                solid[1][at] = value_after(&w, p) ? 1u : 0u;
+            }
+    /* the visible sides of the brushes the edit removed (before) and added (after): the drawn area each puts in each
+       cell, the added counted up and the removed down - a wall rebuilt round a window cancels but for the hole */
+    float poly[VALUE_POLY][3];
+    for (uint32_t k = 0; k < num_lost + num_gained; k++) {
+        const bool gone = k < num_lost;
+        const mapgen_geometry_t *g = gone ? was : now;
+        const mapgen_geometry_brush_t *b = MapGenGeometry_Brush(g, gone ? lost[k] : gained[k - num_lost]);
+        if (!b || b->model != 0 || !(b->contents & MAPGEN_CONTENTS_SOLID))
+            continue;
+        for (uint32_t s = 0; s < b->num_sides; s++) {
+            const mapgen_geometry_side_t *side = MapGenGeometry_Side(g, b->first_side + s);
+            if (!side || side->bevel)
+                continue;
+            const uint32_t np = value_side_poly(g, b, s, poly);
+            if (np < 3)
+                continue;
+            float centre[3] = { 0, 0, 0 };
+            for (uint32_t i = 0; i < np; i++)
+                for (int a = 0; a < 3; a++)
+                    centre[a] += poly[i][a] / (float)np;
+            const float out[3] = { centre[0] + 2.0f * side->normal[0], centre[1] + 2.0f * side->normal[1],
+                                   centre[2] + 2.0f * side->normal[2] };
+            if (gone ? value_before(&w, out) : value_after(&w, out))
+                continue;                       /* against rock: never drawn */
+            int32_t plo[3], phi[3];
+            for (int a = 0; a < 3; a++) {
+                float mn = poly[0][a], mx = poly[0][a];
+                for (uint32_t i = 1; i < np; i++) {
+                    mn = fminf(mn, poly[i][a]);
+                    mx = fmaxf(mx, poly[i][a]);
+                }
+                plo[a] = (int32_t)floorf(mn / VALUE_CELL);
+                phi[a] = (int32_t)floorf(mx / VALUE_CELL);
+            }
+            for (int32_t cz = plo[2]; cz <= phi[2]; cz++)
+                for (int32_t cy = plo[1]; cy <= phi[1]; cy++)
+                    for (int32_t cx = plo[0]; cx <= phi[0]; cx++) {
+                        const int32_t c[3] = { cx - c0[0], cy - c0[1], cz - c0[2] };
+                        if (c[0] < 0 || c[1] < 0 || c[2] < 0 || c[0] >= n[0] || c[1] >= n[1] || c[2] >= n[2])
+                            continue;
+                        const int32_t cell[3] = { cx, cy, cz };
+                        const float area = value_cell_area((const float (*)[3])poly, np, cell);
+                        face[((size_t)c[2] * (size_t)n[1] + (size_t)c[1]) * (size_t)n[0] + (size_t)c[0]]
+                            += gone ? -area : area;
+                    }
+        }
+    }
+    free(near);
+    free(lost);
+    free(gained);
+    free(w.air);
+    uint32_t cells = 0;
+    static const int32_t SIDE[6][3] = { { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 } };
+    for (int32_t z = 1; z + 1 < n[2]; z++)
+        for (int32_t y = 1; y + 1 < n[1]; y++)
+            for (int32_t x = 1; x + 1 < n[0]; x++) {
+                const size_t at = ((size_t)z * (size_t)n[1] + (size_t)y) * (size_t)n[0] + (size_t)x;
+                uint8_t flags[2] = { 0, 0 };
+                for (int g = 0; g < 2; g++) {
+                    for (int s = 0; s < 6; s++) {
+                        const size_t nb = ((size_t)(z + SIDE[s][2]) * (size_t)n[1] + (size_t)(y + SIDE[s][1]))
+                                        * (size_t)n[0] + (size_t)(x + SIDE[s][0]);
+                        if (solid[g][at] && !solid[g][nb])
+                            flags[g] |= 1u;                         /* shell */
+                        if ((s & 1) && solid[g][at] != solid[g][nb])
+                            flags[g] |= 2u;                         /* a face on its lower boundary */
+                    }
+                }
+                /* a twentieth of a cell's cross-section, the metric's own threshold */
+                if (flags[0] != flags[1] || fabsf(face[at]) >= VALUE_CELL * VALUE_CELL * 0.05f) {
+                    cells++;
+                    /* a cell nothing flagged before: it joins the metric's own count of cells too */
+                    const bool joins = !flags[0] && (flags[1] || face[at] > 0.0f);
+                    if (added && joins)
+                        (*added)++;
+                    if (g_value_collect)
+                        value_key(x + c0[0], y + c0[1], z + c0[2], joins);
+                }
+            }
+    free(solid[0]);
+    free(solid[1]);
+    free(face);
+    return cells;
+}
+
+/* The segments a dig of this plan opens, if the edit is one: their count. */
+static uint32_t value_dig_boxes(const mapgen_transaction_t *txn, uint32_t target, float (*out)[6])
+{
+    const mapgen_geometry_edit_t *e = MapGenGeometryEdit_At(txn->plan, target);
+    float flat[6u * MAPGEN_TXN_MAX_DIG_SEGS];
+    const uint32_t n = e && e->kind == MAPGEN_EDIT_DIG
+                     ? MapGenGeometryEdit_DigBoxes(txn->plan, e->target, flat, MAPGEN_TXN_MAX_DIG_SEGS) : 0u;
+    for (uint32_t k = 0; k < n; k++)
+        memcpy(out[k], flat + 6u * k, sizeof(out[0]));
+    return n;
+}
+
+/* The base's own architecture cells - the metric's denominator - measured once, of the baseline against itself. */
+static uint32_t value_donor_cells(mapgen_transaction_t *txn)
+{
+    if (!txn->value_donor_cells && txn->baseline_bsp) {
+        mapgen_divergence_t d;
+        memset(&d, 0, sizeof(d));
+        if (MapGenDivergence_Measure(txn->baseline_bsp, txn->baseline_bsp, 100, false, &d) == MAPGEN_DIVERGENCE_OK)
+            txn->value_donor_cells = d.donor_cells;
+    }
+    return txn->value_donor_cells;
+}
+
+/* An edit's estimated worth, in tenths of a permille, from the cells it changes. */
+static uint32_t value_tenths(mapgen_transaction_t *txn, uint32_t cells)
+{
+    const uint32_t donor = value_donor_cells(txn);
+    return donor ? (uint32_t)((10000ull * cells + donor / 2u) / donor) : 0u;
+}
+
+bool MapGenTransaction_ProvePlan(mapgen_transaction_t *txn, mapgen_plan_value_t *out)
+{
+    if (!txn || !out)
+        return false;
+    memset(out, 0, sizeof(*out));
+    const mapgen_geometry_edit_plan_t *plan = txn->plan;
+    const uint32_t n = MapGenGeometryEdit_Count(plan);
+    out->edits = n;
+    out->value = calloc(n ? n : 1u, sizeof(*out->value));
+    out->state = calloc(n ? n : 1u, sizeof(*out->state));
+    out->cells = calloc(n ? n : 1u, sizeof(*out->cells));
+    out->added = calloc(n ? n : 1u, sizeof(*out->added));
+    out->key_first = calloc(n ? n : 1u, sizeof(*out->key_first));
+    out->key_count = calloc(n ? n : 1u, sizeof(*out->key_count));
+    if (!out->value || !out->state || !out->cells || !out->added || !out->key_first || !out->key_count)
+        return false;
+    g_value_num_keys = 0;
+    /* the metric's own counts on the map as it stands: changed of the cells it counts, against the base */
+    out->base_cells = txn->accepted_cells ? txn->accepted_cells : value_donor_cells(txn);
+    out->base_changed = txn->accepted_cells ? txn->accepted_changed : 0u;
+    const clock_t began = clock();
+    for (uint32_t i = 0; i < n; i++) {
+        const mapgen_geometry_edit_t *e = MapGenGeometryEdit_At(plan, i);
+        if (!e)
+            continue;
+        mapgen_geometry_t *candidate = NULL;
+        if (MapGenGeometry_Clone(txn->accepted, &candidate) != MAPGEN_GEOMETRY_OK)
+            continue;
+        bool changed = false;
+        MapGenGeometryEdit_ApplyOne(plan, candidate, txn->donor, i, &changed);
+        if (!changed) {
+            out->state[i] = MAPGEN_PLAN_EDIT_DECLINED;
+            out->declined++;
+            MapGenGeometry_Free(candidate);
+            continue;
+        }
+        mapgen_transaction_step_t step;
+        memset(&step, 0, sizeof(step));
+        step.edit.kind = e->kind;
+        step.edit.target = i;
+        step.edit.amount = e->amount;
+        char why[200];
+        if (prove(txn, candidate, &step, why, sizeof(why)) != MAPGEN_TXN_ACCEPTED) {
+            out->state[i] = MAPGEN_PLAN_EDIT_REFUSED;
+            out->refused++;
+            MapGenGeometry_Free(candidate);
+            continue;
+        }
+        float dig[MAPGEN_TXN_MAX_DIG_SEGS][6];
+        uint32_t added = 0;
+        out->key_first[i] = g_value_num_keys;
+        g_value_collect = true;
+        const uint32_t cells = value_cells(txn, candidate, (const float (*)[6])dig, value_dig_boxes(txn, i, dig),
+                                           &added);
+        g_value_collect = false;
+        out->key_count[i] = g_value_num_keys - out->key_first[i];
+        MapGenGeometry_Free(candidate);
+        out->state[i] = MAPGEN_PLAN_EDIT_PROVED;
+        out->value[i] = value_tenths(txn, cells);
+        out->cells[i] = cells;
+        out->added[i] = added;
+        out->proved++;
+    }
+    out->ms = TXN_MS_SINCE(began);
+    if (g_value_num_keys && (out->keys = malloc((size_t)g_value_num_keys * sizeof(*out->keys))) != NULL) {
+        memcpy(out->keys, g_value_keys, (size_t)g_value_num_keys * sizeof(*out->keys));
+        out->num_keys = g_value_num_keys;
+    }
+    return true;
+}
+
+void MapGenTransaction_PlanValueFree(mapgen_plan_value_t *v)
+{
+    if (!v)
+        return;
+    free(v->value);
+    free(v->state);
+    free(v->cells);
+    free(v->added);
+    free(v->keys);
+    free(v->key_first);
+    free(v->key_count);
+    memset(v, 0, sizeof(*v));
+}
+
+/* The estimate of the edit applied to this clone, for the dry replay's observer: its cells. */
+static uint32_t observe_value(mapgen_transaction_t *txn, const mapgen_geometry_t *candidate, uint32_t target)
+{
+    float dig[MAPGEN_TXN_MAX_DIG_SEGS][6];
+    return value_cells(txn, candidate, (const float (*)[6])dig, value_dig_boxes(txn, target, dig), NULL);
+}
+
 static mapgen_transaction_verdict_t
 try_one(mapgen_transaction_t *txn, const mapgen_typed_edit_t *edit,
         mapgen_transaction_step_t *step)
@@ -2146,11 +3384,43 @@ try_one(mapgen_transaction_t *txn, const mapgen_typed_edit_t *edit,
      */
     step->faults_after = MapGenGeometry_SurfaceFaults(candidate, txn->donor_bsp);
 
+    /* brief 18: refused by the plan's own trial build - said again from there, nothing built */
+    {
+        const mapgen_transaction_verdict_t dry = dry_refused(txn, step->edit.target, step->declined,
+                                                             sizeof(step->declined));
+        if (dry != MAPGEN_TXN_ACCEPTED) {
+            step->proved_refusal = true;
+            step->apply_ms = TXN_MS_SINCE(attempt_began);
+            MapGenGeometry_Free(candidate);
+            return step->verdict = dry;
+        }
+    }
+
+    /* brief 16 D1: proved before it is built - a refusal here costs no compile and no walk */
+    if (g_txn_prove) {
+        const mapgen_transaction_verdict_t proved = prove(txn, candidate, step, step->declined,
+                                                          sizeof(step->declined));
+        if (proved != MAPGEN_TXN_ACCEPTED) {
+            step->proved_refusal = true;
+            step->apply_ms = TXN_MS_SINCE(attempt_began);
+            MapGenGeometry_Free(candidate);
+            return step->verdict = proved;
+        }
+    }
+
     /* D18: the clone and the edit's own apply, before the gates take over */
     step->apply_ms = TXN_MS_SINCE(attempt_began);
     const mapgen_transaction_verdict_t verdict =
         judge(txn, candidate, attempt, true, step);
     s_attempt_skinned = false;
+    if (verdict == MAPGEN_TXN_ACCEPTED) {
+        MapGenGeometryEdit_NoteAccepted(txn->plan, edit->target);   /* brief 15: the next round's wants */
+        if (txn->pending_measured) {
+            /* the accepted map's machines are the next edit's reference (see the blocked-machine gate) */
+            memcpy(txn->donor_machine, txn->pending_machine, sizeof(txn->donor_machine));
+            txn->num_donor_machines = txn->num_pending_machines;
+        }
+    }
 
     /*
      * A graft that is RETAINED is a donor that contributed.
@@ -2267,6 +3537,29 @@ judge(mapgen_transaction_t *txn, mapgen_geometry_t *candidate,
     step->compile_result = crc;
     snprintf(step->bsp_sha256, sizeof(step->bsp_sha256), "%s",
              compiled.bsp_sha256);
+    if (crc != MAPCOMPILE_OK) {
+        /* the compiler's own words, said on the ledger's line: on a warped base seven room reshapes failed their
+           build with nothing to say why (q2dm3, 10.10) */
+        const char *said = NULL;
+        for (int s = 0; s < compiled.num_stages && !said; s++) {
+            const char *out = compiled.stages[s].stdout_captured;
+            static const char *const marks[] = { "ERROR", "Error", "error:", "leaked", "WARNING: ", "ouldn't" };
+            for (int k = 0; out && k < 6 && !said; k++)
+                said = strstr(out, marks[k]);
+        }
+        if (!said && compiled.num_stages > 0 && compiled.stages[compiled.num_stages - 1].stdout_captured) {
+            const char *out = compiled.stages[compiled.num_stages - 1].stdout_captured;
+            const size_t n = strlen(out);
+            said = n > 120u ? out + n - 120u : out;
+        }
+        char line[120];
+        snprintf(line, sizeof(line), "%s", said ? said : "");
+        for (char *c = line; *c; c++)
+            if (*c == '\n' || *c == '\r' || *c == '"')
+                *c = ' ';
+        snprintf(step->declined, sizeof(step->declined), "the build failed: %s: %s", MapCompile_ResultName(crc),
+                 line);
+    }
     for (int i = 0; i < compiled.num_stages; i++)
         free(compiled.stages[i].stdout_captured);
 
@@ -2339,6 +3632,56 @@ judge(mapgen_transaction_t *txn, mapgen_geometry_t *candidate,
         }
         free(mine);
         free(theirs);
+    }
+
+    /*
+     * And no start its parent stood on a floor hangs over none (the delivery gates' «starts», asked here so the edit
+     * is refused rather than the map): q2dm1 at 150 %, a start a stairway and two remodels carried in turn stood 32
+     * over the floor, and the player dropped a step at every spawn there (10.10).
+     */
+    {
+        float mine[64][3], theirs[64][3];
+        const uint32_t n_mine = starts_floating(built, mine, 64u);
+        const uint32_t n_theirs = n_mine ? starts_floating(txn->accepted_map ? txn->accepted_map
+                                                                             : txn->baseline_bsp, theirs, 64u) : 0u;
+        for (uint32_t i = 0; i < n_mine && i < 64u; i++) {
+            bool parent_too = false;
+            for (uint32_t j = 0; j < n_theirs && j < 64u && !parent_too; j++)
+                parent_too = fabsf(mine[i][0] - theirs[j][0]) < 0.5f && fabsf(mine[i][1] - theirs[j][1]) < 0.5f
+                          && fabsf(mine[i][2] - theirs[j][2]) < 0.5f;
+            if (parent_too)
+                continue;
+            snprintf(step->declined, sizeof(step->declined),
+                     "unplayable: a start at %.0f %.0f %.0f stands over no floor", (double)mine[i][0],
+                     (double)mine[i][1], (double)mine[i][2]);
+            MapGenBsp_Free(built);
+            MapGenGeometry_Free(candidate);
+            return step->verdict = MAPGEN_TXN_REJECTED_UNPLAYABLE;
+        }
+    }
+
+    /*
+     * And no glass looks into rock (the delivery gates' «static: pane in rock», asked here): q2dm1 at 150 %, a block and
+     * a wall moved stood 40 in front of a window's pane accepted before them (11.10).
+     */
+    {
+        float mine[64][3], theirs[64][3];
+        const uint32_t n_mine = panes_in_rock(built, mine, 64u);
+        const uint32_t n_theirs = n_mine ? panes_in_rock(txn->accepted_map ? txn->accepted_map : txn->baseline_bsp,
+                                                         theirs, 64u) : 0u;
+        for (uint32_t i = 0; i < n_mine && i < 64u; i++) {
+            bool parent_too = false;
+            for (uint32_t j = 0; j < n_theirs && j < 64u && !parent_too; j++)
+                parent_too = fabsf(mine[i][0] - theirs[j][0]) < 0.5f && fabsf(mine[i][1] - theirs[j][1]) < 0.5f
+                          && fabsf(mine[i][2] - theirs[j][2]) < 0.5f;
+            if (parent_too)
+                continue;
+            snprintf(step->declined, sizeof(step->declined), "a pane at %.0f %.0f %.0f looks into rock",
+                     (double)mine[i][0], (double)mine[i][1], (double)mine[i][2]);
+            MapGenBsp_Free(built);
+            MapGenGeometry_Free(candidate);
+            return step->verdict = MAPGEN_TXN_REJECTED_SURFACE;
+        }
     }
 
     /*
@@ -2443,10 +3786,13 @@ judge(mapgen_transaction_t *txn, mapgen_geometry_t *candidate,
     bool playable = false;
     bool held = false;            /* row 405: refused by the donor comparison */
     char held_why[200] = "";
+    /* brief 16 D5: an edit's walk from its parent's; the map materialised at the end is walked whole - the oracle */
+    const mapgen_reach_t *walk_parent = require_movement ? parent_walk(txn, step) : NULL;
     const clock_t reach_began = clock();
     const uint64_t reach_cpu_began = Q2PROX_Cpu_ProcessMs();
     const bool explored =
-        MapGenReach_Explore(built, 40000u, &reach) == MAPGEN_REACH_OK;
+        (require_movement ? walk_kept(built, walk_parent, &reach)
+                          : MapGenReach_Explore(built, MAPGEN_REACH_BUDGET, &reach)) == MAPGEN_REACH_OK;
     step->reach_ms = TXN_MS_SINCE(reach_began);
     step->reach_cpu_ms = TXN_CPU_SINCE(reach_cpu_began);
     if (explored && reach) {
@@ -2481,6 +3827,9 @@ judge(mapgen_transaction_t *txn, mapgen_geometry_t *candidate,
         step->walk_movers = reach_report.movers;
         step->walk_simulated = reach_report.simulated;
         step->walk_reused = reach_report.reused;
+        step->walk_inherited = reach_report.inherited;
+        step->walk_changed = reach_report.brushes_changed;
+        step->walk_refused = reach_report.parent_refused;
     }
     /* D21: the parent's walk near this edit's box, for every attempt that
        compiled. Materialising applied nothing and has no box. */
@@ -2706,6 +4055,11 @@ judge(mapgen_transaction_t *txn, mapgen_geometry_t *candidate,
         step->tjunctions_liquid = 0;
         step->tjunctions_cross_model = 0;
         step->tjunctions_skin = 0;
+        step->tjunctions_moved = 0;
+        /* brief 17: the boxes of every brush the edit changed, asked once when a new seam is found */
+        float (*touched)[6] = NULL;
+        uint32_t num_touched = 0;
+        bool touched_known = false;
 
         /*
          * A measurement that could not run is not a map without cracks.
@@ -2763,6 +4117,53 @@ judge(mapgen_transaction_t *txn, mapgen_geometry_t *candidate,
             /* row 382: the one question the seam probe asks too */
             if (MapGenTransaction_NewSeam(&seam[s], txn->donor_seam,
                                           txn->num_donor_seams)) {
+                /*
+                 * Brief 17: a new seam SEAM_MOVED_CLEAR or more from every brush the edit added or removed is not the
+                 * edit's: the compile cuts the whole map anew for any change and, on a stretched base whose vertices are
+                 * off the grid, at times fails to weld one in geometry nobody touched. Warped q2dm3's storey at
+                 * -624 720 208 (the brief's D1) was refused for a vertex at -218 183 -16, 600 units from it, in a wall it
+                 * never touched - and a flood and a window for another at -306 -312 192. Counted, not refused; a seam
+                 * the edit's own brushes are near is refused as before.
+                 */
+                if (g_txn_seam_moved_spared) {
+                    if (!touched_known) {
+                        touched_known = true;
+                        uint32_t *lost = calloc(SEAM_MAX_TOUCHED, sizeof(*lost));
+                        uint32_t *gained = calloc(SEAM_MAX_TOUCHED, sizeof(*gained));
+                        touched = calloc(2u * SEAM_MAX_TOUCHED, sizeof(*touched));
+                        uint32_t nl = 0, ng = 0;
+                        if (lost && gained && touched) {
+                            geo_diff(txn->accepted, candidate, lost, &nl, gained, &ng, SEAM_MAX_TOUCHED);
+                            if (nl < SEAM_MAX_TOUCHED && ng < SEAM_MAX_TOUCHED)
+                                for (uint32_t k = 0; k < nl + ng; k++) {
+                                    const mapgen_geometry_brush_t *br = k < nl
+                                        ? MapGenGeometry_Brush(txn->accepted, lost[k])
+                                        : MapGenGeometry_Brush(candidate, gained[k - nl]);
+                                    if (!br)
+                                        continue;
+                                    for (int a = 0; a < 3; a++) {
+                                        touched[num_touched][a] = br->mins[a] - SEAM_MOVED_CLEAR;
+                                        touched[num_touched][3 + a] = br->maxs[a] + SEAM_MOVED_CLEAR;
+                                    }
+                                    num_touched++;
+                                }
+                            else
+                                num_touched = UINT32_MAX;       /* too many to say: every seam is the edit's */
+                        }
+                        free(lost);
+                        free(gained);
+                    }
+                    bool near = num_touched == UINT32_MAX || !touched;
+                    for (uint32_t k = 0; !near && k < num_touched; k++)
+                        near = seam[s].split[0] >= touched[k][0] && seam[s].split[0] <= touched[k][3]
+                            && seam[s].split[1] >= touched[k][1] && seam[s].split[1] <= touched[k][4]
+                            && seam[s].split[2] >= touched[k][2] && seam[s].split[2] <= touched[k][5];
+                    if (!near) {
+                        step->tjunctions_moved++;
+                        continue;
+                    }
+                }
+
                 /* A NEW crack in something that is not going to move. The
                    candidate does not get to spend a seam it removed
                    somewhere else. */
@@ -2791,6 +4192,7 @@ judge(mapgen_transaction_t *txn, mapgen_geometry_t *candidate,
             }
         }
         free(seam);
+        free(touched);
         if (!inherited_only) {
             MapGenReach_Free(reach);
             MapGenBsp_Free(built);
@@ -2832,8 +4234,21 @@ judge(mapgen_transaction_t *txn, mapgen_geometry_t *candidate,
      * forked, and an edit is held only to not adding to it.
      */
     const clock_t water_began = clock();
-    const bool water_stands =
-        MapGenBsp_StandingWater(built, NULL) > txn->donor_standing_water;
+    /* the base's frame: the water a player could be beside - the base's own air, or where this edit was made; a
+       sealed pocket of the void a long dig cut off from the outside is no air anybody stands in */
+    float water_lo[3], water_hi[3];
+    uint32_t water_now, water_floor = txn->donor_standing_water;
+    if (txn->baseline_bsp && MapGenGeometryEdit_BoxOf(txn->plan, NULL, NULL, step->edit.target, water_lo, water_hi))
+        water_now = MapGenBsp_StandingWaterNear(built, txn->baseline_bsp, water_lo, water_hi, NULL);
+    else {
+        /* an edit with no place (a swap, a reshaped room): no more than the map it was made on stood */
+        water_now = MapGenBsp_StandingWater(built, NULL);
+        const mapgen_bsp_t *parent = txn->accepted_map ? txn->accepted_map : txn->baseline_bsp;
+        const uint32_t had = parent ? MapGenBsp_StandingWater(parent, NULL) : 0u;
+        if (had > water_floor)
+            water_floor = had;
+    }
+    const bool water_stands = water_now > water_floor;
     step->water_ms = TXN_MS_SINCE(water_began);
     if (water_stands) {
         MapGenReach_Free(reach);
@@ -2850,9 +4265,68 @@ judge(mapgen_transaction_t *txn, mapgen_geometry_t *candidate,
     }
     {
         uint32_t travel = 0;
+        const mapgen_mover_t *own_blame = NULL;
+        uint32_t own_was = 0;
+        txn->pending_measured = false;
         if (movers) {
             MapGenMovers_MeasureClearance(movers, built);
             MapGenMovers_WorstClearance(movers, &travel, NULL);
+            /*
+             * Each machine against ITS OWN room in the donor (the PO, 09.10, mg_10_6695: a platform rides through a
+             * new column). Against the donor's worst alone, a donor with one lift grazing its shaft let a column
+             * stand in another lift's way: that lift's loss stayed under the first one's graze. A machine of the map
+             * as last accepted (same kind, same box within two units) may not lose more than 2 permille of its own.
+             * A machine this very edit builds (a lift sunk into its pit at the bottom by design) is its family's to
+             * judge; from its acceptance on it is in the reference, and no later edit may stand in its way.
+             */
+            for (uint32_t m = 0; m < movers->num_movers && !own_blame; m++) {
+                const mapgen_mover_t *mv = &movers->movers[m];
+                if (!mv->carries)
+                    continue;
+                uint32_t was = 0;
+                bool known = false;
+                for (uint32_t k = 0; k < txn->num_donor_machines && !known; k++) {
+                    bool same = txn->donor_machine[k].kind == (int)mv->kind;
+                    for (int a = 0; a < 3 && same; a++)
+                        same = fabsf(txn->donor_machine[k].mins[a] - mv->mins[a]) <= 2.0f
+                               && fabsf(txn->donor_machine[k].maxs[a] - mv->maxs[a]) <= 2.0f;
+                    if (same) {
+                        known = true;
+                        was = txn->donor_machine[k].travel;
+                    }
+                }
+                if (known && mv->body_permille > was + 2u) {
+                    own_blame = mv;
+                    own_was = was;
+                }
+            }
+            /* this candidate's machines: the reference once it is accepted */
+            txn->num_pending_machines = 0;
+            for (uint32_t m = 0; m < movers->num_movers && txn->num_pending_machines < 64u; m++) {
+                const mapgen_mover_t *mv = &movers->movers[m];
+                if (!mv->carries)
+                    continue;
+                const uint32_t k = txn->num_pending_machines++;
+                txn->pending_machine[k].kind = (int)mv->kind;
+                memcpy(txn->pending_machine[k].mins, mv->mins, sizeof(mv->mins));
+                memcpy(txn->pending_machine[k].maxs, mv->maxs, sizeof(mv->maxs));
+                txn->pending_machine[k].travel = mv->body_permille;
+            }
+            txn->pending_measured = true;
+        }
+        if (own_blame) {
+            snprintf(step->declined, sizeof(step->declined),
+                     "machine %s at %.0f %.0f %.0f loses room: travel %u permille against its own %u in the donor",
+                     MapGenMovers_KindName(own_blame->kind),
+                     (double)(0.5f * (own_blame->mins[0] + own_blame->maxs[0])),
+                     (double)(0.5f * (own_blame->mins[1] + own_blame->maxs[1])),
+                     (double)(0.5f * (own_blame->mins[2] + own_blame->maxs[2])),
+                     (unsigned)own_blame->body_permille, own_was);
+            free(movers);
+            MapGenReach_Free(reach);
+            MapGenBsp_Free(built);
+            MapGenGeometry_Free(candidate);
+            return step->verdict = MAPGEN_TXN_REJECTED_BLOCKED_MACHINE;
         }
         if (travel > txn->donor_mover_travel) {
             /*
@@ -3461,6 +4935,8 @@ judge(mapgen_transaction_t *txn, mapgen_geometry_t *candidate,
     MapGenGeometry_Free(txn->accepted);
     txn->accepted = candidate;
     txn->accepted_divergence = divergence.aggregate_permille;
+    txn->accepted_changed = divergence.changed_cells;           /* brief 16 D2: the plan's word counts from here */
+    txn->accepted_cells = divergence.donor_cells;
     /* Not recomputed: this is the count taken of this very geometry on the way
        in, and an accepted candidate is exactly what was judged. */
     txn->accepted_faults = step->faults_after;
@@ -3738,6 +5214,7 @@ static mapgen_transaction_result_t redeal(mapgen_transaction_t *txn,
         return MAPGEN_TXN_ERR_MEMORY;
     MapGenGeometryEdit_Free(txn->plan);
     txn->plan = fresh;
+    txn->num_dry_refused = 0;           /* brief 18: the trial builds' refusals were the plan's that is gone */
     MapGenGeometryEdit_SetGround(txn->plan, txn->accepted_map);
     MapGenGeometryEdit_SetAmbition(txn->plan, txn->ambition);
     return MAPGEN_TXN_OK;
@@ -3876,6 +5353,296 @@ bool MapGenTransaction_Equivalence(const mapgen_transaction_t *txn,
  * pipeline driver's `--replay-any-lights`, which only the donors guard passes; a real resume stays byte for byte.
  */
 static bool g_replay_any_lights;
+
+/*
+ * Brief 16: the PO's ledgers replayed through the new proof - «measure on his records first», with no generation.
+ * DRY: an accepted row whose checkpoint is gone (a finished run's folder is cleared) is compiled again from the same
+ * edit - the build is deterministic - and accepted without a gate or a walk; and every row's edit is applied and
+ * PROVED as an observer, the ledger's verdict standing (`step->observed_*`).
+ */
+static bool g_replay_dry;
+static uint32_t g_replay_judge;        /* accepted rows still to judge as a run would */
+
+void MapGenTransaction_SetReplayDry(bool dry)
+{
+    g_replay_dry = dry;
+}
+
+void MapGenTransaction_SetReplayJudge(uint32_t rows)
+{
+    g_replay_judge = rows;
+}
+
+static uint32_t observe_value(mapgen_transaction_t *txn, const mapgen_geometry_t *candidate, uint32_t target);
+
+static void observe_proof(mapgen_transaction_t *txn, const mapgen_typed_edit_t *edit,
+                          mapgen_transaction_step_t *step)
+{
+    step->observed = false;
+    if (!g_replay_dry || !g_txn_prove)         /* `--no-proof`: the guard's RED - nothing is proved */
+        return;
+    mapgen_geometry_t *candidate = NULL;
+    if (MapGenGeometry_Clone(txn->accepted, &candidate) != MAPGEN_GEOMETRY_OK)
+        return;
+    bool changed = false;
+    MapGenGeometryEdit_ApplyOne(txn->plan, candidate, txn->donor, edit->target, &changed);
+    if (changed) {
+        /* brief 18, a diagnostic: MAPGEN_DRY_DUMP=<folder> keeps each observed row's edited map, in the rows' order
+           (obs_<n>_edit<index>.map) - the two builds of the reference no proof foresaw were read from these */
+        const char *dump = getenv("MAPGEN_DRY_DUMP");
+        static uint32_t observed_rows;
+        char path[MAPCOMPILE_MAX_PATH];
+        if (dump && dump[0]
+            && snprintf(path, sizeof(path), "%s/obs_%03u_edit%u.map", dump, (unsigned)observed_rows++,
+                        (unsigned)edit->target) < (int)sizeof(path))
+            MapGenGeometry_WriteValve220(candidate, path);
+        step->observed = true;
+        step->observed_verdict = dry_refused(txn, edit->target, step->observed_why, sizeof(step->observed_why));
+        if (step->observed_verdict == MAPGEN_TXN_ACCEPTED)
+            step->observed_verdict = prove(txn, candidate, step, step->observed_why, sizeof(step->observed_why));
+        step->observed_cells = observe_value(txn, candidate, edit->target);
+        step->observed_value = value_tenths(txn, step->observed_cells);
+    }
+    MapGenGeometry_Free(candidate);
+}
+
+/* The dry replay's build of an accepted row: written and compiled in a try of its own, as `judge` compiles. */
+static bool replay_compile(mapgen_transaction_t *txn, const mapgen_geometry_t *candidate, uint32_t attempt,
+                           char *bsp_path, size_t cap)
+{
+    char dir[MAPCOMPILE_MAX_PATH], map_path[MAPCOMPILE_MAX_PATH];
+    if (!attempt_dir(txn, attempt, dir, sizeof(dir))
+        || snprintf(map_path, sizeof(map_path), "%s/%s.map", dir, txn->map_name) >= (int)sizeof(map_path)
+        || MapGenGeometry_WriteValve220(candidate, map_path) != MAPGEN_GEOMETRY_OK)
+        return false;
+    mapcompile_request_t request;
+    memset(&request, 0, sizeof(request));
+    snprintf(request.job_dir, sizeof(request.job_dir), "%s", dir);
+    snprintf(request.map_name, sizeof(request.map_name), "%s", txn->map_name);
+    snprintf(request.moddir, sizeof(request.moddir), "%s", txn->moddir);
+    snprintf(request.basedir, sizeof(request.basedir), "%s", txn->moddir);
+    request.profile = MAPCOMPILE_PROFILE_DRAFT;
+    request.format = MAPCOMPILE_FORMAT_IBSP;
+    request.threads = MAPCOMPILE_PINNED_THREADS;
+    request.stage_timeout_ms = 1800000;
+    request.max_log_bytes = 262144;
+    request.disk_budget_bytes = 512ull * 1024ull * 1024ull;
+    mapcompile_report_t compiled;
+    memset(&compiled, 0, sizeof(compiled));
+    const mapcompile_result_t crc = MapCompile_RunProfile(txn->adapter, &request, &compiled);
+    /* brief 18, a diagnostic: MAPGEN_DRY_DUMP=<folder> keeps a failed build's map and the compiler's words
+       (fail_<n>_attempt<a>.map, .log) - mg_b18_q2dm3's lift was read from these */
+    const char *dump = crc != MAPCOMPILE_OK ? getenv("MAPGEN_DRY_DUMP") : NULL;
+    if (dump && dump[0]) {
+        static uint32_t failed;
+        char to[MAPCOMPILE_MAX_PATH];
+        if (snprintf(to, sizeof(to), "%s/fail_%u_attempt%u.map", dump, (unsigned)failed, (unsigned)attempt)
+            < (int)sizeof(to))
+            MapGenGeometry_WriteValve220(candidate, to);
+        if (snprintf(to, sizeof(to), "%s/fail_%u_attempt%u.log", dump, (unsigned)failed, (unsigned)attempt)
+            < (int)sizeof(to)) {
+            FILE *f = fopen(to, "wb");
+            if (f) {
+                fprintf(f, "%s\n", MapCompile_ResultName(crc));
+                for (int i = 0; i < compiled.num_stages; i++)
+                    if (compiled.stages[i].stdout_captured)
+                        fputs(compiled.stages[i].stdout_captured, f);
+                fclose(f);
+            }
+        }
+        failed++;
+    }
+    for (int i = 0; i < compiled.num_stages; i++)
+        free(compiled.stages[i].stdout_captured);
+    if (crc != MAPCOMPILE_OK)
+        return false;
+    snprintf(bsp_path, cap, "%s", compiled.bsp_path);
+    return true;
+}
+
+/*
+ * Brief 16 D2: the estimate's check on a plan no ledger holds - one edit of the plan as dealt, applied to the map as it
+ * stands and compiled (no walk, no gate, nothing accepted), and the cells the metric itself says it changed: its
+ * estimate (`cells`, `added`) beside the truth (`true_cells`, `true_added`). A measurement, not a generation.
+ */
+bool MapGenTransaction_PlanCheck(mapgen_transaction_t *txn, uint32_t index, uint32_t *cells, uint32_t *added,
+                                 uint32_t *true_cells, uint32_t *true_added)
+{
+    *cells = *added = *true_cells = *true_added = 0;
+    if (!txn)
+        return false;
+    mapgen_geometry_t *candidate = NULL;
+    if (MapGenGeometry_Clone(txn->accepted, &candidate) != MAPGEN_GEOMETRY_OK)
+        return false;
+    bool changed = false;
+    MapGenGeometryEdit_ApplyOne(txn->plan, candidate, txn->donor, index, &changed);
+    char bsp_path[MAPCOMPILE_MAX_PATH];
+    bool ok = changed;
+    if (ok) {
+        float dig[MAPGEN_TXN_MAX_DIG_SEGS][6];
+        *cells = value_cells(txn, candidate, (const float (*)[6])dig, value_dig_boxes(txn, index, dig), added);
+        ok = replay_compile(txn, candidate, txn->attempted++, bsp_path, sizeof(bsp_path));
+    }
+    mapgen_bsp_t *built = ok ? load_bsp(bsp_path) : NULL;
+    const mapgen_bsp_t *before = txn->accepted_map ? txn->accepted_map : txn->baseline_bsp;
+    mapgen_divergence_t d;
+    memset(&d, 0, sizeof(d));
+    ok = built && before && MapGenDivergence_Measure(before, built, 100, false, &d) == MAPGEN_DIVERGENCE_OK;
+    if (ok) {
+        mapgen_divergence_t b0;
+        memset(&b0, 0, sizeof(b0));
+        *true_cells = d.changed_cells;
+        /* the cells new to the count: what the metric counts now less what it counted before */
+        if (MapGenDivergence_Measure(before, before, 100, false, &b0) == MAPGEN_DIVERGENCE_OK)
+            *true_added = d.donor_cells > b0.donor_cells ? d.donor_cells - b0.donor_cells : 0u;
+    }
+    MapGenBsp_Free(built);
+    MapGenGeometry_Free(candidate);
+    return ok;
+}
+
+bool MapGenTransaction_PlanDryBuild(mapgen_transaction_t *txn, uint32_t index, char *why, size_t why_size,
+                                   uint32_t *true_cells)
+{
+    if (why && why_size)
+        why[0] = '\0';
+    if (true_cells)
+        *true_cells = 0;
+    if (!txn)
+        return true;
+    const mapgen_geometry_edit_t *e = MapGenGeometryEdit_At(txn->plan, index);
+    float boxes[6u * MAPGEN_TXN_MAX_DIG_SEGS];
+    mapgen_dig_report_t dig;
+    const uint32_t segs = e && e->kind == MAPGEN_EDIT_DIG
+                        ? MapGenGeometryEdit_DigBoxes(txn->plan, e->target, boxes, MAPGEN_TXN_MAX_DIG_SEGS) : 0u;
+    if (!segs || !MapGenGeometryEdit_DigAt(txn->plan, e->target, &dig))
+        return true;                                    /* nothing a compile alone refuses */
+    mapgen_geometry_t *candidate = NULL;
+    if (MapGenGeometry_Clone(txn->accepted, &candidate) != MAPGEN_GEOMETRY_OK)
+        return true;
+    bool changed = false;
+    const uint32_t skins_before = MapGenGeometryEdit_SkySkins();
+    MapGenGeometryEdit_ApplyOne(txn->plan, candidate, txn->donor, index, &changed);
+    const bool skinned = MapGenGeometryEdit_SkySkins() > skins_before;
+    char bsp_path[MAPCOMPILE_MAX_PATH];
+    /* in the next attempt's own folder, which that attempt writes again: no attempt is spent on it */
+    mapgen_bsp_t *built = changed && replay_compile(txn, candidate, txn->attempted, bsp_path, sizeof(bsp_path))
+                        ? load_bsp(bsp_path) : NULL;
+    bool ok = true;
+    /*
+     * Brief 18 (mg_b18_q2dm1): a dig whose build alone FAILS is refused here - it stayed counted. That run's dig 16,
+     * worth 27.7 points of the plan's word by its estimate, leaked in this very build (no «plan-dry» line said its
+     * cells), was counted all the same, and was REJECTED_COMPILE at its turn: the word said 69.9 % where the run
+     * reached 58.5.
+     */
+    mapgen_transaction_verdict_t refused = MAPGEN_TXN_ACCEPTED;
+    char said_why[160] = "";
+    if (changed && !built) {
+        ok = false;
+        refused = MAPGEN_TXN_REJECTED_COMPILE;
+        snprintf(said_why, sizeof(said_why), "its build alone failed (a leak, or the compiler refused it)");
+    }
+    if (built) {
+        float blo[3] = { 1e30f, 1e30f, 1e30f }, bhi[3] = { -1e30f, -1e30f, -1e30f };
+        for (uint32_t s = 0; s < segs; s++)
+            for (int a = 0; a < 3; a++) {
+                blo[a] = fminf(blo[a], boxes[6u * s + (uint32_t)a]);
+                bhi[a] = fmaxf(bhi[a], boxes[6u * s + 3u + (uint32_t)a]);
+            }
+        float said[6] = { 0, 0, 0, 0, 0, 0 };
+        const uint32_t open = dig_opens_high(built, txn->accepted_map ? txn->accepted_map : txn->baseline_bsp,
+                                             blo, bhi, dig.from, dig.to, said);
+        if (open) {
+            ok = false;
+            refused = MAPGEN_TXN_REJECTED_OPEN_HIGH;
+            snprintf(said_why, sizeof(said_why), "open high: %u points, new %.0f %.0f %.0f open to old %.0f %.0f %.0f",
+                     (unsigned)open, (double)said[0], (double)said[1], (double)said[2], (double)said[3],
+                     (double)said[4], (double)said[5]);
+        }
+        /*
+         * Brief 18: and what else the compiled map says with no walk. A machine nothing can operate (mg_b18_q2dm1's
+         * annex from 1776 1232 370, 8.2 points of its plan's word, built and walked twice to be told «1 machines
+         * nothing in the map can operate»; the reference's shaft and lift at -368 -64 336 alike), and a pickup the
+         * game frees at spawn that the map kept (its tunnel and lift at 2196 -374 614, twice).
+         */
+        const mapgen_bsp_t *was = txn->accepted_map ? txn->accepted_map : txn->baseline_bsp;
+        if (ok) {
+            const uint32_t mine = inoperable_machines(built), theirs = inoperable_machines(was);
+            if (mine > theirs) {
+                ok = false;
+                refused = MAPGEN_TXN_REJECTED_UNPLAYABLE;
+                snprintf(said_why, sizeof(said_why), "%u machines nothing in the map can operate against %u",
+                         (unsigned)mine, (unsigned)theirs);
+            }
+        }
+        if (ok && was) {
+            mapgen_lost_pickup_t *mine = calloc(256, sizeof(*mine)), *theirs = calloc(256, sizeof(*theirs));
+            const uint32_t n_mine = mine ? MapGenTransaction_PickupsLostAtSpawn(built, mine, 256) : 0u;
+            const uint32_t n_theirs = theirs && n_mine ? MapGenTransaction_PickupsLostAtSpawn(was, theirs, 256) : 0u;
+            for (uint32_t i = 0; i < n_mine && i < 256u && ok; i++) {
+                bool had = false;
+                for (uint32_t j = 0; j < n_theirs && j < 256u && !had; j++) {
+                    had = !strcmp(mine[i].classname, theirs[j].classname);
+                    for (int a = 0; a < 3 && had; a++)
+                        had = fabsf(mine[i].origin[a] - theirs[j].origin[a]) < 0.5f;
+                }
+                if (!had) {
+                    ok = false;
+                    refused = MAPGEN_TXN_REJECTED_LOST_PICKUP;
+                    snprintf(said_why, sizeof(said_why), "lost pickup: the game frees %s at %.0f %.0f %.0f at spawn",
+                             mine[i].classname, (double)mine[i].origin[0], (double)mine[i].origin[1],
+                             (double)mine[i].origin[2]);
+                }
+            }
+            free(mine);
+            free(theirs);
+        }
+        /* the cells the metric itself says it changed - the estimate re-measured */
+        const mapgen_bsp_t *before = txn->accepted_map ? txn->accepted_map : txn->baseline_bsp;
+        mapgen_divergence_t d;
+        memset(&d, 0, sizeof(d));
+        if (true_cells && before && MapGenDivergence_Measure(before, built, 100, false, &d) == MAPGEN_DIVERGENCE_OK)
+            *true_cells = d.changed_cells;
+        /* and, as the judge asks of a dig that wore a sky skin, nothing new seen through the sky */
+        float slo[3], shi[3], witness[6];
+        if (ok && skinned && g_txn_sky_check && MapGenGeometryEdit_BoxOf(txn->plan, NULL, NULL, index, slo, shi)
+            && MapGenTransaction_SeenThroughSky(built, txn->donor_bsp, slo, shi, witness)) {
+            ok = false;
+            refused = MAPGEN_TXN_REJECTED_SKY;
+            snprintf(said_why, sizeof(said_why), "new space at %.0f %.0f %.0f seen through the sky from %.0f %.0f %.0f",
+                     (double)witness[0], (double)witness[1], (double)witness[2], (double)witness[3],
+                     (double)witness[4], (double)witness[5]);
+        }
+    }
+    if (!ok) {
+        if (why && why_size)
+            snprintf(why, why_size, "%s", said_why);
+        dry_refuse(txn, index, refused, said_why);
+    }
+    MapGenBsp_Free(built);
+    MapGenGeometry_Free(candidate);
+    return ok;
+}
+
+void MapGenTransaction_SetDryRefusals(bool keep)
+{
+    g_txn_dry_refusals = keep;
+}
+
+void MapGenTransaction_SetDryFailedStands(bool stands)
+{
+    g_txn_dry_failed_stands = stands;
+}
+
+bool MapGenTransaction_DryFailedAgain(const mapgen_transaction_t *txn, uint32_t index)
+{
+    if (!txn || g_txn_dry_failed_stands)
+        return false;
+    for (uint32_t i = 0; i < txn->num_dry_refused; i++)
+        if (txn->dry_refused[i].index == index)
+            return txn->dry_refused[i].verdict == MAPGEN_TXN_REJECTED_COMPILE;
+    return false;
+}
 
 void MapGenTransaction_SetReplayAnyLights(bool any)
 {
@@ -4037,12 +5804,31 @@ MapGenTransaction_Replay(mapgen_transaction_t *txn, const mapgen_typed_edit_t *e
     memset(step, 0, sizeof(*step));
     step->edit = *edit;
     step->divergence_after = txn->accepted_divergence;
+    observe_proof(txn, edit, step);             /* brief 16: the dry replay's observer */
     const uint32_t attempt = txn->attempted++;
     if (was != MAPGEN_TXN_ACCEPTED) {
         step->verdict = was;
         if (txn->num_steps < MAX_STEPS)
             txn->steps[txn->num_steps++] = *step;
         return was;
+    }
+    if (g_replay_dry && g_replay_judge) {
+        /* brief 16: an accepted row JUDGED as a run judges it - the build, the walk from its parent's, every gate -
+           and timed; the ledger's verdict must come out again */
+        g_replay_judge--;
+        txn->attempted--;
+        const mapgen_transaction_step_t seen = *step;
+        const mapgen_transaction_verdict_t v = MapGenTransaction_Try(txn, edit, step);
+        step->observed = seen.observed;
+        step->observed_verdict = seen.observed_verdict;
+        step->observed_value = seen.observed_value;
+        step->observed_cells = seen.observed_cells;
+        memcpy(step->observed_why, seen.observed_why, sizeof(step->observed_why));
+        step->judged = true;
+        if (v != MAPGEN_TXN_ACCEPTED && why)
+            snprintf(why, why_size, "attempt %u: the ledger says ACCEPTED, the judge %s: %s", (unsigned)attempt,
+                     MapGenTransaction_VerdictName(v), step->declined);
+        return v;
     }
     char dir[MAPCOMPILE_MAX_PATH], map_path[MAPCOMPILE_MAX_PATH], bsp_path[MAPCOMPILE_MAX_PATH],
          check_path[MAPCOMPILE_MAX_PATH];
@@ -4066,7 +5852,10 @@ MapGenTransaction_Replay(mapgen_transaction_t *txn, const mapgen_typed_edit_t *e
     bool changed = false;
     MapGenGeometryEdit_ApplyOne(txn->plan, candidate, txn->donor, edit->target, &changed);
     bool same = false;
-    if (changed && MapGenGeometry_WriteValve220(candidate, check_path) == MAPGEN_GEOMETRY_OK) {
+    /* brief 16: dry - no checkpoint to hold the edit to; the same edit compiled again is the map that was built */
+    if (g_replay_dry && changed && replay_compile(txn, candidate, attempt, bsp_path, sizeof(bsp_path)))
+        same = true;
+    else if (changed && MapGenGeometry_WriteValve220(candidate, check_path) == MAPGEN_GEOMETRY_OK) {
         same = files_equal(check_path, map_path)
                || (g_replay_any_lights && maps_equal_but_lights(check_path, map_path));
         /* row 402: kept when it differs, so the divergence can be read line by line */
@@ -4084,6 +5873,20 @@ MapGenTransaction_Replay(mapgen_transaction_t *txn, const mapgen_typed_edit_t *e
         return step->verdict = MAPGEN_TXN_REJECTED_WRITE;
     }
     step->faults_after = MapGenGeometry_SurfaceFaults(candidate, txn->donor_bsp);
+    if (g_replay_dry) {
+        /* brief 16 D2: what the edit truly changed, cell by cell, against the map it was applied to - the estimate's
+           check, axis by axis */
+        mapgen_divergence_t d;
+        memset(&d, 0, sizeof(d));
+        if (MapGenDivergence_Measure(txn->accepted_map ? txn->accepted_map : txn->baseline_bsp, built, 100, false, &d)
+            == MAPGEN_DIVERGENCE_OK) {
+            step->observed_true[0] = d.changed_cells;
+            step->observed_true[1] = d.solid_changed;
+            step->observed_true[2] = d.surface_changed;
+            step->observed_true[3] = d.vertical_changed;
+            step->observed_true[4] = d.motif_changed;
+        }
+    }
 
     /* what the try left for later attempts: the same three questions `judge` asks, on the same inputs */
     mapgen_movers_t *movers = calloc(1, sizeof(*movers));
@@ -4138,6 +5941,15 @@ MapGenTransaction_Replay(mapgen_transaction_t *txn, const mapgen_typed_edit_t *e
     }
 
     /* retained, as `judge` retains - the walk is taken once the replay ends */
+    {
+        mapgen_divergence_t dv;                                 /* brief 16 D2: the metric's counts, as judge keeps */
+        memset(&dv, 0, sizeof(dv));
+        if (txn->baseline_bsp
+            && MapGenDivergence_Measure(txn->baseline_bsp, built, 100, false, &dv) == MAPGEN_DIVERGENCE_OK) {
+            txn->accepted_changed = dv.changed_cells;
+            txn->accepted_cells = dv.donor_cells;
+        }
+    }
     MapGenGeometry_Free(txn->accepted);
     txn->accepted = candidate;
     txn->accepted_divergence = divergence_after;
@@ -4153,6 +5965,7 @@ MapGenTransaction_Replay(mapgen_transaction_t *txn, const mapgen_typed_edit_t *e
     file_sha256_hex(bsp_path, txn->accepted_sha256);
     snprintf(step->bsp_sha256, sizeof(step->bsp_sha256), "%s", txn->accepted_sha256);
     txn->accepted_count++;
+    MapGenGeometryEdit_NoteAccepted(txn->plan, edit->target);       /* brief 15: a replayed acceptance counts too */
     const mapgen_geometry_edit_t *planned = MapGenGeometryEdit_At(txn->plan, edit->target);
     if (planned && planned->kind == MAPGEN_EDIT_GRAFT_BUNDLE) {
         txn->grafts_accepted++;
@@ -4185,7 +5998,7 @@ bool MapGenTransaction_ReplayDone(mapgen_transaction_t *txn)
         return false;
     if (!txn->parent_reach_tried && txn->accepted_map) {
         mapgen_reach_t *reach = NULL;
-        if (MapGenReach_Explore(txn->accepted_map, 40000u, &reach) == MAPGEN_REACH_OK && reach) {
+        if (walk_kept(txn->accepted_map, NULL, &reach) == MAPGEN_REACH_OK && reach) {
             txn->accepted_reach = *MapGenReach_Report(reach);
             txn->accepted_component = txn->accepted_reach.component;
             txn->parent_reach = reach;

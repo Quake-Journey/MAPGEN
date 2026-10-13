@@ -123,7 +123,7 @@ MapGenCertificate_Replay(mapgen_certificate_t *cert, const mapgen_bsp_t *bsp,
      * and the two would drift.
      */
     mapgen_reach_t *reach = NULL;
-    if (MapGenReach_Explore(bsp, 40000u, &reach) != MAPGEN_REACH_OK || !reach) {
+    if (MapGenReach_Explore(bsp, MAPGEN_REACH_BUDGET, &reach) != MAPGEN_REACH_OK || !reach) {
         MapGenReach_Free(reach);
         return MAPGEN_CERT_ERR_NOT_REPRODUCED;
     }

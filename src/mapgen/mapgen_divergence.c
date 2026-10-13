@@ -9,6 +9,11 @@
  */
 
 #include "common/mapgen_divergence.h"
+
+/* brief 15 D7: the region a tool asked to count (MapGenDivergence_SetRegion); unset by default */
+static bool g_region;
+static float g_region_lo[3], g_region_hi[3];
+
 #include "common/mapgen_movers.h"
 #include "common/mapgen_reach.h"
 
@@ -82,6 +87,13 @@ static int32_t floor_div(float v)
     return (int32_t)floorf(v / MAPGEN_DIVERGENCE_CELL);
 }
 
+static uint64_t g_divergence_max_cells = MAPGEN_DIVERGENCE_MAX_CELLS;
+
+void MapGenDivergence_SetMaxCells(uint32_t cells)
+{
+    g_divergence_max_cells = cells ? cells : MAPGEN_DIVERGENCE_MAX_CELLS;    /* RED: 8388608, the cap before 13.10 */
+}
+
 static bool lattice_init(lattice_t *l, const float mins[3], const float maxs[3])
 {
     memset(l, 0, sizeof(*l));
@@ -93,7 +105,7 @@ static bool lattice_init(lattice_t *l, const float mins[3], const float maxs[3])
         if (l->size[i] <= 0)
             return false;
         total *= (uint64_t)l->size[i];
-        if (total > MAPGEN_DIVERGENCE_MAX_CELLS)
+        if (total > g_divergence_max_cells)
             return false;
     }
     l->count = (uint32_t)total;
@@ -733,8 +745,8 @@ static mapgen_divergence_result_t measure(
         out->routes_measured = walks->donor && walks->candidate && !truncated;
     } else if (measure_routes) {
         bool truncated = false;
-        const bool ok = rasterise_routes(donor, &a, 40000, &truncated)
-                     && rasterise_routes(candidate, &b, 40000, &truncated);
+        const bool ok = rasterise_routes(donor, &a, MAPGEN_REACH_BUDGET, &truncated)
+                     && rasterise_routes(candidate, &b, MAPGEN_REACH_BUDGET, &truncated);
         out->routes_truncated = truncated;
         /* A search that ran out of budget did not measure the axis; it
            sampled it. The cells are marked for the diagnostic and the axis
@@ -787,6 +799,22 @@ static mapgen_divergence_result_t measure(
                 out->motif_changed++;
         }
 
+        /* brief 15 D7: a region asked for (the arena's box) - the cells outside it are not counted; unset, every cell
+           is, and nothing a generation measures changes */
+        if (g_region) {
+            const int32_t rc[3] = {
+                a.mins[0] + (int32_t)(i % (uint32_t)a.size[0]),
+                a.mins[1] + (int32_t)((i / (uint32_t)a.size[0]) % (uint32_t)a.size[1]),
+                a.mins[2] + (int32_t)(i / (uint32_t)(a.size[0] * a.size[1])),
+            };
+            bool in = true;
+            for (int k = 0; k < 3 && in; k++) {
+                const float w = (rc[k] + 0.5f) * MAPGEN_DIVERGENCE_CELL;
+                in = w >= g_region_lo[k] && w <= g_region_hi[k];
+            }
+            if (!in)
+                continue;
+        }
         uint8_t measured = CELL_SOLID | CELL_SURFACE | CELL_VERTICAL
                          | CELL_MOTIF;
         if (out->routes_measured)
@@ -841,6 +869,17 @@ static mapgen_divergence_result_t measure(
     out->complete = out->routes_measured && out->motifs_measured
                  && !out->routes_truncated && out->surfaces_skipped == 0;
     return MAPGEN_DIVERGENCE_OK;
+}
+
+/* brief 15 D7: count only the cells whose middle lies in this box (a tool's question - the arena's share); never set
+   by the pipeline */
+void MapGenDivergence_SetRegion(const float lo[3], const float hi[3])
+{
+    g_region = lo && hi;
+    for (int k = 0; g_region && k < 3; k++) {
+        g_region_lo[k] = lo[k];
+        g_region_hi[k] = hi[k];
+    }
 }
 
 mapgen_divergence_result_t MapGenDivergence_MeasureWitness(

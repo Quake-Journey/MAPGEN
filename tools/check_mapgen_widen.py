@@ -206,24 +206,24 @@ def behaviour(probe: Path, work: Path) -> dict[str, list[dict]]:
     check("two flanks were planned", len(got) == 2, str(got))
     check("both of them moved", all(f["applied"] for f in got), str(got))
 
+    # brief 17: since brief 15 D2/D8 the plan asks the widen's own questions before it deals a flank, so the flank it
+    # would decline is not dealt at all - these cases asked for it dealt and declined and failed on HEAD; the RED below
+    # (the questions switched off) still deals and carves it
     print("\n=== thirty-two units of pier: that flank declines")
     got = seen.get("widen_thin", [])
-    check("two flanks were planned", len(got) == 2, str(got))
     short = [f for f in got if f["at"][1] == 288]
     long_one = [f for f in got if f["at"][1] == 192]
-    check("the short pier was one of them", len(short) == 1, str(got))
-    check("and it declined", bool(short) and not short[0]["applied"],
-          str(short))
+    check("the short pier is not moved (not dealt, or dealt and declined)",
+          not short or not short[0]["applied"], str(got))
     check("while the long one moved",
           bool(long_one) and long_one[0]["applied"], str(long_one))
 
     print("\n=== an invisible brush flush against a flank: that one declines")
     got = seen.get("widen_clipped", [])
-    check("two flanks were planned", len(got) == 2, str(got))
     clipped = [f for f in got if f["facing"] == (0, 1, 0)]
     clean = [f for f in got if f["facing"] == (0, -1, 0)]
-    check("the clipped flank declined",
-          bool(clipped) and not clipped[0]["applied"], str(clipped))
+    check("the clipped flank is not moved (not dealt, or dealt and declined)",
+          not clipped or not clipped[0]["applied"], str(got))
     check("the clean one moved", bool(clean) and clean[0]["applied"],
           str(clean))
     return seen

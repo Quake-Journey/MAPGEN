@@ -10,6 +10,8 @@
 #include "common/mapgen_pipeline.h"
 
 #include "common/mapgen_transaction.h"
+#include "common/mapgen_warp.h"
+#include "common/mapgen_reach.h"
 
 #include "common/mapgen_bsp.h"
 #include "common/mapgen_digest.h"
@@ -355,6 +357,106 @@ static void light_tick(const char *stage, int pass, int tenths)
     progress_line("stage=light-step step=%s pass=%d tenths=%d", stage, pass, tenths);
 }
 
+/*
+ * Brief 18 D1 (Fable: «the patch size is not left to chance - the retry is the net, not the plan»): what the light
+ * tool will make of a map, read from the map's faces BEFORE the first light pass.
+ *
+ * Patches: the tool halves a face along each axis until no side is longer than the patch size + 1; every face is at
+ * least one patch. Counted the same way here - against the tool's own count on three maps of 12.10: 24551 for its
+ * 23869 (q2dm3, 64), 12862 for 12839 (the same at 128), 47175 for 45787 (q2dm1 at 150 %, 64): 0..3 % over.
+ * The lightmap: a sample every 16 units along the texture's two axes, 3 bytes each, on every face that is neither
+ * sky nor warped - 19854822 for the 19839405 bytes q3t2 at 1000 % holds, 661683 for 661683 (q2dm3).
+ *
+ * `subdiv`: the smallest of 64, 128, 256, 512 that keeps the patches under 60000 (the tool holds 65535).
+ * `maxdata`: 0 while the lightmap and a tenth over fit the tool's own 8 MB; else that, rounded up to 16 MB (the
+ * client packs lightmaps into 128 blocks of 1024 x 1024 - 128 MB is the cap).
+ */
+#define LIGHT_PATCHES_WANTED 60000u
+static bool g_light_plan = true;        /* RED: the first pass at the tool's defaults, the retries alone */
+static mapgen_bsp_t *load_bsp(const char *path);
+
+static bool g_light_again = true;       /* RED: one light pass, whatever the tool said */
+
+void MapGenPipeline_SetLightPlan(bool plan)
+{
+    g_light_plan = plan;
+}
+
+void MapGenPipeline_SetLightAgain(bool again)
+{
+    g_light_again = again;
+}
+
+static void light_plan(const mapgen_bsp_t *bsp, int *subdiv, unsigned long long *maxdata, uint32_t patches_at[4],
+                       unsigned long long *lightmap)
+{
+    static const float sizes[4] = { 64.0f, 128.0f, 256.0f, 512.0f };
+    unsigned long long patches[4] = { 0, 0, 0, 0 }, bytes = 0;
+    const uint32_t faces = MapGenBsp_NumFaces(bsp), surfedges = MapGenBsp_NumSurfEdges(bsp);
+    for (uint32_t f = 0; f < faces; f++) {
+        const mapgen_bsp_face_t *face = MapGenBsp_Face(bsp, f);
+        const mapgen_bsp_texinfo_t *tex = face && face->texinfo >= 0
+                                        ? MapGenBsp_TexInfo(bsp, (uint32_t)face->texinfo) : NULL;
+        if (!face || face->numedges < 3 || face->firstedge < 0
+            || (uint32_t)face->firstedge + (uint32_t)face->numedges > surfedges)
+            continue;
+        float lo[3] = { 1e30f, 1e30f, 1e30f }, hi[3] = { -1e30f, -1e30f, -1e30f };
+        float st_lo[2] = { 1e30f, 1e30f }, st_hi[2] = { -1e30f, -1e30f };
+        for (int32_t k = 0; k < face->numedges; k++) {
+            const int32_t se = MapGenBsp_SurfEdge(bsp, (uint32_t)(face->firstedge + k));
+            const mapgen_bsp_edge_t *e = MapGenBsp_Edge(bsp, (uint32_t)(se >= 0 ? se : -se));
+            const mapgen_bsp_vertex_t *v = e ? MapGenBsp_Vertex(bsp, e->v[se >= 0 ? 0 : 1]) : NULL;
+            if (!v)
+                continue;
+            for (int a = 0; a < 3; a++) {
+                lo[a] = fminf(lo[a], v->point[a]);
+                hi[a] = fmaxf(hi[a], v->point[a]);
+            }
+            for (int a = 0; a < 2 && tex; a++) {
+                const float s = v->point[0] * tex->axis[a][0] + v->point[1] * tex->axis[a][1]
+                              + v->point[2] * tex->axis[a][2] + tex->axis[a][3];
+                st_lo[a] = fminf(st_lo[a], s);
+                st_hi[a] = fmaxf(st_hi[a], s);
+            }
+        }
+        if (lo[0] > hi[0])
+            continue;
+        for (int s = 0; s < 4; s++) {
+            unsigned long long n = 1;
+            for (int a = 0; a < 3; a++)
+                for (float side = hi[a] - lo[a]; side > sizes[s] + 1.0f; side *= 0.5f)
+                    n *= 2u;
+            patches[s] += n;
+        }
+        if (tex && !(tex->flags & (0x0004 | 0x0008)) /* neither sky nor warped */ && st_lo[0] <= st_hi[0])
+            bytes += 3ull * (unsigned long long)((long long)ceilf(st_hi[0] / 16.0f) - (long long)floorf(st_lo[0] / 16.0f) + 1)
+                          * (unsigned long long)((long long)ceilf(st_hi[1] / 16.0f) - (long long)floorf(st_lo[1] / 16.0f) + 1);
+    }
+    int pick = 3;
+    for (int s = 3; s >= 0; s--)
+        if (patches[s] <= LIGHT_PATCHES_WANTED)
+            pick = s;
+    *subdiv = (int)sizes[pick];
+    const unsigned long long need = bytes + bytes / 10u;
+    *maxdata = need > 8388608ull ? (need + (16ull << 20) - 1) / (16ull << 20) * (16ull << 20) : 0;
+    if (*maxdata > 128ull << 20)
+        *maxdata = 128ull << 20;
+    for (int s = 0; s < 4; s++)
+        patches_at[s] = patches[s] > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t)patches[s];
+    *lightmap = bytes;
+}
+
+bool MapGenPipeline_LightPlan(const char *bsp_path, int *subdiv, unsigned long long *maxdata, uint32_t patches_at[4],
+                              unsigned long long *lightmap)
+{
+    mapgen_bsp_t *bsp = bsp_path ? load_bsp(bsp_path) : NULL;
+    if (!bsp)
+        return false;
+    light_plan(bsp, subdiv, maxdata, patches_at, lightmap);
+    MapGenBsp_Free(bsp);
+    return true;
+}
+
 static bool light_the_artifact(const mapcompile_adapter_t *adapter,
                                const mapgen_pipeline_request_t *request,
                                const char *job_dir, const char *map_path,
@@ -423,10 +525,74 @@ static bool light_the_artifact(const mapcompile_adapter_t *adapter,
     creq.max_log_bytes = request->max_log_bytes;
     creq.disk_budget_bytes = request->disk_budget_bytes;
 
+    /* brief 18 D1: the patch size and the lightmap's room chosen from the judged map's faces - the map this one is
+       compiled from again, beside it under the same name */
+    int subdiv = 64;
+    unsigned long long maxdata = 0;      /* 0: the stage's own 8 MB */
+    if (g_light_plan) {
+        char judged[MAPCOMPILE_MAX_PATH];
+        const size_t n = strlen(map_path);
+        mapgen_bsp_t *faces = n > 4 && snprintf(judged, sizeof(judged), "%.*s.bsp", (int)(n - 4), map_path)
+                                       < (int)sizeof(judged) ? load_bsp(judged) : NULL;
+        if (faces) {
+            uint32_t patches[4];
+            unsigned long long lightmap = 0;
+            light_plan(faces, &subdiv, &maxdata, patches, &lightmap);
+            progress_line("stage=light-plan patches64=%u patches128=%u patches256=%u subdiv=%d lightmap=%llu "
+                          "maxdata=%llu", (unsigned)patches[0], (unsigned)patches[1], (unsigned)patches[2], subdiv,
+                          lightmap, maxdata ? maxdata : 8388608ull);
+            if (subdiv > 64 || maxdata)
+                snprintf(creq.rad_flags, sizeof(creq.rad_flags), "%s -subdiv %d -maxdata %llu", request->light_flags,
+                         subdiv, maxdata ? maxdata : 8388608ull);
+            MapGenBsp_Free(faces);
+        }
+    }
+
     mapcompile_report_t lit;
     memset(&lit, 0, sizeof(lit));
     MapCompile_SetTick(light_tick);
-    const mapcompile_result_t rc = MapCompile_RunProfile(adapter, &creq, &lit);
+    mapcompile_result_t rc = MapCompile_RunProfile(adapter, &creq, &lit);
+    /*
+     * The PO, 11.10 (mg_10_6695, q3t2 at 1000 %: «снова карта монохромная - значит лайтмапы не отработали»): the
+     * light tool stopped at «Exceeded MAX_PATCHES 65535» - a map that large has more light patches of the default
+     * 64 across than it can hold - and the map went out unlit. The light pass alone again on the map the visibility
+     * has already been worked out for (an hour and a half of it there), its patches twice as large each time (128,
+     * 256, 512); what each try said is kept for the log.
+     */
+    char again_said[4096] = "";
+    for (int tries = 0; g_light_again && rc != MAPCOMPILE_OK && tries < 6 && lit.num_stages > 0
+                        && lit.stages[lit.num_stages - 1].stage == MAPCOMPILE_STAGE_RAD
+                        && lit.stages[lit.num_stages - 1].stdout_captured; tries++) {
+        const char *said = lit.stages[lit.num_stages - 1].stdout_captured;
+        const char *over = strstr(said, "lightdatasize ");
+        unsigned long long need = 0;
+        if (strstr(said, "MAX_PATCHES") && subdiv < 512)
+            subdiv *= 2;
+        else if (over && sscanf(over, "lightdatasize %llu > maxdata", &need) == 1 && need > maxdata
+                 && need <= 128ull << 20)
+            /* the lightmap the map needs, rounded up to the next 16 MB; the client packs lightmaps into 128 blocks
+               of 1024 x 1024 (LM_MAX_LIGHTMAPS), far past it */
+            maxdata = (need + (16ull << 20) - 1) / (16ull << 20) * (16ull << 20);
+        else
+            break;
+        snprintf(creq.rad_flags, sizeof(creq.rad_flags), "%s -subdiv %d -maxdata %llu", request->light_flags, subdiv,
+                 maxdata ? maxdata : 8388608ull);
+        mapcompile_stage_report_t *rad = &lit.stages[lit.num_stages - 1];
+        const size_t used = strlen(again_said);
+        snprintf(again_said + used, sizeof(again_said) - used, "light pass stopped (exit %d: %s); again with -subdiv %d "
+                 "-maxdata %llu\n", (int)rad->exit_code, need ? "the lightmap over maxdata" : "out of patches", subdiv,
+                 maxdata ? maxdata : 8388608ull);
+        free(rad->stdout_captured);
+        memset(rad, 0, sizeof(*rad));
+        rad->stage = MAPCOMPILE_STAGE_RAD;
+        const mapcompile_result_t rr = adapter->run_stage(adapter->ctx, &creq, MAPCOMPILE_STAGE_RAD, rad);
+        if (rr == MAPCOMPILE_OK && rad->exit_code == 0 && !rad->timed_out && !rad->crashed
+            && snprintf(lit.bsp_path, sizeof(lit.bsp_path), "%s/%s.bsp", creq.job_dir, creq.map_name)
+                   < (int)sizeof(lit.bsp_path)) {
+            rc = MAPCOMPILE_OK;
+            progress_line("stage=light-again subdiv=%d maxdata=%llu", subdiv, maxdata ? maxdata : 8388608ull);
+        }
+    }
     MapCompile_SetTick(NULL);
     /*
      * Row 405 (Fable's brief 5 L5): the light tool's own words are kept beside the lit map - «Sun activated», the
@@ -438,8 +604,8 @@ static bool light_the_artifact(const mapcompile_adapter_t *adapter,
         if (snprintf(log_path, sizeof(log_path), "%s/rad.log", log_dir) < (int)sizeof(log_path)) {
             FILE *lf = fopen(log_path, "wb");
             if (lf) {
-                fprintf(lf, "light compile: %s, %d threads, flags \"%s\"\n", MapCompile_ResultName(rc),
-                        creq.threads, creq.rad_flags);
+                fprintf(lf, "light compile: %s, %d threads, flags \"%s\"\n%s", MapCompile_ResultName(rc),
+                        creq.threads, creq.rad_flags, again_said);
                 for (int i = 0; i < lit.num_stages; i++)
                     fprintf(lf, "==== stage %d: exit %d%s, %u ms, %llu bytes%s\n%s\n", (int)lit.stages[i].stage,
                             (int)lit.stages[i].exit_code, lit.stages[i].timed_out ? " TIMED OUT" : "",
@@ -714,7 +880,7 @@ synthesise(const char *donor_bsp, const char *job_dir, const char *map_name,
         walk.cancel.asked = request->cancelled;
         walk.cancel.user = request->cancelled_user;
         if (MapGenReach_ExploreWith(built, request->reach_budget
-                                    ? request->reach_budget : 40000u, &walk,
+                                    ? request->reach_budget : MAPGEN_REACH_BUDGET, &walk,
                                     &reach)
             == MAPGEN_REACH_OK && reach)
             playable = MapGenReach_Passed(MapGenReach_Report(reach));
@@ -743,6 +909,20 @@ synthesise(const char *donor_bsp, const char *job_dir, const char *map_name,
  */
 static FILE *g_progress;
 static time_t g_progress_began;
+
+/*
+ * Brief 16 D6 (the PO's slider «Быстрее ↔ Точнее» becomes minutes): the edits stop when the run has spent its time
+ * but for what the map still needs after them - its finishing swaps, its light and its checks - kept back: four
+ * minutes and a thirtieth of the budget. Zero: no time budget, the builds alone bound the run, as before.
+ */
+static bool time_is_up(const mapgen_pipeline_request_t *request)
+{
+    if (!request->time_budget_s)
+        return false;
+    /* the finishing swaps (a minute), the light (a minute and a half on q2dm3) and the map's checks after the engine */
+    const long long reserve = 240 + (long long)request->time_budget_s / 30;
+    return (long long)(time(NULL) - g_progress_began) + reserve >= (long long)request->time_budget_s;
+}
 static const bool g_progress_written = true;   /* the RED's mutation point */
 /* row 392: the last line, kept for a crash record whether or not a file is
    open, and how many attempt lines were written */
@@ -904,6 +1084,9 @@ static void write_attempt(FILE *ledger, uint64_t phase_ms[8],
     if (step->walk_states)          /* row 331 */
         fprintf(ledger, " (simulated %u reused %u)", step->walk_simulated,
                 step->walk_reused);
+    if (step->walk_states && step->walk_changed != UINT32_MAX)      /* brief 16 D5 */
+        fprintf(ledger, " inherited %u of the parent's walk, %u brushes changed", step->walk_inherited,
+                step->walk_changed);
     if (step->parent_states)
         fprintf(ledger, "  parent %u near %u/%u", step->parent_states,
                 step->parent_near_512, step->parent_near_1024);
@@ -930,6 +1113,18 @@ typedef struct {
     bool done;                 /* ReplayDone called */
     bool diverged;
     char why[256];
+    /*
+     * Brief 16: the DRY replay of a finished run (`--replay-dry`) - what the new plan would have done with each row:
+     * by the ledger's verdict, the rows the proof refuses before a build, the rows whose site was refused before (the
+     * redeal's repeats), and the edits that move no architecture. It stops at the ledger's end.
+     */
+    bool dry;
+    uint32_t rows[MAPGEN_TXN_NUM_VERDICTS], proof_refused[MAPGEN_TXN_NUM_VERDICTS];
+    uint32_t repeats[MAPGEN_TXN_NUM_VERDICTS], paint[MAPGEN_TXN_NUM_VERDICTS];
+    uint64_t row_ms[MAPGEN_TXN_NUM_VERDICTS], saved_ms;
+    uint64_t *refused_print;
+    uint32_t num_refused_print, cap_refused_print;
+    uint32_t last_divergence;          /* the ledger's divergence after its last accepted row */
 } replay_t;
 
 static void replay_free(replay_t *r)
@@ -937,7 +1132,387 @@ static void replay_free(replay_t *r)
     for (uint32_t i = 0; i < r->n; i++)
         free(r->e[i].line);
     free(r->e);
+    free(r->refused_print);
     memset(r, 0, sizeof(*r));
+}
+
+/*
+ * Brief 16 D3: an edit's SITE, as a print - its family, a dig's shape, and its box to eight units (an edit with no box:
+ * its target and amount in the family's own list). The same print on a later round is the same edit at the same
+ * place, and a verdict already given there is not asked again.
+ */
+static uint64_t edit_print(const mapgen_geometry_edit_plan_t *plan, uint32_t i, const mapgen_geometry_edit_t *planned)
+{
+    uint64_t h = 1469598103934665603ull;
+#define PRINT_MIX(v) do { const int64_t mix_ = (int64_t)(v); \
+        for (int b_ = 0; b_ < 8; b_++) h = (h ^ (uint8_t)(mix_ >> (8 * b_))) * 1099511628211ull; } while (0)
+    PRINT_MIX(planned->kind);
+    float lo[3], hi[3];
+    if (MapGenGeometryEdit_BoxOf(plan, NULL, NULL, i, lo, hi)) {
+        for (int a = 0; a < 3; a++) {
+            PRINT_MIX(lroundf(lo[a] / 8.0f));
+            PRINT_MIX(lroundf(hi[a] / 8.0f));
+        }
+    } else {
+        PRINT_MIX(planned->target);
+        PRINT_MIX(planned->amount);
+    }
+    if (planned->kind == MAPGEN_EDIT_DIG) {
+        mapgen_dig_report_t dig;
+        if (MapGenGeometryEdit_DigAt(plan, planned->target, &dig))
+            for (const char *c = dig.shape; *c; c++)
+                PRINT_MIX(*c);
+    }
+#undef PRINT_MIX
+    return h;
+}
+
+/*
+ * Brief 16 D2: a family that adds nothing the metric counts - the paint, and the liquids swapped (mg_10_6695: 16
+ * accepted, 0 permille). Not built while the band is unmet; the finishing pass has them.
+ */
+static bool zero_gain(mapgen_edit_kind_t kind)
+{
+    return !MapGenGeometryEdit_MovesArchitecture(kind) || kind == MAPGEN_EDIT_RELIQUID;
+}
+
+static bool print_held(const uint64_t *set, uint32_t n, uint64_t print)
+{
+    for (uint32_t k = 0; k < n; k++)
+        if (set[k] == print)
+            return true;
+    return false;
+}
+
+static void print_keep(uint64_t **set, uint32_t *n, uint32_t *cap, uint64_t print)
+{
+    if (print_held(*set, *n, print))
+        return;
+    if (*n == *cap) {
+        const uint32_t want = *cap ? *cap * 2u : 256u;
+        uint64_t *grown = realloc(*set, want * sizeof(*grown));
+        if (!grown)
+            return;
+        *set = grown;
+        *cap = want;
+    }
+    (*set)[(*n)++] = print;
+}
+
+
+/*
+ * Brief 16 D2 (the PO, 10.10: «оценка того, что можно изменить на карте не качественная»): the plan's WORD, before its
+ * first build, and the order its edits are built in.
+ *
+ * Every edit of the plan as dealt is applied to a clone of the accepted map and proved; a proved one is worth the
+ * lattice cells it changes (`MapGenTransaction_ProvePlan`). The edits are then built most valuable first - a dig is
+ * worth fifty windows - and the plan says what it can give at most with the builds left: the best of its proved,
+ * untried edits, one build each, on top of what is already accepted. A dry replay keeps the ledger's own order.
+ */
+typedef struct {
+    uint32_t value;            /* tenths of a permille */
+    uint32_t index;
+    uint32_t place;            /* the value its turn is taken by: `value`, or a failed trial build's own estimate */
+} ranked_t;
+
+static int ranked_order(const void *a, const void *b)
+{
+    const ranked_t *x = a, *y = b;
+    if (x->value != y->value)
+        return x->value > y->value ? -1 : 1;
+    return x->index < y->index ? -1 : x->index > y->index ? 1 : 0;
+}
+
+static int ranked_place(const void *a, const void *b)
+{
+    const ranked_t *x = a, *y = b;
+    if (x->place != y->place)
+        return x->place > y->place ? -1 : 1;
+    return x->index < y->index ? -1 : x->index > y->index ? 1 : 0;
+}
+
+static int key_order(const void *a, const void *b)
+{
+    const uint64_t x = *(const uint64_t *)a & ~(1ull << 63), y = *(const uint64_t *)b & ~(1ull << 63);
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/*
+ * Brief 17 D5: the cells a set of edits changes, each counted once - two digs under one sky lift, a window in a wall a
+ * reshape moves, change many of the same cells, and the sum said 89 % on warped q2dm1 where the run reached far less.
+ * `changed` gets the distinct cells, `added` those of them new to the metric's count (by any of the edits).
+ */
+static void plan_union(const mapgen_plan_value_t *v, const ranked_t *ranked, uint32_t chosen, uint32_t *changed,
+                       uint32_t *added)
+{
+    *changed = *added = 0;
+    uint32_t total = 0;
+    for (uint32_t k = 0; k < chosen; k++)
+        total += v->key_count[ranked[k].index];
+    if (!total || !v->keys)
+        return;
+    uint64_t *all = malloc((size_t)total * sizeof(*all));
+    if (!all)
+        return;
+    uint32_t m = 0;
+    for (uint32_t k = 0; k < chosen; k++) {
+        const uint32_t i = ranked[k].index;
+        memcpy(all + m, v->keys + v->key_first[i], (size_t)v->key_count[i] * sizeof(*all));
+        m += v->key_count[i];
+    }
+    qsort(all, m, sizeof(*all), key_order);
+    for (uint32_t i = 0; i < m;) {
+        uint32_t j = i;
+        bool joins = false;
+        while (j < m && key_order(&all[i], &all[j]) == 0) {
+            if (all[j] >> 63)
+                joins = true;
+            j++;
+        }
+        (*changed)++;
+        if (joins)
+            (*added)++;
+        i = j;
+    }
+    free(all);
+}
+
+static const bool g_plan_word_union = true;     /* brief 17 D5: the RED's mutation point */
+static const bool g_plan_word_measured = true;  /* brief 18: the word held to its trial builds' count; a RED's too */
+/* brief 17 D5: a dig worth this much (tenths of a permille) is built dry before the word counts it */
+#define PLAN_DRY_BUILD_TENTHS 100u
+#define PLAN_DRY_SAY_TENTHS 3000u       /* ... and one worth more than a third of this is said with its re-measure */
+static const bool g_plan_dry_build = true;      /* the RED's mutation point */
+
+/* Brief 16 D3: a proved, untried edit worth at least half a permille - what a new deal has to offer to go on. */
+#define PLAN_WORTH_TENTHS 5u
+
+static uint32_t *plan_order(mapgen_transaction_t *txn, const mapgen_pipeline_request_t *request, uint32_t round,
+                            uint32_t target, uint32_t builds_left, const uint64_t *tried, uint32_t num_tried,
+                            bool dry, uint32_t *worthy)
+{
+    *worthy = 0;
+    const mapgen_geometry_edit_plan_t *plan = MapGenTransaction_Plan(txn);
+    const uint32_t n = MapGenGeometryEdit_Count(plan);
+    uint32_t *order = malloc((n ? n : 1u) * sizeof(*order));
+    ranked_t *ranked = calloc(n ? n : 1u, sizeof(*ranked));
+    if (!order || !ranked) {
+        free(order);
+        free(ranked);
+        return NULL;
+    }
+    for (uint32_t i = 0; i < n; i++)
+        order[i] = i;
+    mapgen_plan_value_t v;
+    if (!MapGenTransaction_ProvePlan(txn, &v)) {
+        free(ranked);
+        return order;
+    }
+    uint32_t builds = 0, tenths = 0, worth = 0, large = 0;
+    uint64_t tried_est = 0, tried_true = 0;     /* the trial builds that built: their cells estimated, and measured */
+    for (uint32_t i = 0; i < n; i++) {
+        const mapgen_geometry_edit_t *e = MapGenGeometryEdit_At(plan, i);
+        /* brief 16 D4: the large families - a room dug or built, a passage, a storey, a bridge - proved before a build */
+        if (e && v.state[i] == MAPGEN_PLAN_EDIT_PROVED && (e->kind == MAPGEN_EDIT_DIG || e->kind == MAPGEN_EDIT_SPAN))
+            large++;
+        bool counts = e && v.state[i] == MAPGEN_PLAN_EDIT_PROVED && !family_skipped(request, e->kind)
+                   && !(target > 0 && zero_gain(e->kind))
+                   && !print_held(tried, num_tried, edit_print(plan, i, e));
+        /*
+         * Brief 17 D5: the estimate counts only an edit the run would build - a large dig is built dry first and asked
+         * what its compile alone answers. On warped q2dm1 6675 the annex from 1424 1968 768, worth 5.4 points of
+         * the word, opened high into the old map on every build (REJECTED_OPEN_HIGH) and the word said 75 % where
+         * the run reached 65 %. Refused here, it is worth nothing to the word and built last.
+         *
+         * Brief 18: but a dig whose trial build FAILED keeps its turn by its value - the failure is of this map alone
+         * (MapGenTransaction_DryFailedAgain), and its site is whole now: mg_b18_q2dm3's tunnel and lift, second of
+         * the plan by value, was accepted right after the storey room on 12.10; put last, it would wait for 27
+         * smaller edits to build about its site.
+         */
+        bool again = false;
+        if (counts && g_plan_dry_build && e->kind == MAPGEN_EDIT_DIG && v.value[i] >= PLAN_DRY_BUILD_TENTHS) {
+            char why[200];
+            uint32_t true_cells = 0;
+            const bool builds_dry = MapGenTransaction_PlanDryBuild(txn, i, why, sizeof(why), &true_cells);
+            /* the estimate re-measured (`true_cells`) is said, not used: the metric's own count of one compiled edit
+               is not the share it adds to the others' union - scaled by it, warped q2dm1's word rose to 74.7 % where
+               the run reached 66.4 */
+            if (builds_dry && true_cells && v.cells[i]) {
+                tried_est += v.cells[i];
+                tried_true += true_cells;
+            }
+            if (builds_dry && true_cells && v.cells[i] && 3u * v.value[i] > PLAN_DRY_SAY_TENTHS)
+                progress_line("stage=plan-dry edit=%u family=%s value=%.1f cells=%u true=%u", (unsigned)i,
+                              MapGenGeometryEdit_KindName(e->kind), (double)v.value[i] / 10.0, (unsigned)v.cells[i],
+                              (unsigned)true_cells);
+            if (!builds_dry) {
+                counts = false;
+                again = MapGenTransaction_DryFailedAgain(txn, i);
+                progress_line("stage=plan-dry edit=%u family=%s value=%.1f why=\"%s\"", (unsigned)i,
+                              MapGenGeometryEdit_KindName(e->kind), (double)v.value[i] / 10.0, why);
+            }
+        }
+        ranked[i].index = i;
+        ranked[i].value = counts ? v.value[i] : 0u;
+        ranked[i].place = counts || again ? v.value[i] : 0u;
+        if (counts)
+            worth++;
+        if (counts && v.value[i] >= PLAN_WORTH_TENTHS) {
+            (*worthy)++;
+            /* a later deal's new worthy edits, by name - what keeps the edits going */
+            if (round || dry)
+                progress_line("stage=plan-worthy round=%u edit=%u family=%s value=%.1f", (unsigned)round, (unsigned)i,
+                              MapGenGeometryEdit_KindName(e->kind), (double)v.value[i] / 10.0);
+        }
+    }
+    qsort(ranked, n, sizeof(*ranked), ranked_order);
+    uint64_t sum_cells = v.base_changed, sum_all = v.base_cells;
+    for (uint32_t k = 0; k < n; k++) {
+        if (k < worth && builds < builds_left) {
+            builds++;
+            tenths += ranked[k].value;
+            sum_cells += v.cells[ranked[k].index];
+            sum_all += v.added[ranked[k].index];
+        }
+    }
+    /* brief 17 D5: each cell once */
+    uint32_t sum_cells_summed = (uint32_t)sum_cells, union_changed = 0, union_added = 0;
+    plan_union(&v, ranked, builds, &union_changed, &union_added);
+    /*
+     * Brief 18 (mg_b18_q2dm1 on 3.31: the word 64.6 %, the run 57.4 - and 94 % of the word's worth was ACCEPTED): the
+     * estimate itself counts more cells than the metric does. Its two digs built on trial measured 34116 cells for
+     * 39294 estimated and 5739 for 6434 - 0.87 - and the run's whole count came to 0.82 of the plan's. So the word
+     * says no more than its own trial builds measured: the union's cells in the measure of theirs, when that is
+     * less (q2dm3 at 150 %: 0.92; its reference: 1.03, left as estimated - two builds are no ground to promise more).
+     */
+    if (g_plan_word_measured && tried_est && tried_true < tried_est) {
+        union_changed = (uint32_t)((uint64_t)union_changed * tried_true / tried_est);
+        union_added = (uint32_t)((uint64_t)union_added * tried_true / tried_est);
+        if (!(g_plan_word_union && v.keys)) {
+            sum_cells = (uint64_t)v.base_changed + (sum_cells - v.base_changed) * tried_true / tried_est;
+            sum_all = (uint64_t)v.base_cells + (sum_all - v.base_cells) * tried_true / tried_est;
+        }
+    }
+    if (g_plan_word_union && v.keys) {
+        sum_cells = (uint64_t)v.base_changed + union_changed;
+        sum_all = (uint64_t)v.base_cells + union_added;
+    }
+    /* as the metric counts: the cells changed of the cells it counts, new architecture joining both */
+    const uint32_t have = MapGenTransaction_Divergence(txn);
+    uint32_t can = sum_all ? (uint32_t)((1000ull * sum_cells + sum_all / 2u) / sum_all) : have + (tenths + 5u) / 10u;
+    if (can < have)
+        can = have;
+    if (can > 1000u)
+        can = 1000u;
+    progress_line("stage=plan-value round=%u proved=%u worthy=%u declined=%u refused=%u builds=%u can=%u have=%u"
+                  " target=%u large=%u ms=%u cells=%u summed=%u tried=%llu/%llu", (unsigned)round, (unsigned)worth,
+                  (unsigned)*worthy, (unsigned)v.declined, (unsigned)v.refused, (unsigned)builds, (unsigned)can,
+                  (unsigned)have, (unsigned)target, (unsigned)large, (unsigned)v.ms, (unsigned)union_changed,
+                  (unsigned)sum_cells_summed, (unsigned long long)tried_true, (unsigned long long)tried_est);
+    /* the turns, by place - after the word, which is said of the counted edits alone; the first of them said */
+    qsort(ranked, n, sizeof(*ranked), ranked_place);
+    {
+        char first[96] = "";
+        size_t at = 0;
+        for (uint32_t k = 0; k < n && k < 8u && at + 12u < sizeof(first); k++)
+            at += (size_t)snprintf(first + at, sizeof(first) - at, k ? ",%u" : "%u", (unsigned)ranked[k].index);
+        progress_line("stage=plan-turns round=%u first=%s", (unsigned)round, first);
+    }
+    if (!dry)                           /* a dry replay keeps the ledger's order; the word is said all the same */
+        for (uint32_t k = 0; k < n; k++)
+            order[k] = ranked[k].index;
+    MapGenTransaction_PlanValueFree(&v);
+    free(ranked);
+    return order;
+}
+
+/*
+ * Brief 16 D0: the LADDER, counted - where each edit was answered, cheapest first: the operator declining (no build),
+ * its proof refusing it (no build), a site tried before (not offered again), a family the metric does not count
+ * (kept for the finishing pass); and what was built - walked whole, or from its parent's walk. The ledger and the
+ * Studio say it, so the PO sees where the time went.
+ */
+typedef struct {
+    uint32_t not_applied, proved, tried, paint, builds, whole, taken;
+} ladder_t;
+
+static void ladder_count(ladder_t *l, mapgen_transaction_verdict_t verdict, const mapgen_transaction_step_t *step)
+{
+    if (verdict == MAPGEN_TXN_REJECTED_NOT_APPLIED)
+        l->not_applied++;
+    else if (step->proved_refusal)
+        l->proved++;
+    else
+        l->builds++;
+    if (step->walk_states && step->walk_changed == UINT32_MAX)
+        l->whole++;
+    else if (step->walk_states)
+        l->taken++;
+}
+
+/* Brief 16: the dry replay's account of one row, and of the whole ledger at its end */
+static void dry_row(replay_t *r, const mapgen_geometry_edit_plan_t *plan, uint32_t i,
+                    const mapgen_geometry_edit_t *planned, mapgen_transaction_verdict_t was,
+                    const mapgen_transaction_step_t *step, const char *line, uint32_t divergence)
+{
+    /* the worth the run measured for an accepted row, beside the worth estimated before its build (D2) */
+    const int32_t delta = was == MAPGEN_TXN_ACCEPTED ? (int32_t)divergence - (int32_t)r->last_divergence : 0;
+    if (was == MAPGEN_TXN_ACCEPTED)
+        r->last_divergence = divergence;
+    if ((unsigned)was >= MAPGEN_TXN_NUM_VERDICTS)
+        return;
+    uint32_t ms = 0;
+    const char *m = strstr(line, "  ms ");
+    if (m)
+        ms = (uint32_t)strtoul(m + 5, NULL, 10);
+    r->rows[was]++;
+    r->row_ms[was] += ms;
+    const uint64_t print = edit_print(plan, i, planned);
+    const bool repeat = was != MAPGEN_TXN_ACCEPTED && print_held(r->refused_print, r->num_refused_print, print);
+    const bool paint = zero_gain(planned->kind);
+    const bool refused = step->observed && step->observed_verdict != MAPGEN_TXN_ACCEPTED;
+    if (repeat)
+        r->repeats[was]++;
+    if (paint)
+        r->paint[was]++;
+    if (refused)
+        r->proof_refused[was]++;
+    if (was != MAPGEN_TXN_ACCEPTED && was != MAPGEN_TXN_REJECTED_NOT_APPLIED && (repeat || paint || refused))
+        r->saved_ms += ms;
+    if (was != MAPGEN_TXN_ACCEPTED)
+        print_keep(&r->refused_print, &r->num_refused_print, &r->cap_refused_print, print);
+    if (was == MAPGEN_TXN_ACCEPTED)
+        progress_line("stage=dry-cells edit=%u family=%s est=%u true=%u solid=%u surface=%u vertical=%u motif=%u",
+                      (unsigned)i, MapGenGeometryEdit_KindName(planned->kind), (unsigned)step->observed_cells,
+                      (unsigned)step->observed_true[0], (unsigned)step->observed_true[1],
+                      (unsigned)step->observed_true[2], (unsigned)step->observed_true[3],
+                      (unsigned)step->observed_true[4]);
+    progress_line("stage=dry-row edit=%u family=%s was=%s proof=%s repeat=%d paint=%d ms=%u value=%.1f delta=%d"
+                  " why=\"%s\"",
+                  (unsigned)i, MapGenGeometryEdit_KindName(planned->kind), MapGenTransaction_VerdictName(was),
+                  !step->observed ? "-" : refused ? MapGenTransaction_VerdictName((mapgen_transaction_verdict_t)
+                                                                                  step->observed_verdict)
+                                              : "passed",
+                  repeat ? 1 : 0, paint ? 1 : 0, (unsigned)ms, (double)step->observed_value / 10.0, (int)delta,
+                  refused ? step->observed_why : "");
+}
+
+static void dry_summary(const replay_t *r)
+{
+    for (int v = 0; v < (int)MAPGEN_TXN_NUM_VERDICTS; v++)
+        if (r->rows[v])
+            progress_line("stage=dry-verdict verdict=%s rows=%u seconds=%.0f proof_refused=%u repeats=%u paint=%u",
+                          MapGenTransaction_VerdictName((mapgen_transaction_verdict_t)v), (unsigned)r->rows[v],
+                          (double)r->row_ms[v] / 1000.0, (unsigned)r->proof_refused[v], (unsigned)r->repeats[v],
+                          (unsigned)r->paint[v]);
+    const mapgen_transaction_verdict_t costly[3] = { MAPGEN_TXN_REJECTED_NO_EFFECT, MAPGEN_TXN_REJECTED_UNPLAYABLE,
+                                                     MAPGEN_TXN_REJECTED_BURIED_ROUTE };
+    uint32_t total = 0;
+    for (int k = 0; k < 3; k++)
+        total += r->rows[costly[k]];
+    progress_line("stage=dry-summary rows=%u costly=%u accepted=%u accepted_refused_by_proof=%u saved_seconds=%.0f",
+                  (unsigned)r->n, (unsigned)total, (unsigned)r->rows[MAPGEN_TXN_ACCEPTED],
+                  (unsigned)r->proof_refused[MAPGEN_TXN_ACCEPTED], (double)r->saved_ms / 1000.0);
 }
 
 static bool replay_read(replay_t *r, const char *ledger_path)
@@ -996,6 +1571,43 @@ static bool attempt_or_replay(replay_t *r, mapgen_transaction_t *txn, FILE *ledg
             return false;
         }
         *verdict = MapGenTransaction_Replay(txn, edit, was, e->divergence, step, r->why, sizeof(r->why));
+        /* brief 16 D1: a refusal its proof gave cost no build then, and costs none now */
+        step->proved_refusal = strstr(e->line, "(proved before the build)") != NULL;
+        if (r->dry)
+            dry_row(r, MapGenTransaction_Plan(txn), i, planned, was, step, e->line, e->divergence);
+        if (r->dry && step->judged)
+            progress_line("stage=dry-judged edit=%u family=%s verdict=%s ms=%u compile=%u reach=%u simulated=%u"
+                          " reused=%u inherited=%u changed=%u refused=%u divergence=%u ledger=%u", (unsigned)i,
+                          MapGenGeometryEdit_KindName(planned->kind), MapGenTransaction_VerdictName(*verdict),
+                          (unsigned)step->total_ms, (unsigned)step->compile_ms, (unsigned)step->reach_ms,
+                          (unsigned)step->walk_simulated, (unsigned)step->walk_reused, (unsigned)step->walk_inherited,
+                          (unsigned)step->walk_changed, (unsigned)step->walk_refused, (unsigned)step->divergence_after,
+                          (unsigned)e->divergence);
+        /* brief 17 D5: a dry replay measures; a row the plan now deals otherwise (a window whose kind was the draw's
+           in an older run and is the plan's now) is said and gone past, not the end of the measurement */
+        if (r->dry && *verdict != was && was != MAPGEN_TXN_ACCEPTED) {
+            progress_line("stage=dry-skip edit=%u family=%s was=%s now=%s why=\"%s\"", (unsigned)i,
+                          MapGenGeometryEdit_KindName(planned->kind), e->verdict, MapGenTransaction_VerdictName(*verdict),
+                          r->why);
+            r->why[0] = '\0';
+            *verdict = was;
+        }
+        if (r->dry && *verdict != was && was == MAPGEN_TXN_ACCEPTED
+            && (*verdict == MAPGEN_TXN_REJECTED_NOT_APPLIED
+                || (*verdict == MAPGEN_TXN_REJECTED_WRITE && strstr(r->why, "the operator declined")))) {
+            progress_line("stage=dry-skip edit=%u family=%s was=%s now=%s why=\"%s\"", (unsigned)i,
+                          MapGenGeometryEdit_KindName(planned->kind), e->verdict, MapGenTransaction_VerdictName(*verdict),
+                          r->why);
+            r->why[0] = '\0';
+            r->at++;
+            *replayed = true;
+            if (r->at == r->n) {
+                dry_summary(r);
+                r->diverged = true;
+                snprintf(r->why, sizeof(r->why), "the dry replay is over: %u rows measured", (unsigned)r->n);
+            }
+            return true;
+        }
         if (r->why[0] || *verdict != was) {
             r->diverged = true;
             if (!r->why[0])
@@ -1009,7 +1621,20 @@ static bool attempt_or_replay(replay_t *r, mapgen_transaction_t *txn, FILE *ledg
         }
         r->at++;
         *replayed = true;
+        if (r->dry && r->at == r->n) {
+            /* brief 16: the dry replay ends with the ledger's last row, and says what it measured */
+            dry_summary(r);
+            r->diverged = true;
+            snprintf(r->why, sizeof(r->why), "the dry replay is over: %u rows measured", (unsigned)r->n);
+        }
         return true;
+    }
+    if (r && r->dry && r->n) {
+        /* brief 16: the dry replay ends with the ledger, and says what it measured */
+        dry_summary(r);
+        r->diverged = true;
+        snprintf(r->why, sizeof(r->why), "the dry replay is over: %u rows measured", (unsigned)r->n);
+        return false;
     }
     if (r && r->n && !r->done) {
         r->done = true;
@@ -1088,6 +1713,53 @@ static void write_plan(const char *job_dir, const mapgen_geometry_edit_plan_t *p
             fprintf(q, "  %s\n", line);
     }
     fclose(q);
+    /* brief 15 D3: what each family was asked and dealt, and why not more - the map's description says it in words */
+    snprintf(path, sizeof(path), "%s/plan_said.txt", job_dir);
+    FILE *w = fopen(path, round ? "a" : "w");
+    if (!w)
+        return;
+    fprintf(w, "# round %u\n", (unsigned)round);
+    static const char *const KEEP[] = { "dig annexes:", "dig storeys dealt:", "dig storeys pairs refused:", "spans:",
+                                        "spans refused:", "stairways:", "remodels:", "remodels refused:", "blocks:",
+                                        "blocks refused:", "floor-shifts:", "floor-shifts refused:", "stair-reshapes:",
+                                        "reshaping families dropped", "floods by kind:" };
+    for (uint32_t i = 0; i < MapGenGeometryEdit_NumRefusals(plan); i++) {
+        const char *line = MapGenGeometryEdit_Refusal(plan, i);
+        for (size_t k = 0; line && k < sizeof(KEEP) / sizeof(KEEP[0]); k++)
+            if (!strncmp(line, KEEP[k], strlen(KEEP[k]))) {
+                fprintf(w, "%s\n", line);
+                break;
+            }
+    }
+    fclose(w);
+    /* brief 18 (mg_b18_q2dm3): every round's dealt digs as the plan listing prints them - the delivery gates re-deal
+       the first round alone, and an annex, a storey or a stairway a later round dealt and the ledger accepted was
+       never asked (two of its three annexes; a first-round stairway matched to a later one's box) */
+    snprintf(path, sizeof(path), "%s/plan_rounds.txt", job_dir);
+    FILE *pr = fopen(path, round ? "a" : "w");
+    if (!pr)
+        return;
+    fprintf(pr, "# round %u\n", (unsigned)round);
+    static const char *const DEALT[] = { "dig offered:", "dig hall:", "dig annex", "dig storeys", "stairway " };
+    for (uint32_t i = 0; i < MapGenGeometryEdit_NumRefusals(plan); i++) {
+        const char *line = MapGenGeometryEdit_Refusal(plan, i);
+        for (size_t k = 0; line && k < sizeof(DEALT) / sizeof(DEALT[0]); k++)
+            if (!strncmp(line, DEALT[k], strlen(DEALT[k]))) {
+                fprintf(pr, "  %s\n", line);
+                break;
+            }
+    }
+    /* and each flood's footprint, its shore and slab with it - they stand outside its box (the ledger's), and the
+       digwalls gate laid a flood's shore over q3t2's pit to the dig whose box held it */
+    for (uint32_t i = 0; i < MapGenGeometryEdit_Count(plan); i++) {
+        float blo[3], bhi[3], flo[3], fhi[3];
+        if (MapGenGeometryEdit_BoxOf(plan, NULL, NULL, i, blo, bhi)
+            && MapGenGeometryEdit_FloodFootprint(plan, i, flo, fhi))
+            fprintf(pr, "  flood footprint: %.0f %.0f %.0f %.0f %.0f %.0f -> %.0f %.0f %.0f %.0f %.0f %.0f\n",
+                    (double)blo[0], (double)blo[1], (double)blo[2], (double)bhi[0], (double)bhi[1], (double)bhi[2],
+                    (double)flo[0], (double)flo[1], (double)flo[2], (double)fhi[0], (double)fhi[1], (double)fhi[2]);
+    }
+    fclose(pr);
 }
 
 /* Every file directly in a folder removed - not the folder, nothing below it (row 395). */
@@ -1211,6 +1883,10 @@ static bool choose_memory(const char *donor_bsp, const mapgen_pipeline_request_t
         if (request->other_donors[i][0] && MapGenFs_Exists(request->other_donors[i], &size) && size > biggest)
             biggest = size;
     uint64_t room = biggest * 4u;
+    /* brief 18 D1: a frame grown 10 times its area grows the map and its lightmap with it (the PO's q3t2 at 1000 %:
+       the lit file 7 MB of map and 17.7 MB of light) - the room grows with the size asked */
+    if (request->warp_size > 100u)
+        room = room * request->warp_size / 100u;
     if (room < (32ull << 20))
         room = 32ull << 20;
     if (room > (256ull << 20))
@@ -1235,6 +1911,367 @@ static bool choose_memory(const char *donor_bsp, const mapgen_pipeline_request_t
                   (unsigned long long)(request->memory_bytes >> 20), request->no_checkpoints ? 0 : 1);
     (void)map_name;
     return true;
+}
+
+/*
+ * THE WARP, before the first edit (the PO, 10.10: «нужно чтобы генератор делал анализ до начала работ и не тратил время
+ * на бесконечные тесты»): the donor's plan stretched part by part (mapgen_warp.h), built once and walked once. A map
+ * the walk refuses - a corridor squeezed shut, a jump stretched past a player's reach - is planned again with half
+ * the spread, then with half the size's change, at most four times; when none walks, the donor goes as it is and the
+ * run says so. The warped base is then the base: everything after measures from it.
+ */
+/* One warped map: built into `dir`, walked once, held to the absolutes or - a donor that fails them itself - to its
+   own walk (`*donor_walk`, walked the first time it is needed). Says the try; the walk is kept in `*kept` when the map
+   is playable (the ceilings' line is read from it). */
+/* Brief 18 D2: what the walk of a try says FIRST, with its numbers and its place - «the donor passes on its own»
+   named no cause, and q3t2's taller tries (x3.11, x2.48) stayed untraced through four runs. */
+static void walk_says(const mapgen_reach_report_t *r, char *why, size_t cap)
+{
+    switch (MapGenReach_FirstFailure(r)) {
+    case MAPGEN_REACH_FAILS_SPAWNS:
+        snprintf(why, cap, "no start in the map");
+        break;
+    case MAPGEN_REACH_FAILS_STRANDED:
+        snprintf(why, cap, "%u of %u starts cannot reach the others", (unsigned)r->spawns_stranded,
+                 (unsigned)r->spawns);
+        break;
+    case MAPGEN_REACH_FAILS_TRAPPED:
+        snprintf(why, cap, "%u places with no way back (and %u that kill), the worst at %.0f %.0f %.0f",
+                 (unsigned)(r->trapped - r->trapped_lethal), (unsigned)r->trapped_lethal, (double)r->worst_trap[0],
+                 (double)r->worst_trap[1], (double)r->worst_trap[2]);
+        break;
+    case MAPGEN_REACH_FAILS_ITEMS:
+        snprintf(why, cap, "%u pickups out of reach, the worst at %.0f %.0f %.0f", (unsigned)r->items_unreachable,
+                 (double)r->worst_item[0], (double)r->worst_item[1], (double)r->worst_item[2]);
+        break;
+    case MAPGEN_REACH_FAILS_LANDMARKS:
+        snprintf(why, cap, "%u landmarks out of reach, the worst at %.0f %.0f %.0f",
+                 (unsigned)r->landmarks_unreachable, (double)r->worst_landmark[0], (double)r->worst_landmark[1],
+                 (double)r->worst_landmark[2]);
+        break;
+    case MAPGEN_REACH_FAILS_MOVERS:
+        snprintf(why, cap, "%u machines nothing in the map can operate", (unsigned)r->movers_inoperable);
+        break;
+    default:
+        break;
+    }
+}
+
+static bool warp_try(const mapgen_geometry_t *geometry, const mapgen_bsp_t *donor, mapgen_reach_t **donor_walk,
+                     const mapgen_warp_t *w, const char *dir, const char *map_name, const char *moddir,
+                     const mapcompile_adapter_t *adapter, const mapgen_pipeline_request_t *request, uint32_t attempt,
+                     uint32_t size, uint32_t shape, char path[MAPCOMPILE_MAX_PATH], mapgen_reach_t **kept)
+{
+    *kept = NULL;
+    char said[256];
+    MapGenWarp_Describe(w, said, sizeof(said));
+    /* brief 18 D2: a map grown tall gets its ramps - in a copy of the donor, before the warp */
+    mapgen_geometry_t *ramped = NULL;
+    uint32_t ramps = 0;
+    if (w->tall > 1.01f && MapGenGeometry_Clone(geometry, &ramped) == MAPGEN_GEOMETRY_OK) {
+        ramps = MapGenWarp_AddRamps(ramped, donor, w);
+        const uint32_t drops = MapGenWarp_KeepDrops(ramped, donor, w);
+        progress_line("stage=warp-ramps try=%u tall=%.2f ramps=%u drops=%u", (unsigned)attempt, (double)w->tall,
+                      (unsigned)ramps, (unsigned)drops);
+    }
+    /*
+     * The Studio's picture of the frame (the PO, 11.10: «когда деформация тоже отображать как то наглядно, карта то
+     * 3D»): each part's edges in the donor and where they land, the leans and the turn - the Studio draws the donor
+     * stretching into this try's frame while it is built and walked.
+     */
+    {
+        char axes[5][192];
+        for (int a = 0; a < 5; a++) {
+            size_t used = 0;
+            axes[a][0] = '\0';
+            const int ax = a < 3 ? a : a - 3;
+            const uint32_t n = w->num[ax];
+            for (uint32_t i = 0; n && i <= n && used + 28 < sizeof(axes[a]); i++)
+                used += (size_t)snprintf(axes[a] + used, sizeof(axes[a]) - used, "%s%.0f:%.0f", i ? "," : "",
+                                         (double)w->at[ax][i], (double)(a < 3 ? w->to[ax][i] : w->lean[ax][i]));
+        }
+        progress_line("stage=warp-map try=%u x=\"%s\" y=\"%s\" z=\"%s\" lean_x=\"%s\" lean_y=\"%s\" turns=%u mirror=%d",
+                      (unsigned)attempt, axes[0], axes[1], axes[2], axes[3], axes[4], (unsigned)w->turns,
+                      w->mirror ? 1 : 0);
+    }
+    mapgen_geometry_t *warped = NULL;
+    path[0] = '\0';
+    MapGenFs_EmptyDir(dir);
+    const clock_t built_at = clock();
+    const bool built = MapGenWarp_Apply(ramped ? ramped : geometry, w, &warped) == MAPGEN_GEOMETRY_OK
+                    && MapGenTransaction_CompileGeometry(warped, dir, map_name, moddir, adapter, path);
+    const uint32_t build_ms = (uint32_t)((clock() - built_at) * 1000 / CLOCKS_PER_SEC);
+    MapGenGeometry_Free(warped);
+    MapGenGeometry_Free(ramped);
+    mapgen_bsp_t *bsp = built ? load_bsp(path) : NULL;
+    {
+        /* brief 18, a diagnostic: MAPGEN_WARP_KEEP=<folder> keeps every try's compiled map (try_<n>_tall<x100>.bsp) -
+           q3t2's one trapped place at x3.11 was read from these */
+        const char *keep = getenv("MAPGEN_WARP_KEEP");
+        uint8_t *raw = NULL;
+        size_t n = 0;
+        char to[MAPCOMPILE_MAX_PATH];
+        FILE *f = NULL;
+        if (keep && keep[0] && built && MapGenFs_Read(path, &raw, &n) && n
+            && snprintf(to, sizeof(to), "%s/try_%u_tall%u_h%u.bsp", keep, (unsigned)attempt,
+                        (unsigned)(w->tall * 100.0f + 0.5f), (unsigned)w->height_pct) < (int)sizeof(to)
+            && (f = fopen(to, "wb")) != NULL) {
+            fwrite(raw, 1, n, f);
+            fclose(f);
+        }
+        free(raw);
+    }
+    mapgen_reach_t *walk = NULL;
+    char why[200] = "";
+    bool playable = false;
+    uint32_t places = 0, items = 0, items_out = 0, spawns = 0, stranded = 0;
+    const clock_t walked_at = clock();
+    if (bsp) {
+        mapgen_reach_options_t o;
+        memset(&o, 0, sizeof(o));
+        o.cancel.asked = request->cancelled;
+        o.cancel.user = request->cancelled_user;
+        const mapgen_reach_result_t rr = MapGenReach_ExploreWith(bsp, MAPGEN_REACH_BUDGET, &o, &walk);
+        if (rr == MAPGEN_REACH_OK && walk) {
+            const mapgen_reach_report_t *r = MapGenReach_Report(walk);
+            playable = MapGenReach_Passed(r);
+            places = r->reachable;
+            items = r->items;
+            items_out = r->items_unreachable;
+            spawns = r->spawns;
+            stranded = r->spawns_stranded;
+            if (!playable) {
+                if (!*donor_walk) {
+                    mapgen_reach_options_t d;
+                    memset(&d, 0, sizeof(d));
+                    MapGenReach_ExploreWith(donor, MAPGEN_REACH_BUDGET, &d, donor_walk);
+                }
+                playable = *donor_walk && MapGenReach_NoWorseThanWhy(r, MapGenReach_Report(*donor_walk), why,
+                                                                     sizeof(why));
+                if (!playable && *donor_walk && MapGenReach_Passed(MapGenReach_Report(*donor_walk)))
+                    walk_says(r, why, sizeof(why));     /* the donor passes: this try's own first failure */
+            }
+        } else {
+            snprintf(why, sizeof(why), "the walk did not finish: %s, %u places", MapGenReach_ResultName(rr),
+                     walk ? (unsigned)MapGenReach_NumStates(walk) : 0u);
+        }
+    } else {
+        snprintf(why, sizeof(why), "%s", built ? "the build could not be read"
+                                               : MapGenTransaction_LastBaselineCompileWhy());
+    }
+    const uint32_t walk_ms = (uint32_t)((clock() - walked_at) * 1000 / CLOCKS_PER_SEC);
+    for (char *c = why; *c; c++)
+        if (*c == '"' || *c == '\n' || *c == '\r')
+            *c = '\'';
+    progress_line("stage=warp try=%u size=%u shape=%u area=%u parts=\"%s\" built=%d playable=%d places=%u "
+                  "pickups=%u pickups_out=%u starts=%u stranded=%u build_ms=%u walk_ms=%u why=\"%s\"",
+                  (unsigned)attempt, (unsigned)size, (unsigned)shape, (unsigned)w->area_permille, said, built ? 1 : 0,
+                  playable ? 1 : 0, (unsigned)places, (unsigned)items, (unsigned)items_out, (unsigned)spawns,
+                  (unsigned)stranded, (unsigned)build_ms, (unsigned)walk_ms, why);
+    MapGenBsp_Free(bsp);
+    if (playable)
+        *kept = walk;
+    else
+        MapGenReach_Free(walk);
+    return playable;
+}
+
+/*
+ * The ceilings' line of a warped map: above the highest place its walk stands on and the highest pickup or start
+ * of the donor (one a rocket jump reaches stands on no walked place), with a player's height and a margin over it.
+ */
+static float ceilings_line(const mapgen_reach_t *walk, const mapgen_geometry_t *donor)
+{
+    float top = -1e30f;
+    for (uint32_t s = 0; walk && s < MapGenReach_NumStates(walk); s++) {
+        const mapgen_reach_state_t *st = MapGenReach_State(walk, s);
+        if (st && st->origin[2] > top)
+            top = st->origin[2];
+    }
+    for (uint32_t e = 0; donor && e < MapGenGeometry_NumEntities(donor); e++) {
+        const mapgen_geometry_entity_t *ent = MapGenGeometry_Entity(donor, e);
+        const char *cls = MapGenGeometry_EntityValue(donor, e, "classname");
+        if (!ent || !ent->has_origin || !cls)
+            continue;
+        if (!strncmp(cls, "weapon_", 7) || !strncmp(cls, "item_", 5) || !strncmp(cls, "ammo_", 5)
+            || !strncmp(cls, "info_player_", 12) || !strcmp(cls, "misc_teleporter_dest"))
+            if (ent->origin[2] > top)
+                top = ent->origin[2];
+    }
+    return top + 96.0f;                 /* an origin is 24 over the feet; a player stands 56; and a jump's height */
+}
+
+/*
+ * THE WARP, before the first edit (the PO, 10.10: «нужно чтобы генератор делал анализ до начала работ и не тратил время
+ * на бесконечные тесты»): the donor's plan stretched part by part (mapgen_warp.h) and turned as asked, built once and
+ * walked once. A map the walk refuses - a corridor squeezed shut, a jump stretched past a player's reach - is planned
+ * again with half the spread, then with half the size's change, at most four times; when none walks, the donor goes
+ * as it is and the run says so. Then the ceilings, when asked: everything above the highest place a player stands
+ * lifted, built and walked once more - a map that does not walk keeps its ceilings. The warped base is the base:
+ * everything after measures from it.
+ */
+static bool warp_donor(const char *donor_bsp, const char *root, const char *map_name, const char *moddir,
+                       const mapcompile_adapter_t *adapter, const mapgen_pipeline_request_t *request,
+                       char out[MAPCOMPILE_MAX_PATH], uint32_t *area_permille)
+{
+    uint32_t size = request->warp_size ? request->warp_size : 100u, shape = request->warp_shape;
+    uint32_t shift = request->warp_shift;
+    const uint32_t height = request->warp_height > 100u ? request->warp_height : 100u;
+    if (size == 100u && !shape && !shift && !request->warp_turn && height == 100u)
+        return false;
+    const clock_t began = clock();
+    mapgen_bsp_t *donor = load_bsp(donor_bsp);
+    mapgen_geometry_t *geometry = NULL;
+    if (!donor || MapGenGeometry_FromBsp(donor, &geometry) != MAPGEN_GEOMETRY_OK) {
+        progress_line("stage=warp-refused why=\"the donor could not be read\"");
+        MapGenBsp_Free(donor);
+        return false;
+    }
+    float zlo = 1e30f, zhi = -1e30f;
+    for (uint32_t b = 0; b < MapGenGeometry_NumBrushes(geometry); b++) {
+        const mapgen_geometry_brush_t *br = MapGenGeometry_Brush(geometry, b);
+        if (br && !br->model) {
+            zlo = fminf(zlo, br->mins[2]);
+            zhi = fmaxf(zhi, br->maxs[2]);
+        }
+    }
+    mapgen_reach_t *donor_walk = NULL;          /* walked only when a warped map fails the absolutes */
+    bool done = false;
+    int32_t turn = request->warp_turn;
+    /* brief 18 D2: what a frame grown tall cannot keep walkable (q3t2 at 1000 %: a grating's gaps grown wider than a
+       player over a pocket grown three times as deep) is taken back first by growing less tall - 30 % of the growth
+       a try - before the turn, the shift, the spread and the size */
+    float tall_cap = 1e9f;
+    for (uint32_t attempt = 0; attempt < (request->warp_tries ? request->warp_tries : 8u) && !done; attempt++) {
+        mapgen_warp_t w;
+        if (!MapGenWarp_Plan(geometry, request->generate.seed, size, shape, shift, &w))
+            break;
+        MapGenWarp_PlanTurn(&w, request->generate.seed, turn);
+        /* brief 18 D2 (the PO, 11.10: «не сохраняя пропорции»): as tall as it grew wide */
+        MapGenWarp_PlanTall(&w, zlo, zhi, tall_cap);
+        const bool plane_moves = !MapGenWarp_IsIdentity(&w);
+        char dir[MAPCOMPILE_MAX_PATH], path[MAPCOMPILE_MAX_PATH] = "";
+        mapgen_reach_t *walk = NULL;
+        bool playable = false;
+        if (plane_moves) {
+            snprintf(dir, sizeof(dir), "%s/warp_%u", root, (unsigned)attempt);
+            playable = warp_try(geometry, donor, &donor_walk, &w, dir, map_name, moddir, adapter, request, attempt,
+                                size, shape, path, &walk);
+        } else if (height > 100u) {
+            /* only the ceilings asked: the donor's own walk gives their line */
+            mapgen_reach_options_t d;
+            memset(&d, 0, sizeof(d));
+            if (!donor_walk)
+                MapGenReach_ExploreWith(donor, MAPGEN_REACH_BUDGET, &d, &donor_walk);
+            playable = true;
+        } else {
+            break;
+        }
+        if (playable && height > 100u) {
+            float z0 = ceilings_line(walk ? walk : donor_walk, geometry);
+            if (walk && w.tall > 1.01f)
+                z0 = 0.5f * (zlo + zhi) + (z0 - 0.5f * (zlo + zhi)) / w.tall;       /* the warped walk's line, back in the donor's heights */
+            mapgen_warp_t tall = w;
+            char tall_dir[MAPCOMPILE_MAX_PATH], tall_path[MAPCOMPILE_MAX_PATH] = "";
+            mapgen_reach_t *tall_walk = NULL;
+            snprintf(tall_dir, sizeof(tall_dir), "%s/warp_%u_tall", root, (unsigned)attempt);
+            if (MapGenWarp_PlanHeight(&tall, zlo, z0, zhi, height)
+                && warp_try(geometry, donor, &donor_walk, &tall, tall_dir, map_name, moddir, adapter, request,
+                            attempt, size, shape, tall_path, &tall_walk)) {
+                w = tall;
+                snprintf(path, sizeof(path), "%s", tall_path);
+            } else {
+                progress_line("stage=warp-ceilings-kept line=%.0f why=\"the taller map did not walk\"", (double)z0);
+            }
+            MapGenReach_Free(tall_walk);
+        }
+        MapGenReach_Free(walk);
+        if (playable && path[0]) {
+            char said[256];
+            MapGenWarp_Describe(&w, said, sizeof(said));
+            snprintf(out, MAPCOMPILE_MAX_PATH, "%s", path);
+            *area_permille = w.area_permille;
+            progress_line("stage=warp-done area=%u parts=\"%s\" asked_size=%u asked_shape=%u asked_turn=%d "
+                          "asked_height=%u ms=%u", (unsigned)w.area_permille, said,
+                          (unsigned)(request->warp_size ? request->warp_size : 100u), (unsigned)request->warp_shape,
+                          (int)request->warp_turn, (unsigned)height,
+                          (unsigned)((clock() - began) * 1000 / CLOCKS_PER_SEC));
+            done = true;
+            break;
+        }
+        if (playable)
+            break;                      /* nothing to build: only the ceilings were asked, and they did not walk */
+        /* what the map could not take, taken back: the turn first - a turned map plays the same moves mirrored, and
+           a rocket jump onto q2dm1's pedestals, a hair from failing, failed mirrored (2 pickups, 10.10) - then the
+           spread by half, then the size's change by half */
+        if (w.tall > 1.15f)
+            tall_cap = 1.0f + (w.tall - 1.0f) * 0.7f;
+        else if (turn)
+            turn = 0;
+        else if (shift >= 10u)
+            shift /= 2u;
+        else if (shift)
+            shift = 0u;
+        else if (shape >= 10u)
+            shape /= 2u;
+        else {
+            shape = 0u;
+            size = (uint32_t)(100 + ((int32_t)size - 100) / 2);
+        }
+        if (size >= 95u && size <= 105u && !shape && !turn && !shift)
+            break;
+    }
+    if (!done)
+        progress_line("stage=warp-kept why=\"no warped map walked; the donor goes as it is\"");
+    MapGenReach_Free(donor_walk);
+    MapGenGeometry_Free(geometry);
+    MapGenBsp_Free(donor);
+    return done;
+}
+
+/* row 412: which parts of the rebuilt base differ from the original, and how - every part's own words, quotes and line
+   breaks made safe for a progress line. False when the transaction kept no account. */
+static bool baseline_refusal(char *axes, size_t axes_cap, char *said, size_t said_cap)
+{
+    mapgen_equiv_report_t why;
+    axes[0] = said[0] = '\0';
+    if (!MapGenTransaction_LastBaselineWhy(&why))
+        return false;
+    for (int r = MAPGEN_EQUIV_DIFF_SPACE; r < MAPGEN_EQUIV_RESULT_COUNT; r++)
+        if (why.failed_axes & MAPGEN_EQUIV_AXIS_BIT(r)) {
+            const size_t used = strlen(axes);
+            snprintf(axes + used, axes_cap - used, "%s%s", used ? "," : "",
+                     MapGenEquivalence_ResultName((mapgen_equiv_result_t)r));
+        }
+    for (int r = MAPGEN_EQUIV_DIFF_SPACE; r < MAPGEN_EQUIV_RESULT_COUNT; r++)
+        if ((why.failed_axes & MAPGEN_EQUIV_AXIS_BIT(r)) && why.axis_detail[r][0]) {
+            const size_t used = strlen(said);
+            snprintf(said + used, said_cap - used, "%s%s", used ? "; " : "", why.axis_detail[r]);
+        }
+    if (!said[0])
+        snprintf(said, said_cap, "%s", why.detail);
+    if (!axes[0] && MapGenTransaction_LastBaselineCompileWhy()[0])
+        snprintf(said, said_cap, "%s", MapGenTransaction_LastBaselineCompileWhy());
+    if (!axes[0])
+        snprintf(axes, axes_cap, "none");
+    for (char *c = said; *c; c++)
+        if (*c == '"' || *c == '\n' || *c == '\r')
+            *c = '\'';
+    return true;
+}
+
+/* What a refused rebuild draws differently, in the numbers `faithful_residue_small` holds it to - said beside every
+   «not held», so the bound that refused is read and not guessed (brief 18 D2). */
+static void baseline_residue_say(void)
+{
+    mapgen_equiv_report_t why;
+    if (!MapGenTransaction_LastBaselineWhy(&why))
+        return;
+    progress_line("stage=baseline-residue drawn=%.0f rebuilt=%.0f groups_missing=%.0f groups_added=%.0f "
+                  "planes_missing=%u planes_added=%u planes=%u mapping=%u groups=%u overflow=%d",
+                  why.drawn_area[0], why.drawn_area[1], why.groups_missing_area, why.groups_added_area,
+                  (unsigned)why.planes_missing, (unsigned)why.planes_added, (unsigned)why.surface_planes[0],
+                  (unsigned)why.mapping_mismatch, (unsigned)why.drawn_groups[0], why.mapping_overflow ? 1 : 0);
 }
 
 static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
@@ -1321,6 +2358,7 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
         }
         snprintf(path, sizeof(path), "%s/baseline", job_dir);
         clear_files(path);
+        replay.dry = request->replay_dry;
         progress_line("stage=resume ledger=%u", (unsigned)replay.n);
     }
     progress_line("stage=baseline");
@@ -1345,42 +2383,113 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
     /* row 411: the tries in memory when the run may take it, the accepted ones checkpointed to the job folder */
     const bool in_memory = choose_memory(donor_bsp, request, map_name);
     MapGenTransaction_SetCheckpoints(job_dir, !request->no_checkpoints);
-    const mapgen_transaction_result_t opened =
+    /* the warp: the base itself changed first, planned on the donor, built and walked once (see `warp_donor`) */
+    char warped[MAPCOMPILE_MAX_PATH] = "";
+    const char *const unwarped = donor_bsp;
+    uint32_t warp_area = 1000u;                 /* the warped plan's area against the donor's, permille */
+    if (request->warp_shape || (request->warp_size && request->warp_size != 100u) || request->warp_turn
+        || request->warp_height > 100u || request->warp_shift) {
+        if (warp_donor(donor_bsp, in_memory ? g_work_root : job_dir, map_name,
+                       request->moddir[0] ? request->moddir : job_dir, adapter, request, warped, &warp_area))
+            donor_bsp = warped;
+        if (request->warp_only) {
+            /* the frame alone: the base it gave kept beside the job, as a whole run keeps it */
+            uint8_t *raw = NULL;
+            size_t n = 0;
+            char kept[MAPCOMPILE_MAX_PATH];
+            snprintf(kept, sizeof(kept), "%s/warped_base.bsp", job_dir);
+            FILE *f = NULL;
+            if (donor_bsp != unwarped && MapGenFs_Read(donor_bsp, &raw, &n) && n && (f = fopen(kept, "wb")) != NULL) {
+                const bool whole = fwrite(raw, 1, n, f) == n;
+                fclose(f);
+                if (whole)
+                    progress_line("stage=warp-base path=\"%s\"", kept);
+            }
+            free(raw);
+        }
+        progress_line("stage=baseline");            /* and now the base, warped or not, is built as the base */
+    }
+    /* a tunnel may run as much further as the plan grew (`MapGenGeometryEdit_SetSpanScale`) */
+    MapGenGeometryEdit_SetSpanScale(donor_bsp != unwarped && warp_area > 1000u ? sqrtf((float)warp_area / 1000.0f)
+                                                                                : 1.0f);
+    mapgen_transaction_result_t opened =
         MapGenTransaction_BeginWithDonors(
             donor_bsp, in_memory ? g_work_root : job_dir, map_name,
             request->moddir[0] ? request->moddir : job_dir,
             adapter, request->generate.seed,
             num_others ? others : NULL, num_others, &txn);
+    if (request->warp_only) {
+        /*
+         * The frame alone ends here - AFTER its base was built as the run's base. Brief 18 D2: the seam's first cut
+         * stopped at the walk, the guard on it was green, and the run itself (mg_b18_q3t2 on 3.31) then said «the
+         * warped base was not held by its rebuild» and went on the donor as it was - a map at 100 % of its size
+         * delivered for the PO's 1000 %. A frame is kept when the walk passes AND the rebuild holds it.
+         */
+        if (opened == MAPGEN_TXN_ERR_BASELINE && donor_bsp != unwarped) {
+            char axes[256] = "none", said[4 * MAPGEN_EQUIV_DETAIL] = "the rebuilt base differs";
+            baseline_refusal(axes, sizeof(axes), said, sizeof(said));
+            progress_line("stage=warp-kept why=\"the warped base was not held by its rebuild: %s - %s\"", axes, said);
+            baseline_residue_say();
+        } else if (opened == MAPGEN_TXN_OK && donor_bsp != unwarped) {
+            progress_line("stage=warp-held");
+        }
+        progress_line("stage=warp-only");
+        MapGenTransaction_Free(txn);
+        return MAPGEN_PIPELINE_ERR_GENERATE;
+    }
+    if (opened == MAPGEN_TXN_ERR_BASELINE && donor_bsp != unwarped) {
+        /* a warped base its own rebuild does not hold to: the run goes on the donor as it is, and says so - a frame
+           that cannot be held is no reason to lose the generation */
+        char axes[256] = "none", said[4 * MAPGEN_EQUIV_DETAIL] = "the rebuilt base differs";
+        baseline_refusal(axes, sizeof(axes), said, sizeof(said));
+        progress_line("stage=warp-kept why=\"the warped base was not held by its rebuild: %s - %s\"", axes, said);
+        baseline_residue_say();
+        char base_dir[MAPCOMPILE_MAX_PATH];
+        snprintf(base_dir, sizeof(base_dir), "%s/baseline", in_memory ? g_work_root : job_dir);
+        if (in_memory)
+            MapGenFs_EmptyDir(base_dir);
+        else
+            clear_files(base_dir);
+        donor_bsp = unwarped;
+        MapGenGeometryEdit_SetSpanScale(1.0f);
+        progress_line("stage=baseline");
+        opened = MapGenTransaction_BeginWithDonors(
+            donor_bsp, in_memory ? g_work_root : job_dir, map_name,
+            request->moddir[0] ? request->moddir : job_dir,
+            adapter, request->generate.seed,
+            num_others ? others : NULL, num_others, &txn);
+    }
     if (opened == MAPGEN_TXN_ERR_BASELINE) {
         /* row 412: which parts of the copy differ from the original, and how - the Studio says it */
-        mapgen_equiv_report_t why;
-        if (MapGenTransaction_LastBaselineWhy(&why)) {
-            char axes[256] = "";
-            for (int r = MAPGEN_EQUIV_DIFF_SPACE; r < MAPGEN_EQUIV_RESULT_COUNT; r++)
-                if (why.failed_axes & MAPGEN_EQUIV_AXIS_BIT(r)) {
-                    const size_t used = strlen(axes);
-                    snprintf(axes + used, sizeof(axes) - used, "%s%s", used ? "," : "",
-                             MapGenEquivalence_ResultName((mapgen_equiv_result_t)r));
-                }
-            /* every part's own words, not only the first's */
-            char said[4 * MAPGEN_EQUIV_DETAIL] = "";
-            for (int r = MAPGEN_EQUIV_DIFF_SPACE; r < MAPGEN_EQUIV_RESULT_COUNT; r++)
-                if ((why.failed_axes & MAPGEN_EQUIV_AXIS_BIT(r)) && why.axis_detail[r][0]) {
-                    const size_t used = strlen(said);
-                    snprintf(said + used, sizeof(said) - used, "%s%s", used ? "; " : "", why.axis_detail[r]);
-                }
-            if (!said[0])
-                snprintf(said, sizeof(said), "%s", why.detail);
-            for (char *c = said; *c; c++)
-                if (*c == '"' || *c == '\n' || *c == '\r')
-                    *c = '\'';
-            progress_line("stage=baseline-refused axes=%s what=\"%s\"", axes[0] ? axes : "none", said);
-            fprintf(stderr, "baseline refused: %s - %s\n", axes[0] ? axes : "none", said);
+        char axes[256], said[4 * MAPGEN_EQUIV_DETAIL];
+        if (baseline_refusal(axes, sizeof(axes), said, sizeof(said))) {
+            progress_line("stage=baseline-refused axes=%s what=\"%s\"", axes, said);
+            fprintf(stderr, "baseline refused: %s - %s\n", axes, said);
         }
         return MAPGEN_PIPELINE_ERR_BASELINE;
     }
-    if (opened != MAPGEN_TXN_OK)
+    if (opened != MAPGEN_TXN_OK) {
+        /* said, not only returned (the donor survey, 09.10: 2box4 stopped in its first second without a word) */
+        progress_line("stage=donor-refused why=%s", MapGenTransaction_ResultName(opened));
+        fprintf(stderr, "the donor was not opened: %s\n", MapGenTransaction_ResultName(opened));
         return MAPGEN_PIPELINE_ERR_GENERATE;
+    }
+    /* the warped base kept beside the job on the disk, whatever the run works in: the map's checks after the run hold
+       it to the base it was built on, not to the donor's old places */
+    if (donor_bsp != unwarped) {
+        uint8_t *raw = NULL;
+        size_t n = 0;
+        char kept[MAPCOMPILE_MAX_PATH];
+        snprintf(kept, sizeof(kept), "%s/warped_base.bsp", job_dir);
+        FILE *f = NULL;
+        if (MapGenFs_Read(donor_bsp, &raw, &n) && n && (f = fopen(kept, "wb")) != NULL) {
+            const bool whole = fwrite(raw, 1, n, f) == n;
+            fclose(f);
+            if (whole)
+                progress_line("stage=warp-base path=\"%s\"", kept);
+        }
+        free(raw);
+    }
     /* row 400: a donor rebuilt with faithful skins, and what it still draws differently */
     if (MapGenTransaction_FaithfulSkins(txn)) {
         mapgen_equiv_report_t eq;
@@ -1461,13 +2570,17 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
                       (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_GRAFT_BUNDLE) : 0u));
     }
     progress_line("stage=plan offered=%u budget=%u target=%u digs=%u annexes=%u storeys=%u spans=%u floods=%u"
-                  " windows=%u reliquids=%u stairways=%u", (unsigned)offered, (unsigned)budget, (unsigned)target,
+                  " windows=%u reliquids=%u stairways=%u remodels=%u blocks=%u floor_shifts=%u stair_reshapes=%u", (unsigned)offered, (unsigned)budget, (unsigned)target,
                   (unsigned)tunnels, (unsigned)annexes, (unsigned)storeys,
                   (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_SPAN) : 0u),
                   (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_FLOOD) : 0u),
                   (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_WINDOW) : 0u),
                   (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_RELIQUID) : 0u),
-                  (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_STAIRWAY) : 0u));
+                  (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_STAIRWAY) : 0u),
+                  (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_REMODEL) : 0u),
+                  (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_BLOCK) : 0u),
+                  (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_FLOOR_SHIFT) : 0u),
+                  (unsigned)(plan ? MapGenGeometryEdit_CountOfKind(plan, MAPGEN_EDIT_STAIR_RESHAPE) : 0u));
     {   /* row 412: the real rooms of the base itself the plan dealt (rooms of the second map are said above) */
         uint32_t tally[8];
         MapGenGeometryEdit_SecondTally(plan, tally);
@@ -1521,9 +2634,16 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
         fprintf(ledger, "# %s fidelity %u seed %llu\n", map_name,
                 (unsigned)request->generate.fidelity,
                 (unsigned long long)request->generate.seed);
-        /* brief 11: the options that change the plan, so the gates re-deal the plan this run dealt */
-        if (request->plan_options[0])
-            fprintf(ledger, "# plan-options %s\n", request->plan_options);
+        /* brief 11: the options that change the plan, so the gates re-deal the plan this run dealt - and, on a warped
+           base, how much longer its tunnels may run (MapGenGeometryEdit_SetSpanScale) */
+        const float span = donor_bsp != unwarped && warp_area > 1000u ? sqrtf((float)warp_area / 1000.0f) : 1.0f;
+        if (request->plan_options[0] || span > 1.0f) {
+            char span_text[48] = "";
+            if (span > 1.0f)
+                snprintf(span_text, sizeof(span_text), "%s--span-scale %.4f", request->plan_options[0] ? " " : "",
+                         (double)span);
+            fprintf(ledger, "# plan-options %s%s\n", request->plan_options, span_text);
+        }
         fprintf(ledger, "# index family verdict divergence"
                         " box-lo box-hi\n");
     }
@@ -1537,11 +2657,28 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
     /* D20 (assignment 23): the candidates' walks, levels and rounds summed */
     uint64_t walk_sum[2] = { 0, 0 };
     uint32_t rounds_dealt = 0;          /* row 397 */
-    for (uint32_t round = 0; round < MAPGEN_PIPELINE_MAX_ROUNDS; round++) {
+    uint32_t accepted_before_round = 0;
+    /*
+     * Brief 16 D3 (the PO, 10.10: mg_10_6695 tried one shaft and lift in SEVEN rounds, refused alike each time, 587
+     * seconds): every site the run has tried, by its print - a redeal deals it again, the run does not ask again. A
+     * redeal with nothing new to try ends the edits: «план исчерпан». Not in a dry replay of an older run's ledger,
+     * which tried its sites as often as it did; the replay counts them instead.
+     */
+    uint64_t *tried = NULL;
+    uint32_t num_tried = 0, cap_tried = 0, skipped_tried = 0;
+    ladder_t ladder;
+    memset(&ladder, 0, sizeof(ladder));
+    bool plan_exhausted = false, out_of_time = false;
+    uint32_t *order = NULL;
+    for (uint32_t round = 0; round < MAPGEN_PIPELINE_MORE_ROUNDS; round++) {
       rounds_dealt = round + 1u;
       if (round) {
           if (MapGenTransaction_Divergence(txn) >= target || attempts >= budget)
               break;
+          /* brief 15 D4: past the first four, only while the round before accepted something */
+          if (round >= MAPGEN_PIPELINE_MAX_ROUNDS && MapGenTransaction_Accepted(txn) == accepted_before_round)
+              break;
+          accepted_before_round = MapGenTransaction_Accepted(txn);
           if (MapGenTransaction_Redeal(txn, request->generate.seed
                                             + 0x9E3779B9ull * (round + 1))
               != MAPGEN_TXN_OK)
@@ -1550,11 +2687,86 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
           offered = MapGenGeometryEdit_Count(plan);
           SAY(50, "dealing again");
           write_plan(job_dir, plan, round);
-          progress_line("stage=redeal round=%u offered=%u", (unsigned)round,
-                        (unsigned)offered);
+          uint32_t fresh = 0;
+          for (uint32_t i = 0; i < offered; i++) {
+              const mapgen_geometry_edit_t *e = MapGenGeometryEdit_At(plan, i);
+              if (e && !family_skipped(request, e->kind)
+                  && (target == 0 || !zero_gain(e->kind))
+                  && !print_held(tried, num_tried, edit_print(plan, i, e)))
+                  fresh++;
+          }
+          progress_line("stage=redeal round=%u offered=%u fresh=%u", (unsigned)round,
+                        (unsigned)offered, (unsigned)fresh);
       }
-      for (uint32_t i = 0; i < offered && attempts < budget; i++) {
-        spent_to = i;
+      /* brief 16 D2: the round's edits proved and valued, built most valuable first; the plan says what it can give */
+      free(order);
+      uint32_t worthy = 0;
+      order = plan_order(txn, request, round, target, budget > attempts ? budget - attempts : 0u, tried, num_tried,
+                         replay.dry, &worthy);
+      /* brief 17 D5: a replay offers the ledger's next rows in the ledger's own order - a run since brief 16 builds
+         its most valuable edits first, so a stretched run's ledger is no schedule order */
+      /* brief 18 D4: a row is this round's when its edit is - the same index AND the same family (the reference's row
+         37, «12 dig», is round 1's; round 0's edit 12 was a reliquid, and the replay offered it); the rows past it are
+         the next round's, and the replay deals that round when this one's rows are spent */
+      uint32_t round_end = replay.n;
+      for (uint32_t j = replay.at, put = 0; order && j < replay.n && put < offered; j++) {
+          uint32_t k = put;
+          while (k < offered && (order[k] != replay.e[j].index
+                                 || !MapGenGeometryEdit_At(plan, order[k])
+                                 || strcmp(replay.e[j].family,
+                                           MapGenGeometryEdit_KindName(MapGenGeometryEdit_At(plan, order[k])->kind))))
+              k++;
+          if (k == offered) {
+              round_end = j;
+              break;                                  /* the next round's */
+          }
+          const uint32_t want = order[k];
+          memmove(&order[put + 1], &order[put], (size_t)(k - put) * sizeof(*order));
+          order[put++] = want;
+      }
+      /* brief 16 D3: a new deal with no new proved edit worth building ends the edits - «план исчерпан». A dry replay
+         ends them too when its ledger says so (brief 18 D4): its next row is none of this deal's, or the finishing
+         pass's (a liquid, a swapped pickup, a moved start) - an older ledger's next row is this deal's own */
+      const char *next_family = replay.at < replay.n ? replay.e[replay.at].family : "";
+      const bool ledger_ends_round = replay.dry && replay.at < replay.n
+          && (round_end == replay.at || !strcmp(next_family, "reliquid") || !strcmp(next_family, "swap-item")
+              || !strcmp(next_family, "move-spawn"));
+      if (round && !worthy && (!replay.dry || ledger_ends_round)) {
+          plan_exhausted = true;
+          progress_line("stage=plan-exhausted round=%u tried=%u", (unsigned)round, (unsigned)num_tried);
+          break;
+      }
+      if (request->plan_only && request->plan_check) {
+          /* brief 16 D2: and each edit of it worth building, compiled alone on the base - its estimate checked */
+          uint64_t se = 0, st = 0, sa = 0, sta = 0;
+          for (uint32_t k = 0; order && k < offered && k < request->plan_check; k++) {
+              const mapgen_geometry_edit_t *e = MapGenGeometryEdit_At(plan, order[k]);
+              uint32_t c = 0, a2 = 0, tc = 0, ta = 0;
+              if (!e || zero_gain(e->kind) || !MapGenTransaction_PlanCheck(txn, order[k], &c, &a2, &tc, &ta))
+                  continue;
+              se += c; st += tc; sa += a2; sta += ta;
+              progress_line("stage=plan-check edit=%u family=%s est=%u true=%u added=%u true_added=%u", (unsigned)order[k],
+                            MapGenGeometryEdit_KindName(e->kind), (unsigned)c, (unsigned)tc, (unsigned)a2, (unsigned)ta);
+          }
+          progress_line("stage=plan-check-sum est=%llu true=%llu added=%llu true_added=%llu", (unsigned long long)se,
+                        (unsigned long long)st, (unsigned long long)sa, (unsigned long long)sta);
+      }
+      if (request->plan_only) {
+          /* brief 16 D2: the plan and its word, and nothing built - how a ledger made by an older engine is measured */
+          replay.diverged = true;
+          snprintf(replay.why, sizeof(replay.why), "the plan only: its word is said, nothing is built");
+          break;
+      }
+      for (uint32_t k = 0; k < offered && attempts < budget; k++) {
+        const uint32_t i = order ? order[k] : k;
+        if (replay.dry && replay.at < replay.n && replay.at >= round_end)
+            break;                       /* brief 18 D4: this round's rows are spent - the ledger's next is a new deal's */
+        spent_to = k;
+        /* brief 16 D6: the run's minutes, not only its builds (a replayed row costs none) */
+        if (replay.at >= replay.n && time_is_up(request)) {
+            out_of_time = true;
+            break;
+        }
         if (MapGenTransaction_Divergence(txn) >= target)
             break;                       /* far enough; stop spending */
         {
@@ -1584,6 +2796,16 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
          */
         if (target > 0 && !MapGenGeometryEdit_MovesArchitecture(planned->kind))
             continue;
+        if (target > 0 && zero_gain(planned->kind) && !replay.dry) {
+            ladder.paint++;
+            continue;                    /* brief 16 D2: the liquids too, until the finishing pass */
+        }
+        const uint64_t print = edit_print(plan, i, planned);
+        if (!replay.dry && print_held(tried, num_tried, print)) {
+            skipped_tried++;
+            continue;                    /* brief 16 D3: tried before, on this run */
+        }
+        print_keep(&tried, &num_tried, &cap_tried, print);
         const mapgen_typed_edit_t edit = { planned->kind, i, planned->amount };
         mapgen_transaction_step_t step;
         mapgen_transaction_verdict_t verdict;
@@ -1604,8 +2826,9 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
          * две предыдущие». mg_60 305 of 331 and mg_50 306 of 332 are the same
          * run.
          */
-        if (verdict != MAPGEN_TXN_REJECTED_NOT_APPLIED)
-            attempts++;
+        if (verdict != MAPGEN_TXN_REJECTED_NOT_APPLIED && !step.proved_refusal)
+            attempts++;                  /* brief 16 D1: an edit refused by its proof was never built */
+        ladder_count(&ladder, verdict, &step);
         if ((unsigned)verdict < MAPGEN_TXN_NUM_VERDICTS)
             report->by_verdict[verdict]++;
         if (!replayed)
@@ -1614,9 +2837,13 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
         progress_attempt(replayed ? "replay" : "edits", i, planned, verdict, &step, txn,
                          attempts, budget, target);
       }
-      if (replay.diverged || MapGenTransaction_Divergence(txn) >= target || attempts >= budget)
+      if (replay.diverged || MapGenTransaction_Divergence(txn) >= target || attempts >= budget || out_of_time)
           break;
     }
+    free(order);
+    order = NULL;
+    if (skipped_tried)
+        progress_line("stage=tried-before skipped=%u", (unsigned)skipped_tried);
 
     /*
      * The finishing pass: what makes it a FORK rather than a rebuild.
@@ -1644,6 +2871,13 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
      * of that.
      */
     if (!request->diagnostic_no_band && target > 0) {
+        /* brief 16 D2: the liquids swapped here - 48 attempts and an hour of mg_10_6695 for nothing the metric sees,
+           while its band was unmet - with a share of their own, then the swaps and the starts (a dry replay of an
+           older ledger: as that run did) */
+        /* brief 18 D4: a dry replay passes the liquids too when its ledger's next row is one (a ledger of this
+           engine; an older one swapped them in its rounds) */
+        const bool ledger_liquids = replay.at < replay.n && !strcmp(replay.e[replay.at].family, "reliquid");
+        for (int fpass = replay.dry && !ledger_liquids ? 1 : 0; fpass < 2; fpass++) {
         uint32_t finished = 0;
         for (uint32_t i = 0; i < offered
                              && finished < MAPGEN_PIPELINE_FINISHING; i++) {
@@ -1651,8 +2885,8 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
                 MapGenGeometryEdit_At(plan, i);
             if (!planned)
                 break;
-            if (planned->kind != MAPGEN_EDIT_SWAP_ITEM
-                && planned->kind != MAPGEN_EDIT_MOVE_SPAWN)
+            if (fpass == 0 ? planned->kind != MAPGEN_EDIT_RELIQUID
+                           : planned->kind != MAPGEN_EDIT_SWAP_ITEM && planned->kind != MAPGEN_EDIT_MOVE_SPAWN)
                 continue;
             if (family_skipped(request, planned->kind))
                 continue;                /* row 394 */
@@ -1664,6 +2898,7 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
             if (replay.diverged
                 || !attempt_or_replay(&replay, txn, ledger, i, planned, &edit, &verdict, &step, &replayed))
                 break;
+            ladder_count(&ladder, verdict, &step);
             if ((unsigned)verdict < MAPGEN_TXN_NUM_VERDICTS)
                 report->by_verdict[verdict]++;
             if (!replayed)
@@ -1672,6 +2907,7 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
             progress_attempt(replayed ? "replay" : "finishing", i, planned, verdict, &step, txn,
                              attempts, budget, target);
             finished++;
+        }
         }
     }
 
@@ -1704,11 +2940,14 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
      * the omission the phase forbids.
      */
     if (target > 0 || MapGenTransaction_NumOtherDonors(txn) > 0) {
-        for (uint32_t i = spent_to; i < offered; i++) {
+        /* brief 16 D2: the edits are built by worth, so a graft is past the last one tried when it was never tried */
+        for (uint32_t i = replay.dry ? spent_to : 0u; i < offered; i++) {
             const mapgen_geometry_edit_t *planned =
                 MapGenGeometryEdit_At(plan, i);
             if (!planned || planned->kind != MAPGEN_EDIT_GRAFT_BUNDLE
                 || family_skipped(request, planned->kind))
+                continue;
+            if (!replay.dry && print_held(tried, num_tried, edit_print(plan, i, planned)))
                 continue;
             const mapgen_typed_edit_t edit = { planned->kind, i,
                                                planned->amount };
@@ -1718,6 +2957,7 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
             if (replay.diverged
                 || !attempt_or_replay(&replay, txn, ledger, i, planned, &edit, &verdict, &step, &replayed))
                 break;
+            ladder_count(&ladder, verdict, &step);
             if ((unsigned)verdict < MAPGEN_TXN_NUM_VERDICTS)
                 report->by_verdict[verdict]++;
             if (!replayed)
@@ -1727,6 +2967,12 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
                              attempts, budget, target);
         }
     }
+
+    free(tried);
+    tried = NULL;
+    progress_line("stage=ladder not_applied=%u proved=%u tried=%u paint=%u builds=%u whole=%u taken=%u",
+                  (unsigned)ladder.not_applied, (unsigned)ladder.proved, (unsigned)skipped_tried,
+                  (unsigned)ladder.paint, (unsigned)ladder.builds, (unsigned)ladder.whole, (unsigned)ladder.taken);
 
     /* row 395: a resume that diverged stops here and says where */
     if (replay.diverged) {
@@ -1747,7 +2993,8 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
     replay_free(&replay);
     /* row 397 (Fable's brief 3 G4): what ended the edits, for a run short of its target to say */
     snprintf(report->ended_by, sizeof(report->ended_by), "%s",
-             MapGenTransaction_Divergence(txn) >= target ? "target" : attempts >= budget ? "budget" : "schedule");
+             MapGenTransaction_Divergence(txn) >= target ? "target" : out_of_time ? "time"
+             : attempts >= budget ? "budget" : plan_exhausted ? "plan" : "schedule");
     report->compiles = attempts;
     report->budget = budget;
     report->rounds = rounds_dealt;
@@ -1777,6 +3024,12 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
         fprintf(ledger, "# walks: %llu levels, %llu rounds\n",
                 (unsigned long long)walk_sum[0],
                 (unsigned long long)walk_sum[1]);
+        /* brief 16 D0: the ladder */
+        fprintf(ledger, "# ladder: %u declined by the operator and %u refused by the proof, no build; %u tried"
+                        " before, not offered again; %u worth nothing the metric counts, kept for the finishing"
+                        " pass; %u built - %u walked whole, %u from the parent's walk\n",
+                (unsigned)ladder.not_applied, (unsigned)ladder.proved, (unsigned)skipped_tried,
+                (unsigned)ladder.paint, (unsigned)ladder.builds, (unsigned)ladder.whole, (unsigned)ladder.taken);
         fprintf(ledger, "# %u attempted, divergence %u of target %u\n",
                 (unsigned)attempts,
                 (unsigned)MapGenTransaction_Divergence(txn),
@@ -1950,7 +3203,7 @@ judge:
     walk.cancel.user = request->cancelled_user;
     const mapgen_reach_result_t rr =
         MapGenReach_ExploreWith(candidate, request->reach_budget
-                                ? request->reach_budget : 40000u, &walk,
+                                ? request->reach_budget : MAPGEN_REACH_BUDGET, &walk,
                                 &reach);
     if (rr == MAPGEN_REACH_CANCELLED) {
         MapGenReach_Free(reach);
@@ -2077,7 +3330,7 @@ judge:
         mapgen_reach_t *own = NULL;
         mapgen_bsp_t *base = NULL;
         if (!donor_walk && baseline[0] && (base = load_bsp(baseline)) != NULL
-            && MapGenReach_Explore(base, request->reach_budget ? request->reach_budget : 40000u, &own)
+            && MapGenReach_Explore(base, request->reach_budget ? request->reach_budget : MAPGEN_REACH_BUDGET, &own)
                == MAPGEN_REACH_OK)
             donor_walk = own;
         if (donor_walk && MapGenReach_NoWorseThan(&report->reach, MapGenReach_Report(donor_walk))) {
@@ -2155,9 +3408,9 @@ judge:
      * always did.
      */
     const uint32_t gate_budget = request->reach_budget ? request->reach_budget
-                                                       : 40000u;
+                                                       : MAPGEN_REACH_BUDGET;
     const bool walks_fit = reach && rr == MAPGEN_REACH_OK
-                        && gate_budget == 40000u && baseline_walk;
+                        && gate_budget == MAPGEN_REACH_BUDGET && baseline_walk;
     const mapgen_divergence_result_t measured =
         walks_fit
         ? MapGenDivergence_MeasureWalked(donor, baseline_walk, true, candidate,

@@ -93,8 +93,18 @@ int main(int argc, char **argv)
     for (int a = 4; a < argc; a++) {
         if (!strcmp(argv[a], "--routes"))
             routes = true;
+        else if (!strcmp(argv[a], "--cap-old"))
+            MapGenDivergence_SetMaxCells(8388608u);     /* brief 18 D2 RED: the lattice's cap before 13.10 */
         else if (!strcmp(argv[a], "--cells") && a + 1 < argc)
             cells = argv[++a];
+        else if (!strcmp(argv[a], "--box") && a + 6 < argc) {     /* brief 15 D7: one region, the arena's */
+            float lo[3], hi[3];
+            for (int k = 0; k < 3; k++)
+                lo[k] = strtof(argv[++a], NULL);
+            for (int k = 0; k < 3; k++)
+                hi[k] = strtof(argv[++a], NULL);
+            MapGenDivergence_SetRegion(lo, hi);
+        }
     }
 
     mapgen_bsp_t *donor = load(argv[1]);

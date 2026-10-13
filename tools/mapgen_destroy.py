@@ -229,7 +229,10 @@ def main() -> int:
         shutil.copy2(bsp, a.map)
         words = said.split(" wanted ")[0].split()
         counts = dict(zip(words[0::2], words[1::2]))
-        report = {"percent": a.destruction, "seed": a.seed, "left_out": what, **counts}
+        # the 3D ruin asked for (rubble, craters, breaches, broken edges, falls, ruins) - the Studio says asked / built
+        wanted = said.split(" wanted ")[1].split() if " wanted " in said else []
+        report = {"percent": a.destruction, "seed": a.seed, "left_out": what, **counts,
+                  "wanted_total": str(sum(int(w) for w in wanted if w.isdigit()))}
         a.map.with_suffix(".destroyed.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
         used = sorted(set(re.findall(r"\b((?:mapgen|mgd)/[\w/-]+)\b", mapfile.read_text(encoding="utf-8",
                                                                                          errors="replace"))))

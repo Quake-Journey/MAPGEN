@@ -183,6 +183,12 @@ typedef struct mapgen_geometry_s mapgen_geometry_t;
  * belong to the door because the door's tree reaches them - never because they
  * are near it.
  */
+/* Brief 18 D2: world brushes of compiled maps left out because the compiler had made them FLAT (two sides one plane
+   and its mirror: no space, no face - and «mirrored plane» with the world's bounds lost when written back), counted
+   over the process. `MapGenGeometry_SetDropFlat(false)` is the RED: such a brush is read as a brush. */
+void     MapGenGeometry_SetDropFlat(bool drop);
+uint32_t MapGenGeometry_FlatBrushes(void);
+
 mapgen_geometry_result_t MapGenGeometry_FromBsp(const mapgen_bsp_t *bsp,
                                                 mapgen_geometry_t **out);
 

@@ -7,7 +7,12 @@
  * reads them, nothing compiles. Each attempt takes FAKE_STEP_MS (300 by default).
  *
  *   fake_pipeline.exe COMPILER DONOR.bsp JOB_DIR NAME FIDELITY SEED [--resume] [--memory MB] [--checkpoints 0|1]
- *                     [anything else ignored]
+ *                     [--warp-size N] [anything else ignored]
+ *
+ * The PO, 11.10 (each stage drawn): with --warp-size other than 100 the base's frame is tried twice, each try's part
+ * layout said («stage=warp-map»: the donor's plan in three parts an axis, stretched unequally) before its «stage=warp»
+ * line; the light pass's portal file is the donor's own DONOR.prt, copied beside the lit map when there is one, and the
+ * light goes through the visibility's two passes, the direct light and a bounce.
  *
  * Row 411: with --memory the base and each accepted try's map are also put in named sections, as the real engine
  * keeps them (Local\q2mem_<root>/baseline/q2mg.bsp ...), and the run says «stage=memory mode=memory root=...»; with
@@ -77,7 +82,7 @@ int main(int argc, char **argv)
     if (argc < 7)
         return 2;
     const char *donor = argv[2], *job = argv[3];
-    int resume = 0, memory = 0, checkpoints = 1;
+    int resume = 0, memory = 0, checkpoints = 1, warp = 100;
     const char *second = NULL;          /* brief 9: the second map (`--donor`) */
     for (int a = 7; a < argc; a++) {
         if (!strcmp(argv[a], "--resume"))
@@ -88,6 +93,8 @@ int main(int argc, char **argv)
             checkpoints = atoi(argv[++a]);
         else if (!strcmp(argv[a], "--donor") && a + 1 < argc)
             second = argv[++a];
+        else if (!strcmp(argv[a], "--warp-size") && a + 1 < argc)
+            warp = atoi(argv[++a]);
     }
     const char *need = getenv("FAKE_MEMORY_NEED_MB");
     const int given = memory;
@@ -134,6 +141,53 @@ int main(int argc, char **argv)
     else
         line("stage=memory mode=files why=\"not asked\"");
     const int disk = memory <= 0 || checkpoints;
+    if (warp != 100 && !resume) {
+        /* the donor's plan from its vertices (lump 2), cut in three parts an axis */
+        float lo[2] = { 1e9f, 1e9f }, hi[2] = { -1e9f, -1e9f };
+        FILE *d = fopen(donor, "rb");
+        if (d) {
+            int head[2 + 19 * 2];
+            if (fread(head, sizeof(int), 2 + 19 * 2, d) == 2 + 19 * 2) {
+                const int off = head[2 + 2 * 2], len = head[2 + 2 * 2 + 1];
+                float v[3];
+                fseek(d, off, SEEK_SET);
+                for (int i = 0; i < len / 12 && fread(v, sizeof(float), 3, d) == 3; i++)
+                    for (int a = 0; a < 2; a++) {
+                        if (v[a] < lo[a]) lo[a] = v[a];
+                        if (v[a] > hi[a]) hi[a] = v[a];
+                    }
+            }
+            fclose(d);
+        }
+        static const float K[2][2][3] = { { { 1.6f, 1.0f, 1.4f }, { 1.2f, 1.7f, 1.0f } },
+                                          { { 1.3f, 1.5f, 1.2f }, { 1.5f, 1.1f, 1.4f } } };
+        for (int t = 0; t < 2 && lo[0] < hi[0]; t++) {
+            char ax[2][160];
+            for (int a = 0; a < 2; a++) {
+                const float span = (hi[a] - lo[a]) / 3.0f, mid = 0.5f * (lo[a] + hi[a]);
+                float at[4], to[4], total = 0;
+                for (int i = 0; i < 3; i++)
+                    total += span * K[t][a][i];
+                to[0] = mid - total / 2;
+                for (int i = 0; i < 4; i++) {
+                    at[i] = lo[a] + span * (float)i;
+                    if (i)
+                        to[i] = to[i - 1] + span * K[t][a][i - 1];
+                }
+                snprintf(ax[a], sizeof(ax[a]), "%.0f:%.0f,%.0f:%.0f,%.0f:%.0f,%.0f:%.0f", at[0], to[0], at[1], to[1],
+                         at[2], to[2], at[3], to[3]);
+            }
+            line("stage=warp-map try=%d x=\"%s\" y=\"%s\" z=\"\" lean_x=\"\" lean_y=\"\" turns=0 mirror=0", t, ax[0], ax[1]);
+            Sleep(step * 3);
+            line("stage=warp try=%d size=%d shape=50 area=%d parts=\"x=%.2f,%.2f,%.2f y=%.2f,%.2f,%.2f area=%d turn=0 mirror=0 "
+                 "height=100 shift=0\" built=1 playable=%d places=9000 pickups=83 pickups_out=0 starts=10 stranded=0 "
+                 "build_ms=900 walk_ms=20000 why=\"\"", t, warp, warp * 10, K[t][0][0], K[t][0][1], K[t][0][2], K[t][1][0],
+                 K[t][1][1], K[t][1][2], warp, t == 1);
+        }
+        line("stage=warp-done area=%d parts=\"x=%.2f,%.2f,%.2f y=%.2f,%.2f,%.2f area=%d turn=0 mirror=0 height=100 shift=0\" "
+             "asked_size=%d asked_shape=50 asked_turn=0 asked_height=100 ms=1000", warp * 10, K[1][0][0], K[1][0][1],
+             K[1][0][2], K[1][1][0], K[1][1][1], K[1][1][2], warp, warp);
+    }
     line("stage=baseline");
     if (memory > 0)
         put_section("baseline/q2mg.bsp", donor);
@@ -209,10 +263,24 @@ int main(int argc, char **argv)
     _mkdir(path);
     snprintf(path, sizeof(path), "%s/lit/q2mg.bsp", job);
     copy(donor, path);
-    /* row 411: the light compile's passes, a tenth at a time, as the real one says them */
-    for (int pass = 0; pass < 2; pass++)
+    /* the PO, 11.10: the donor's portal file beside the lit map, for the visibility's picture */
+    {
+        char prt[1024], to[1024];
+        snprintf(prt, sizeof(prt), "%s", donor);
+        char *dot = strrchr(prt, '.');
+        if (dot && strlen(dot) == 4) {
+            strcpy(dot, ".prt");
+            snprintf(to, sizeof(to), "%s/lit/q2mg.prt", job);
+            copy(prt, to);
+        }
+    }
+    /* row 411: the light compile's passes, a tenth at a time, as the real one says them: the visibility's base and
+       full passes, the direct light, a bounce */
+    static const char *const STEP[4] = { "vis", "vis", "rad", "rad" };
+    static const int PASS[4] = { 0, 1, 0, 1 };
+    for (int k = 0; k < 4; k++)
         for (int tenths = 1; tenths <= 10; tenths++) {
-            line("stage=light-step step=%s pass=%d tenths=%d", pass ? "rad" : "vis", pass ? 0 : 1, tenths);
+            line("stage=light-step step=%s pass=%d tenths=%d", STEP[k], PASS[k], tenths);
             Sleep(step / 2);
         }
     line("stage=finish result=OK accepted=%d attempted=%d divergence=%d target=%d ended_by=- compiles=%d budget=%d"

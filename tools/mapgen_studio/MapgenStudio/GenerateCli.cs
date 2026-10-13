@@ -4,11 +4,14 @@ using System.Text;
 namespace MapgenStudio;
 
 /// <summary>
-/// `--generate NAME FIDELITY SEED [--donor MAP] [--graft MAP ...] [--resume-job DIR]` (ledger rows 394-397, 399):
+/// `--generate NAME FIDELITY SEED [--donor MAP] [--graft MAP ...] [--minutes N] [--like RUN] [--resume-job DIR]` (ledger rows 394-397, 399):
 /// one full generation driven exactly as the window drives it - the final build with light, the map's checks, the
 /// map with its source and descriptions into the library - without a window, its account into <c>generate.txt</c>
 /// beside the program. MAP is a donor's name in the engine's donors folder or the path of any Quake II .bsp, which
 /// is then added there (q2dm1 when no --donor is given); each --graft map is offered as a source of rooms.
+/// `--like RUN` (a run's record in data\runs, or any folder holding a request.txt): that run's base, families, options,
+/// builds and minutes instead of the window's form - a run at the options of an earlier one, the settings untouched
+/// (the PO's own form keeps what he chose).
 /// </summary>
 public static class GenerateCli
 {
@@ -24,16 +27,31 @@ public static class GenerateCli
         string? Opt(string flag) => Array.IndexOf(args, flag) is var k and >= 0 && k + 1 < args.Length ? args[k + 1] : null;
         static string Donor(string map) => File.Exists(map) ? Engine.AddDonor(map) : map;
         var resume = Opt("--resume-job");
-        var donor = Donor(Opt("--donor") ?? "q2dm1");
+        var likeDir = Opt("--like") is { } ld ? (Directory.Exists(ld) ? ld : Path.Combine(s.RunsPath, ld)) : null;
+        var like = likeDir != null ? Generation.LoadRequestFrom(likeDir) : null;
+        if (likeDir != null && like == null)
+            return $"FAIL no request.txt in {likeDir}\n";
+        var donor = Donor(Opt("--donor") ?? like?.Donor ?? "q2dm1");
         var grafts = args.Select((a, k) => (a, k)).Where(x => x.a == "--graft" && x.k + 1 < args.Length)
                          .Select(x => Donor(args[x.k + 1])).Where(d => d != donor).Distinct().ToList();
         var missing = Generation.Missing(s, donor, grafts);
         if (missing != null)
             return $"FAIL {missing}\n";
-        var g = resume == null
-            ? Generation.Start(new GenerationRequest(name, donor, fidelity, seed, Array.Empty<string>(), s.SaveMapSource,
-                                                     Grafts: grafts), s)
-            : Generation.Resume(s, resume);
+        /* the window's own form: its families, its options (the base's frame among them) and its minutes - a run from
+           here is the run the window would start (10.10: without them a check of the PO's settings checked none);
+           `--minutes N` sets the time of this run alone */
+        var minutes = Opt("--minutes") is { } mt && int.TryParse(mt, NumberStyles.Integer, CultureInfo.InvariantCulture, out var mn)
+            ? mn : like?.TimeMinutes ?? s.TimeMinutes;
+        var request = like != null
+            ? like with
+            {
+                Name = name, Donor = donor, Fidelity = fidelity, Seed = seed, TimeMinutes = minutes,
+                MaxAttempts = minutes > 0 ? minutes * 10 : like.MaxAttempts,
+                Grafts = grafts.Count > 0 ? grafts : like.Grafts,
+            }
+            : new GenerationRequest(name, donor, fidelity, seed, s.SkipFamilies, s.SaveMapSource,
+                                    MaxAttempts: minutes * 10, Grafts: grafts, Options: s.Options, TimeMinutes: minutes);
+        var g = resume == null ? Generation.Start(request, s) : Generation.Resume(s, resume);
         while (g.Running)
         {
             g.Poll();

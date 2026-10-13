@@ -130,7 +130,9 @@ FAULTS = re.compile(r"^surface faults (\d+)$", re.M)
 OFFER = re.compile(r"^  edit (\d+)  window  opening (\d+)", re.M)
 TALLY = re.compile(r"^  windows: (\d+) room faces considered, (\d+) offered;(.*)$",
                    re.M)
-APPLY = re.compile(r"^apply (\d+): (\S+), changed (\S+), (\d+) brushes$", re.M)
+# brief 17: the driver says the edit's kind since 08.10 («apply 14 (window): OK, ...») - the old pattern matched none,
+# and every «the operator cuts it» failed on HEAD
+APPLY = re.compile(r"^apply (\d+)(?: \([^)]*\))?: (\S+), changed (\S+), (\d+) brushes$", re.M)
 # «window offered FIRST: opening 0, the doorway at 768 -0 0, glazed as a door»
 DOORWAY = re.compile(r"^  window offered (?:FIRST|second): opening (\d+), the"
                      r" doorway at \S+ \S+ \S+, glazed as a (\w+)", re.M)
@@ -151,6 +153,11 @@ SILL = re.compile(r"^  window offered: opening (\d+), room \d+ [-+][xy],"
 # luminance 71 of 255, spread 5.5 over all 24 window WALs) and lives in the unit
 # sixty of q2dm1's own sixty-five texture names belong to.
 GLASS_TEXTURE = "e2u3/window5_1"
+# Brief 17 (the PO, 11.10: «и цвет стекол тоже неплохо бы варировать»): each window wears one of the stock game's glass
+# skins by its place - the streaked pane above, wired lavender-blue and grey, deep blue, amber, olive and smoke - at 33
+# or 66 per cent; never an emblem or the «KILL ME» pane.
+GLASS_TEXTURES = {"e2u3/window5_1", "e2u2/wndow1_1", "e3u3/windowc1_7", "e1u1/window1", "e1u1/wndow0_1",
+                  "e1u2/wndow1_2", "e2u3/window1"}
 PLATE_TEXTURE = "e2u3/metal5_1"
 FRAME_TEXTURE = "e2u3/metal5_1"
 # The construction's own numbers, which the module defines and this asserts.
@@ -229,6 +236,10 @@ def write_fixture(path: Path, panel: bool = False,
         # the wall across the middle: ONE box, floor to lid
         box(WALL_X[0], y0, z0 + (PANEL_UP if panel else 0), WALL_X[1], y1, z1,
             WALL),
+        # brief 17: a block of the donor's riveted metal in a far corner - the frame wears it only where the donor
+        # draws it (row 408: elsewhere the wall's own material), and this hall drew none, so every frame case failed
+        # on HEAD behind the «operator cuts it» pattern that matched no line
+        box(x0, y0, z0, x0 + T, y0 + T, z0 + T, FRAME_TEXTURE),
     ]
     if buttress:
         brushes.append(box(WALL_X[0] - 48, BUTTRESS_Y, z0, WALL_X[0], y1, z1,
@@ -332,7 +343,7 @@ class Bsp:
     def pane_textures(self) -> set:
         out = set()
         for rec in self.texinfo:
-            if rec[8] & 0x10:
+            if rec[8] & 0x30:
                 out.add(rec[10].split(b"\0")[0].decode("latin1"))
         return out
 
@@ -364,7 +375,8 @@ def glass_lines(map_text: str) -> int:
     flag is what identifies the face.
     """
     return sum(1 for line in map_text.splitlines()
-               if GLASS_TEXTURE in line and line.rstrip().endswith(" 16 0"))
+               if any(t in line for t in GLASS_TEXTURES)
+               and (line.rstrip().endswith(" 16 0") or line.rstrip().endswith(" 32 0")))
 
 
 def plate_lines(map_text: str) -> int:
@@ -833,12 +845,18 @@ SHAPE_CASES = [
 def one_shape(exe: Path, bsp: Path, work: Path, name: str, seed: int,
               ambition: int, where: str, shape: str, panes: int,
               base_faults: int) -> None:
-    listing = drive(exe, bsp, "--seed", str(seed), "--ambition",
-                    str(ambition), "--list")
-    want = [o for o in offers(listing)
-            if o["where"] == where and o["shape"] == shape
-            and o["panes"] == panes]
-    if not check(f"{name}: the plan offers it at seed {seed}", bool(want),
+    # brief 17 D3: the kind of a window is the plan's (each kind before a second of any), so the seed that offers a
+    # shape at a place moved; the first seed from the case's own that offers it is taken
+    want, first = [], seed
+    for seed in range(first, first + 24):
+        listing = drive(exe, bsp, "--seed", str(seed), "--ambition",
+                        str(ambition), "--list")
+        want = [o for o in offers(listing)
+                if o["where"] == where and o["shape"] == shape
+                and o["panes"] == panes]
+        if want:
+            break
+    if not check(f"{name}: the plan offers it (seed {seed})", bool(want),
                  want[0]["line"] if want else
                  "; ".join(o["line"] for o in offers(listing))[:200]):
         return
@@ -888,9 +906,8 @@ def one_shape(exe: Path, bsp: Path, work: Path, name: str, seed: int,
           b.window_brushes() == panes,
           f"{b.window_brushes()} brushes with CONTENTS_WINDOW"
           f" for {panes} pane(s)")
-    check(f"{name}: the panes wear the DONOR's own plain glass, not base1's"
-          f" emblem",
-          b.pane_textures() == {GLASS_TEXTURE},
+    check(f"{name}: the panes wear one of the stock game's glass skins (one per window), not base1's emblem",
+          len(b.pane_textures()) == 1 and b.pane_textures() <= GLASS_TEXTURES,
           f"translucent textures: {sorted(b.pane_textures())}")
     construction_ok(b, text, name, shape, panes)
     ok, why = machinery_ok(b, shape, panes, o["plates"])
@@ -1171,13 +1188,18 @@ def main() -> int:
                               for x in booms[:3]))
 
     # ---- what the FIDELITY moves ------------------------------------------
+    # brief 17 D3: the first seed whose plan lays a plate under a sill window at both fidelities
     seen = {}
-    for amb in (10, 25, 40, 80):
-        listing = drive(exe, bsp, "--seed", "11", "--ambition", str(amb),
-                        "--list")
-        plates = [o for o in offers(listing)
-                  if o["where"] == "sill" and o["shape"] == "plate"]
-        seen[amb] = plates[0]["out"] if plates else None
+    for seed in range(11, 35):
+        seen = {}
+        for amb in (25, 80):
+            listing = drive(exe, bsp, "--seed", str(seed), "--ambition", str(amb),
+                            "--list")
+            plates = [o for o in offers(listing)
+                      if o["where"] == "sill" and o["shape"] == "plate"]
+            seen[amb] = plates[0]["out"] if plates else None
+        if seen.get(25) is not None and seen.get(80) is not None:
+            break
     check("how far the plate lies from the pane reads the fidelity",
           seen.get(25) is not None and seen.get(80) is not None
           and max(seen[80]) > max(seen[25]),

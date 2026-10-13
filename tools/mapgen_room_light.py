@@ -295,6 +295,69 @@ def door_lit(bsp: Path, donor: Path, rooms: list, sources: list, flags: str, key
     return lit
 
 
+PATCHES_WANTED = 60000      # the light tool holds 65535
+
+
+def light_plan(raw: bytes) -> tuple[int, int, list[int], int]:
+    """Brief 18 D1 (Fable: «the patch size is not left to chance - the retry is the net, not the plan»): what the light
+    tool will make of a map, read from its faces before the first light pass - as `light_plan` in mapgen_pipeline.c.
+
+    Patches: the tool halves a face along each axis until no side is longer than the patch size + 1, every face at
+    least one patch (its own count on three maps of 12.10: 23869, 12839 and 45787 where this says 24551, 12862 and
+    47175). The lightmap: a sample every 16 units along the texture's two axes, 3 bytes, on every face neither sky nor
+    warped (19854822 for the 19839405 bytes q3t2 at 1000 % holds).
+
+    Returns (subdiv, maxdata, patches at 64/128/256/512, lightmap bytes): the smallest patch size that keeps the patches
+    under PATCHES_WANTED, and 0 for maxdata while the lightmap and a tenth over fit the tool's own 8 MB - else that,
+    rounded up to 16 MB, at most 128 MB."""
+    import math
+    import struct
+    lump = [struct.unpack_from("<ii", raw, 8 + 8 * i) for i in range(19)]
+    verts = struct.unpack_from(f"<{lump[2][1] // 4}f", raw, lump[2][0])
+    edges = struct.unpack_from(f"<{lump[11][1] // 2}H", raw, lump[11][0])
+    surfedges = struct.unpack_from(f"<{lump[12][1] // 4}i", raw, lump[12][0])
+    sizes = (64.0, 128.0, 256.0, 512.0)
+    patches, lightmap = [0, 0, 0, 0], 0
+    one = struct.Struct("<f")
+
+    def f32(x: float) -> float:
+        return one.unpack(one.pack(x))[0]
+
+    for f in range(lump[6][1] // 20):
+        _, _, first, num, tex = struct.unpack_from("<HhihH", raw, lump[6][0] + 20 * f)
+        if num < 3 or first < 0 or first + num > len(surfedges):
+            continue
+        pts = []
+        for k in range(first, first + num):
+            se = surfedges[k]
+            v = edges[2 * se] if se >= 0 else edges[2 * -se + 1]
+            pts.append(verts[3 * v:3 * v + 3])
+        side = [max(p[a] for p in pts) - min(p[a] for p in pts) for a in range(3)]
+        for s, size in enumerate(sizes):
+            n = 1
+            for a in range(3):
+                e = side[a]
+                while e > size + 1.0:
+                    e *= 0.5
+                    n *= 2
+            patches[s] += n
+        axes = struct.unpack_from("<8fi", raw, lump[5][0] + 76 * tex)
+        if axes[8] & (0x4 | 0x8):           # sky, warped: no lightmap
+            continue
+        ext = []
+        for ax in (axes[0:4], axes[4:8]):
+            # in single precision, step by step, as the generator's C counts it - a side that ends on a sample's
+            # line is one sample more or less by the sum's last bit, and the two must say one number
+            vals = [f32(f32(f32(f32(p[0] * ax[0]) + f32(p[1] * ax[1])) + f32(p[2] * ax[2])) + ax[3]) for p in pts]
+            vals = [f32(v / 16.0) for v in vals]
+            ext.append(math.ceil(max(vals)) - math.floor(min(vals)) + 1)
+        lightmap += 3 * ext[0] * ext[1]
+    pick = next((s for s in range(4) if patches[s] <= PATCHES_WANTED), 3)
+    need = lightmap + lightmap // 10
+    maxdata = min(128 << 20, (need + (16 << 20) - 1) // (16 << 20) * (16 << 20)) if need > 8388608 else 0
+    return int(sizes[pick]), maxdata, patches, lightmap
+
+
 def relight(bsp: Path, text: str, flags: str, work: Path, keys: dict | None = None, moddir: Path | None = None,
             basedir: Path | None = None) -> None:
     raw = bsp.read_bytes()
@@ -309,16 +372,40 @@ def relight(bsp: Path, text: str, flags: str, work: Path, keys: dict | None = No
     words = ["-rad", "-maxdata", "8388608", "-threads", threads, *flags.split(),
              "-moddir", str(moddir or GAME), "-basedir", str(basedir or GAME), "-gamedir", str(basedir or GAME)]
     # row 411 (Fable's brief 8 D): the light pass in memory - the map relit is written once, over itself
-    runs, out = compile_bsp_in_memory(pinned_compiler()[0], [words], with_entities(raw, sunny or lit_text),
-                                      label="relight")
-    if runs is None:
-        (lit / "q2mg.bsp").write_bytes(with_entities(raw, sunny or lit_text))
-        r = guard.run([str(pinned_compiler()[0]), *words, str(lit / "q2mg.map")],
-                      capture_output=True, text=True, errors="replace", timeout=7200)
-        out = (lit / "q2mg.bsp").read_bytes() if not r.returncode else None
-    else:
-        r = runs[-1]
-    (lit / "rad.log").write_text(r.stdout, encoding="utf-8")
+    # the PO, 11.10 («снова карта монохромная»): on a map as large as q3t2 at 1000 % the light tool runs out of
+    # patches («Exceeded MAX_PATCHES») at their default 64 across - then again with them 128, 256, 512 across
+    # and «lightdatasize N > maxdata 8388608» - the lightmap the map needs, rounded up to 16 MB (the client packs
+    # lightmaps into 128 blocks of 1024 x 1024, far past it); the tool takes the last -maxdata on its line
+    said = ""
+    subdiv, maxdata, patches, lightmap = light_plan(raw)
+    if subdiv > 64 or maxdata:
+        said += (f"light plan: {patches[0]} patches at 64, {lightmap} bytes of lightmap; -subdiv {subdiv}"
+                 + (f" -maxdata {maxdata}" if maxdata else "") + "\n")
+    for _ in range(6):
+        these = words + (["-subdiv", str(subdiv)] if subdiv > 64 else []) + (["-maxdata", str(maxdata)] if maxdata else [])
+        runs, out = compile_bsp_in_memory(pinned_compiler()[0], [these], with_entities(raw, sunny or lit_text),
+                                          label="relight")
+        if runs is None:
+            (lit / "q2mg.bsp").write_bytes(with_entities(raw, sunny or lit_text))
+            r = guard.run([str(pinned_compiler()[0]), *these, str(lit / "q2mg.map")],
+                          capture_output=True, text=True, errors="replace", timeout=7200)
+            out = (lit / "q2mg.bsp").read_bytes() if not r.returncode else None
+        else:
+            r = runs[-1]
+        if not (r.returncode or not out):
+            break
+        # the tool's own words - never over `text`, the map's entities written back below
+        told = r.stdout or ""
+        over = re.search(r"lightdatasize (\d+) > maxdata", told)
+        if "MAX_PATCHES" in told and subdiv < 512:
+            subdiv *= 2
+            said += f"light pass ran out of patches (exit {r.returncode}); again with -subdiv {subdiv}\n"
+        elif over and int(over.group(1)) > maxdata and int(over.group(1)) <= 128 << 20:
+            maxdata = (int(over.group(1)) + (16 << 20) - 1) // (16 << 20) * (16 << 20)
+            said += f"the lightmap over maxdata (exit {r.returncode}); again with -maxdata {maxdata}\n"
+        else:
+            break
+    (lit / "rad.log").write_text(said + r.stdout, encoding="utf-8")
     if r.returncode or not out:
         raise SystemExit(f"the light pass failed ({r.returncode}): {r.stdout[-400:]}")
     bsp.write_bytes(with_entities(out, text))

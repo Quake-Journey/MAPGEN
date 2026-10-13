@@ -37,7 +37,7 @@ MACRO = "MAPCOMPILE_PINNED_THREADS"
 # Every place that fills in a compile request's thread count. Named, not
 # globbed: a new one should have to be added here deliberately.
 ASSIGN_SITES = [
-    "src/mapgen/mapgen_pipeline.c",
+    "src/mapgen/mapgen_pipeline.c", "src/mapgen/mapgen_warp.c",
     "src/mapgen/mapgen_transaction.c",
     "tools/mapgen_compile_driver.c",
     "tools/mapgen_pipeline_driver.c",
@@ -133,7 +133,7 @@ REDS = [
      f"request.threads = {MACRO};", "request.threads = 4;",
      "src/mapgen/mapgen_transaction.c asks for the pinned count"),
     ("the final light compile asks for a number of its own",
-     "src/mapgen/mapgen_pipeline.c",
+     "src/mapgen/mapgen_pipeline.c", "src/mapgen/mapgen_warp.c",
      "creq.threads = MAPCOMPILE_LIGHT_THREADS(request->light_threads);", "creq.threads = 8;",
      "src/mapgen/mapgen_pipeline.c asks for the pinned count"),
     ("a guard carries its own -threads",

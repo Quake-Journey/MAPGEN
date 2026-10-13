@@ -51,6 +51,48 @@ public sealed class SchemeModel
         public float PlayTop;
         public string Source = "";
         public int Floors => Faces.Count(f => f.Kind == 0);
+
+        /* the PO, 11.10 - each stage drawn: the map's lights, the frame the donor stretches into, the light pass's
+           portals in the order its visibility reaches them */
+        public readonly List<Lamp> Lamps = new();
+        public WarpMap? Warp;
+        public bool IsDonor;
+        public List<Vector3[]>? Portals;
+
+        /// <summary>The same map with a frame or portals of its own (the card reloads a new snapshot).</summary>
+        public Snapshot With(WarpMap? warp, List<Vector3[]>? portals)
+        {
+            var s = new Snapshot { Lit = Lit, Min = Min, Max = Max, PlayTop = PlayTop, Source = Source, IsDonor = IsDonor,
+                                   Warp = warp, Portals = portals };
+            s.Faces.AddRange(Faces);
+            s.Marks.AddRange(Marks);
+            s.Lamps.AddRange(Lamps);
+            if (warp != null && IsDonor)
+            {
+                // the stretched map's middle is the turn's pivot (the generator turns about its brushes' middle), and
+                // the camera is fitted to the donor and the stretched map both
+                var lo = new Vector3(float.MaxValue);
+                var hi = new Vector3(float.MinValue);
+                foreach (var f in Faces)
+                    foreach (var v in f.V)
+                    {
+                        var q = warp.Stretch(v);
+                        lo = Vector3.Min(lo, q);
+                        hi = Vector3.Max(hi, q);
+                    }
+                if (lo.X <= hi.X)
+                {
+                    warp.Pivot = new Vector2(MathF.Round((lo.X + hi.X) / 2), MathF.Round((lo.Y + hi.Y) / 2));
+                    foreach (var c in new[] { lo, hi, new Vector3(lo.X, hi.Y, lo.Z), new Vector3(hi.X, lo.Y, hi.Z) })
+                    {
+                        var t = warp.Turn(c);
+                        s.Min = Vector3.Min(s.Min, t);
+                        s.Max = Vector3.Max(s.Max, t);
+                    }
+                }
+            }
+            return s;
+        }
     }
 
     /// <summary>Row 411: an edit of the plan (plan.txt), drawn faint until it is tried.</summary>
@@ -80,6 +122,7 @@ public sealed class SchemeModel
     private DateTime _baseTime;
     private Task? _refresh;
     private bool _first = true;
+    private string _warpKey = "";
 
     private static readonly Regex Row = new(
         @"^\s*(\d+)\s+(\S+)\s+(\S+)\s+\d+(?:\s+(-?\d+) (-?\d+) (-?\d+)\s+(-?\d+) (-?\d+) (-?\d+))?", RegexOptions.Compiled);
@@ -94,11 +137,17 @@ public sealed class SchemeModel
         // row 411: the finished map as soon as it is named (lit, through the checks and the cover), not only at the end
         var artifact = File.Exists(g.Artifact) ? g.Artifact : "";
         var memory = g.Running ? g.MemoryRoot : "";
+        // the PO, 11.10: the frame's stage draws the donor stretching, the light's the portals
+        var donor = g.Running && g.Stage is "start" or "warp" or "baseline" ? Engine.DonorPath(g.Request.Donor) : "";
+        var warp = g.Warp;
+        var light = g.Running && g.Stage == "light";
         _refresh = Task.Run(() =>
         {
             try
             {
-                Refresh(job, replaying, artifact, memory);
+                Refresh(job, replaying, artifact, memory, donor, warp);
+                if (light)
+                    LoadPortals(job, memory);
             }
             catch (Exception)
             {
@@ -110,7 +159,27 @@ public sealed class SchemeModel
     /// <summary>One refresh on this thread (the plan test).</summary>
     public void RefreshNow(string job, string memory = "") => Refresh(job, false, "", memory);
 
-    private void Refresh(string job, bool replaying, string artifact, string memory = "")
+    /// <summary>The light pass's portal file, once, for the visibility's picture - from memory or the disk.</summary>
+    private void LoadPortals(string job, string memory)
+    {
+        var s = Current;
+        if (s == null || s.Portals != null)
+            return;
+        var bytes = memory.Length > 0 ? MemFiles.Read(memory, "lit/q2mg.prt") : null;
+        var disk = Path.Combine(job, "lit", "q2mg.prt");
+        if (bytes == null && File.Exists(disk))
+            bytes = File.ReadAllBytes(disk);
+        if (bytes == null)
+            return;
+        var from = s.Marks.FirstOrDefault(m => m.what == "spawn").at;
+        if (from == default)
+            from = (s.Min + s.Max) / 2;
+        var portals = StageArt.Portals(bytes, from);
+        if (portals.Count > 0 && ReferenceEquals(Current, s))
+            Current = s.With(s.Warp, portals);
+    }
+
+    private void Refresh(string job, bool replaying, string artifact, string memory = "", string donor = "", WarpMap? warp = null)
     {
         if (job != _jobDir)
         {
@@ -245,6 +314,21 @@ public sealed class SchemeModel
                    : newest >= 0 && File.Exists(Path.Combine(job, $"try_{newest:0000}", "q2mg.bsp"))
                        ? Path.Combine(job, $"try_{newest:0000}", "q2mg.bsp")
                    : Path.Combine(job, "baseline", "q2mg.bsp");
+        /* the PO, 11.10 («когда деформация тоже отображать как то наглядно»): before the base is rebuilt, the donor
+           itself - stretching into the frame being tried */
+        if (!File.Exists(source) && donor.Length > 0 && File.Exists(donor))
+        {
+            var key = "donor:" + donor;
+            if (_base == key && _warpKey == (warp?.Key ?? ""))
+                return;
+            var shot = Read(File.ReadAllBytes(donor));
+            shot.Source = donor;
+            shot.IsDonor = true;
+            _base = key;
+            _warpKey = warp?.Key ?? "";
+            Current = warp != null ? shot.With(warp, null) : shot;
+            return;
+        }
         if (!File.Exists(source))
             return;
         var stamp = File.GetLastWriteTime(source);
@@ -388,6 +472,8 @@ public sealed class SchemeModel
     private static Dictionary<int, Vector3> ReadEntities(byte[] d, (int off, int len) lump, Snapshot s)
     {
         var origins = new Dictionary<int, Vector3>();
+        var named = new Dictionary<string, Vector3>(StringComparer.OrdinalIgnoreCase);
+        var lamps = new List<(Vector3 at, Vector3 colour, float level, string target)>();
         var text = Encoding.Latin1.GetString(d, lump.off, Math.Max(0, lump.len)).TrimEnd('\0');
         foreach (Match e in Regex.Matches(text, @"\{([^{}]*)\}"))
         {
@@ -404,6 +490,15 @@ public sealed class SchemeModel
             }
             if (at is not { } p)
                 continue;
+            if (keys.TryGetValue("targetname", out var tn))
+                named[tn] = p;
+            if (cls.StartsWith("light", StringComparison.OrdinalIgnoreCase))
+            {
+                var level = float.TryParse(keys.GetValueOrDefault("light", keys.GetValueOrDefault("_light", "300")),
+                                           NumberStyles.Float, CultureInfo.InvariantCulture, out var lv) ? lv : 300f;
+                lamps.Add((p, StageArt.Colour(keys.GetValueOrDefault("_color")), level, keys.GetValueOrDefault("target", "")));
+                continue;
+            }
             var kind = cls.StartsWith("weapon_") ? "weapon"
                      : cls.StartsWith("item_armor") ? "armor"
                      : cls.StartsWith("item_health") ? (cls.Contains("mega") ? "mega" : "health")
@@ -417,6 +512,8 @@ public sealed class SchemeModel
             if (kind.Length > 0)
                 s.Marks.Add((kind, p));
         }
+        foreach (var (at, colour, level, target) in lamps)
+            s.Lamps.Add(new Lamp(at, colour, level, target.Length > 0 && named.TryGetValue(target, out var to) ? to : null));
         return origins;
     }
 
@@ -439,8 +536,11 @@ public sealed class SchemeModel
 /// map, seen only from the side it faces - from above, the floors and the walls' inner sides; the ceilings never
 /// hide what is under them). Floors above <see cref="Cut"/> are left out: the roofs over where play happens.
 /// </summary>
-public sealed class SchemeView : Control
+public sealed class SchemeView : Control, CopyText.IDrawnText
 {
+    /// <summary>Brief 15: the words this view drew last (its feed and its labels) - for «Копировать».</summary>
+    public string DrawnText { get; private set; } = "";
+
     private readonly SchemeModel _model;
     private readonly Func<Generation?> _run;
     private readonly DispatcherTimer _timer;
@@ -567,7 +667,9 @@ public sealed class SchemeView : Control
         if (_fitted == null)
             Fit(invalidate: false);
         _fitted = s;
-        ctx.Custom(new Frame(this, s, Bounds));
+        var frame = new Frame(this, s, Bounds);
+        DrawnText = frame.Words();
+        ctx.Custom(frame);
     }
 
     /// <summary>One frame: the faces projected and ordered here, drawn by Skia on the render thread.</summary>
@@ -579,6 +681,8 @@ public sealed class SchemeView : Control
            edit being tried pinned and named over the map, and the last events in the corner */
         private (SKPoint foot, SKPoint head, string text)? _pin;
         private readonly List<(SKColor color, string text)> _feed = new();
+        /* brief 15: the changes of the base named over their boxes */
+        private readonly List<(SKPoint at, string text)> _labels = new();
 
         public Frame(SchemeView v, SchemeModel.Snapshot s, Rect bounds)
         {
@@ -650,7 +754,19 @@ public sealed class SchemeView : Control
                 var age = (now - e.Seen).TotalSeconds;
                 SKColor color;
                 double alpha;
-                if (e.Verdict == "ACCEPTED")
+                if (e.Verdict == "ACCEPTED" && Generation.ChangesBase(e.Family)
+                    && v._run() is { Running: true, Stage: "attempt" or "plan" or "resume" or "baseline" })
+                {
+                    /* the base itself changed: teal and named while the edits go on (the PO, 08.10: «отдельным цветом
+                       и надписью»; purple read as the refusal's red, the labels filled the light's stage) */
+                    var k = e.Old ? 1 : Math.Clamp((age - 20) / 10, 0, 1);
+                    color = new SKColor(0x2d, 0xd4, 0xbf);
+                    alpha = e.Old ? 0.25 : 0.55 - 0.30 * k;
+                    var top = new Vector3((b[0] + b[3]) / 2, (b[1] + b[4]) / 2, b[5]);
+                    if (_labels.Count < 24 && Project(top, out _) is { } at)
+                        _labels.Add((at, Kind(e.Family)));
+                }
+                else if (e.Verdict == "ACCEPTED")
                 {
                     var k = e.Old ? 1 : Math.Clamp((age - 20) / 10, 0, 1);
                     color = Blend(new SKColor(0x22, 0xc5, 0x5e), new SKColor(0x9a, 0x6a, 0x3c), k);
@@ -691,8 +807,9 @@ public sealed class SchemeView : Control
             foreach (var e in edits.Where(x => !x.Old && x.Verdict != "REJECTED_NOT_APPLIED").Reverse().Take(7))
             {
                 var ok = e.Verdict == "ACCEPTED";
-                _feed.Add((ok ? new SKColor(0x4a, 0xde, 0x80) : new SKColor(0xf8, 0x71, 0x71),
-                           $"{Loc.T(ok ? "verdict.accepted" : "verdict.rejected")}: {Kind(e.Family)}  {e.Seen:HH:mm:ss}"));
+                var rebuild = ok && Generation.ChangesBase(e.Family);
+                _feed.Add((rebuild ? new SKColor(0x2d, 0xd4, 0xbf) : ok ? new SKColor(0x4a, 0xde, 0x80) : new SKColor(0xf8, 0x71, 0x71),
+                           $"{Loc.T(rebuild ? "verdict.rebuilt" : ok ? "verdict.accepted" : "verdict.rejected")}: {Kind(e.Family)}  {e.Seen:HH:mm:ss}"));
             }
             foreach (var (what, at) in s.Marks)
             {
@@ -704,6 +821,10 @@ public sealed class SchemeView : Control
         }
 
         private delegate SKPoint? Projector(Vector3 p, out float depth);
+
+        /// <summary>The words this frame draws: the feed, then the labels of the base's changes.</summary>
+        public string Words() => string.Join(Environment.NewLine,
+            _feed.Select(f => f.text).Concat(_labels.Select(l => l.text)).Concat(_pin is { } p ? new[] { p.text } : Array.Empty<string>()));
 
         private static string Kind(string family) => Loc.Has($"kind.{family}") ? Loc.T($"kind.{family}") : family;
 
@@ -774,6 +895,20 @@ public sealed class SchemeView : Control
             using var face = SKTypeface.FromFamilyName("Segoe UI") ?? SKTypeface.Default;
             using var font = new SKFont(face, 15);
             using var text = new SKPaint { IsAntialias = true, Color = SKColors.White };
+            if (_labels.Count > 0)
+            {
+                using var small = new SKFont(face, 12);
+                using var back = new SKPaint { Color = new SKColor(0x0f, 0x4f, 0x4a, 0xc8) };
+                using var rim = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1, Color = new SKColor(0x2d, 0xd4, 0xbf) };
+                foreach (var (at, label) in _labels)
+                {
+                    var w = small.MeasureText(label);
+                    var r = new SKRect(at.X - w / 2 - 5, at.Y - 20, at.X + w / 2 + 5, at.Y - 4);
+                    canvas.DrawRoundRect(r, 3, 3, back);
+                    canvas.DrawRoundRect(r, 3, 3, rim);
+                    canvas.DrawText(label, at.X - w / 2, at.Y - 8, small, text);
+                }
+            }
             if (_pin is { } pin)
             {
                 using var line = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 2,
@@ -905,8 +1040,8 @@ public sealed class SchemePanel : DockPanel
             c.Margin = new Thickness(c.Margin.Left, 0, 12, 4);
             bar.Children.Add(c);
         }
-        var legend = new TextBlock { Text = Loc.T("scheme.legend"), FontSize = 12, Opacity = 0.7, TextWrapping = TextWrapping.Wrap,
-                                     Margin = new Thickness(0, 0, 0, 6) };
+        // the PO, 11.10 («читать там можно разве что с лупой»): the legend as signs with short words, folded
+        var legend = SchemeLegend.Make();
         SetDock(bar, Dock.Top);
         SetDock(legend, Dock.Top);
         Children.Add(bar);
@@ -1076,5 +1211,101 @@ public sealed class SchemeFullScreen : Window
         _edits.Text = g.Budget > 0 ? Loc.F("run.attempts", g.Accepted, g.Compiles, g.Budget, g.Attempts)
                       + (g.Target > 0 ? "   " + Loc.F("run.likeness", g.Divergence / 10, g.Target / 10) : "")
                     : "";
+    }
+}
+
+/// <summary>
+/// The scheme's legend: each sign drawn as the scheme draws it, with a short word beside it - a row a group (the edits,
+/// the plan still to come, the map, the items), the signs in equal columns so the rows line up (the PO, 11.10: «легенда
+/// не выровнена, выглядит аляписто»), the details in each sign's tip; the mouse in one line; folded under its header.
+/// </summary>
+public static class SchemeLegend
+{
+    private const int Columns = 7;
+
+    private sealed class Sign : Control
+    {
+        private readonly string _mark;
+        private readonly Color _colour;
+
+        public Sign(string mark, Color colour)
+        {
+            _mark = mark;
+            _colour = colour;
+            Width = Height = 20;
+            VerticalAlignment = VerticalAlignment.Center;
+        }
+
+        public override void Render(DrawingContext ctx)
+        {
+            if (_mark.Length > 0)
+                SchemeOverlay.Mark(ctx, _mark, new Point(10, 10));
+            else
+                ctx.DrawRectangle(new SolidColorBrush(_colour), new Pen(new SolidColorBrush(Color.FromArgb(0x60, 0, 0, 0)), 1),
+                                  new Rect(3, 4, 14, 12), 3, 3);
+        }
+    }
+
+    private static Color C(uint rgb) => Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
+
+    private static (string key, string mark, Color colour) S(string key, uint rgb) => (key, "", C(rgb));
+    private static (string key, string mark, Color colour) M(string key, string mark) => (key, mark, default);
+
+    private static readonly (string group, (string key, string mark, Color colour)[] signs)[] Groups =
+    {
+        ("legend.edits", new[] { S("legend.try", 0x3b82f6), S("legend.refused", 0xef4444), S("legend.accepted", 0x22c55e),
+                                 S("legend.base", 0x2dd4bf) }),
+        ("legend.plan", new[] { S("legend.plan.rooms", 0xf59e0b), S("legend.plan.spans", 0xa78bfa),
+                                S("legend.plan.water", 0x38bdf8), S("legend.plan.windows", 0xe5e7eb) }),
+        ("legend.map", new[] { S("legend.floor", 0x8a8a8a), S("legend.water", 0x2f7df0), S("legend.lava", 0xff6a00),
+                               S("legend.slime", 0x6bd12f), S("legend.mover", 0xa87ce8) }),
+        ("legend.items", new[] { M("legend.weapon", "weapon"), M("legend.armor", "armor"), M("legend.health", "health"),
+                                 M("legend.ammo", "ammo"), M("legend.power", "power"), M("legend.spawn", "spawn"),
+                                 M("legend.teleport", "teleport") }),
+    };
+
+    public static Expander Make()
+    {
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto" + string.Concat(Enumerable.Repeat(",*", Columns))),
+                              RowSpacing = 6, ColumnSpacing = 10 };
+        for (var r = 0; r < Groups.Length; r++)
+        {
+            grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+            var head = new TextBlock { Text = Loc.T(Groups[r].group), FontSize = 13, FontWeight = FontWeight.SemiBold, Opacity = 0.8,
+                                       VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+            Grid.SetRow(head, r);
+            grid.Children.Add(head);
+            for (var c = 0; c < Groups[r].signs.Length && c < Columns; c++)
+            {
+                var (key, mark, colour) = Groups[r].signs[c];
+                var cell = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal, Spacing = 6, Background = Brushes.Transparent,
+                    Children = { new Sign(mark, colour), new TextBlock { Text = Loc.T(key), FontSize = 13, VerticalAlignment = VerticalAlignment.Center,
+                                                                         TextTrimming = TextTrimming.CharacterEllipsis } },
+                };
+                if (Loc.Has(key + ".tip"))
+                    ToolTip.SetTip(cell, Loc.T(key + ".tip"));
+                Grid.SetRow(cell, r);
+                Grid.SetColumn(cell, c + 1);
+                grid.Children.Add(cell);
+            }
+        }
+        return new Expander
+        {
+            Header = Loc.T("legend.head"),
+            IsExpanded = false,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Margin = new Thickness(0, 0, 0, 6),
+            Content = new StackPanel
+            {
+                Spacing = 10,
+                Children =
+                {
+                    grid,
+                    new TextBlock { Text = Loc.T("legend.mouse"), FontSize = 13, Opacity = 0.7, TextWrapping = TextWrapping.Wrap },
+                },
+            },
+        };
     }
 }

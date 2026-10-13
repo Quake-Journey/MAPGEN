@@ -4,10 +4,10 @@ r"""One map the whole way MAPGEN Studio makes it (ledger rows 412h..412l) - the 
                                        [--destruction D] [--pipeline EXE] [--game BASEQ2]
 
 The steps of `Generation.cs` in its order: the generator (`pipeline.exe`, the Studio's words, the donor's light
-calibration if it has one) -> the finished map copied to WORK/candidate.bsp -> the donor's light fitted once if it has
-no calibration (on a COPY of the donor in WORK/donors: the installed Studio's donors are not touched) -> each dug
-room's lights brought to its door (`mapgen_room_light.py`, relit first under a new fit) -> the delivery gates -> with
-D > 0 the destruction (`mapgen_destroy.py`) and the checks a ruin answers to, named «after destruction». All of it into
+calibration if it has one) -> the finished map copied to WORK/candidate.bsp -> the delivery gates but the light ->
+with D > 0 the destruction (`mapgen_destroy.py`) and the checks a ruin answers to, named «after destruction» -> the
+light on the finished map: the donor's light fitted (on a COPY of the donor in WORK/donors), each dug room's lights
+brought to its door, the fit asked again - and the light gate. All of it into
 WORK/gates.txt as the Studio writes it; one line of summary at the end. Started through the load guard; one map, one
 run - never a loop.
 """
@@ -95,16 +95,10 @@ def main() -> int:
     def step(args: list) -> subprocess.CompletedProcess:
         return subprocess.run([py, *map(str, args)], capture_output=True, text=True, errors="replace", env=env)
 
-    fit = step([TOOLS / "mapgen_light_autofit.py", cand, base, a.work / "light_fit"])
-    rooms = step([TOOLS / "mapgen_room_light.py", cand, "--job", job, "--donor", base]
-                 + (["--relight-first"] if "FITTED" in fit.stdout or a.relight else []))
-    # brief 12 L3: the fit asked again of the map as the room step left it (only when the gate reads it out of band)
-    refit = step([TOOLS / "mapgen_light_autofit.py", cand, base, a.work / "light_refit", "--after-rooms"])
-    # a refit moves the whole map's level: the rooms are brought to their doors once more under it
-    if "REFITTED" in refit.stdout:
-        again = step([TOOLS / "mapgen_room_light.py", cand, "--job", job, "--donor", base])
-        refit.stdout += "\nROOM LIGHT AGAIN\n" + again.stdout + again.stderr
-    gates = step([TOOLS / "mapgen_delivery_gates.py", cand, "--job", job, "--donor", base])
+    # the PO, 07.10: the checks first, then the ruin, then the light on the map as it will be played and its check
+    checks = ("pickups,glass,hall,annex,storeys,stairways,clips,digwalls,sky,eye,stair,finished,water,reach,axes,"
+              "static,starts")
+    gates = step([TOOLS / "mapgen_delivery_gates.py", cand, "--job", job, "--donor", base, "--only", checks])
     after = ""
     if a.destruction > 0:
         d = step([TOOLS / "mapgen_destroy.py", cand, "--donor", base, "--destruction", a.destruction, "--seed",
@@ -112,9 +106,24 @@ def main() -> int:
         env["MAPGEN_GATE_PREFIX"] = "after destruction: "
         g2 = step([TOOLS / "mapgen_delivery_gates.py", cand, "--job", job, "--donor", base, "--only",
                    "finished,axes,water,starts,stairways"])
+        env.pop("MAPGEN_GATE_PREFIX", None)
         after = "\nDESTRUCTION\n" + d.stdout + d.stderr + "\n" + g2.stdout + g2.stderr
-    all_text = (gates.stdout + gates.stderr + "\nLIGHT FIT\n" + fit.stdout + fit.stderr + "\nROOM LIGHT\n"
-                + rooms.stdout + rooms.stderr + "\nLIGHT REFIT\n" + refit.stdout + refit.stderr + after)
+    if a.destruction > 0:
+        env["MAPGEN_LIGHT_OVERRIDE"] = str(a.work / "light_override.json")   # a ruined map's refit is its own
+    fit = step([TOOLS / "mapgen_light_autofit.py", cand, base, a.work / "light_fit"])
+    rooms = step([TOOLS / "mapgen_room_light.py", cand, "--job", job, "--donor", base]
+                 + (["--relight-first"] if "FITTED" in fit.stdout or a.relight else []))
+    # brief 12 L3: the fit asked again of the map as the room step left it (only when the gate reads it out of band)
+    refit = step([TOOLS / "mapgen_light_autofit.py", cand, base, a.work / "light_refit", "--after-rooms"]
+                 + (["--no-store"] if a.destruction > 0 else []))   # a ruined map: the donor's calibration kept
+    # a refit moves the whole map's level: the rooms are brought to their doors once more under it
+    if "REFITTED" in refit.stdout:
+        again = step([TOOLS / "mapgen_room_light.py", cand, "--job", job, "--donor", base])
+        refit.stdout += "\nROOM LIGHT AGAIN\n" + again.stdout + again.stderr
+    light = step([TOOLS / "mapgen_delivery_gates.py", cand, "--job", job, "--donor", base, "--only", "light"])
+    all_text = (gates.stdout + gates.stderr + after + "\nLIGHT ON THE FINISHED MAP\n" + light.stdout + light.stderr
+                + "\nLIGHT FIT\n" + fit.stdout + fit.stderr + "\nROOM LIGHT\n" + rooms.stdout + rooms.stderr
+                + "\nLIGHT REFIT\n" + refit.stdout + refit.stderr)
     (a.work / "gates.txt").write_text(all_text, encoding="utf-8")
     passed = len(re.findall(r"^\s+PASS\s", all_text, re.M))
     failed = re.findall(r"^\s+FAIL\s+(.*?)(?:  --|$)", all_text, re.M)

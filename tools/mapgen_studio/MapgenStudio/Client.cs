@@ -22,25 +22,15 @@ public static class Client
     private static readonly List<Process> Live = new();
 
     /// <summary>
-    /// Is a game client open - one the Studio started, or the user's own (S-4: ONE client at a time; a cover launch
-    /// waits for the game the user is playing to close, it never opens a second one beside it).
+    /// Is a cover's game, started by the Studio, still open (the PO, 08.10: «программа отказывается запускать мне
+    /// карту если у меня запущен q2pro-x.exe ... запускать несколько экземпляров не проблема» - the user's own game
+    /// no longer holds anything back: a map is played and a cover is shot beside it; mg_4_6686's cover waited ten
+    /// minutes for his game to close and was skipped). Every launch takes no fixed port (<c>net_clientport -1</c>).
     /// </summary>
     public static bool Busy(Settings s)
     {
         Live.RemoveAll(p => p.HasExited);
-        if (Live.Count > 0)
-            return true;
-        var (ok, exe) = Settings.CheckClient(s.ClientDir);
-        if (!ok)
-            return false;
-        try
-        {
-            return Process.GetProcessesByName(Path.GetFileNameWithoutExtension(exe)).Length > 0;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
+        return Live.Count > 0;
     }
 
     public static Run Launch(Settings s, params string[] args)
@@ -61,7 +51,9 @@ public static class Client
     public static Run Play(Settings s, MapEntry map)
     {
         Library.CopyToClient(s, map);
-        return Launch(s, "+set", "deathmatch", "1", "+map", map.Name);
+        var run = Launch(s, "+set", "deathmatch", "1", "+map", map.Name);
+        Live.Remove(run.Process);           /* a map played holds no cover back */
+        return run;
     }
 
     /// <summary>Every .cfg of baseq2 by its sha256 (the Studio's own temporary cover config left out).</summary>

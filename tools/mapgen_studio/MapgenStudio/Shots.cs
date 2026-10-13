@@ -69,19 +69,11 @@ public sealed partial class MainWindow
                         await Task.Delay(250);
                         if (page == "generate_options")
                         {
-                            // the creative options open, the rest folded, and the page scrolled to them
-                            FASettingsExpander? creative = null;
-                            foreach (var ex in w.GetVisualDescendants().OfType<FASettingsExpander>())
-                            {
-                                var mine = Equals(ex.Header, Loc.T("gen.creative"));
-                                ex.IsExpanded = mine;
-                                if (mine)
-                                    creative = ex;
-                            }
+                            // the page scrolled to the options' cards: the frame and the new rooms at the top
+                            var frame = w.GetVisualDescendants().OfType<Border>()
+                                         .FirstOrDefault(c => c.Tag is OptionGroup { Key: "gen.warp" });
+                            frame?.BringIntoView(new Avalonia.Rect(0, 0, 8, Math.Min(frame.Bounds.Height, 700)));
                             await Task.Delay(300);
-                            // brief 11: its last rows in view (the stairways and the destruction below the liquids)
-                            if (creative != null)
-                                creative.BringIntoView(new Avalonia.Rect(0, Math.Max(0, creative.Bounds.Height - 8), 8, 8));
                         }
                         await Task.Delay(350);
                         var file = Path.Combine(into, page + ".png");

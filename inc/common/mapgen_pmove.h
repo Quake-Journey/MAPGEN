@@ -157,6 +157,11 @@ uint32_t MapGenPmove_Run(mapgen_pmove_player_t *player,
    point is inside a solid or has no floor within a fall the engine survives. */
 bool MapGenPmove_DropToFloor(mapgen_pmove_player_t *player);
 
+/* Is the player's own body - standing, or ducked as his flags say - inside a solid where he is? The engine never
+   leaves a moving player there (it snaps back to the last good position), but one PLACED there it calls «on the
+   ground»: a trace that starts in a solid has a ground entity. */
+bool MapGenPmove_InSolid(const mapgen_pmove_player_t *player);
+
 /*
  * Slide a standing player from one point towards another through the bound
  * world - movers included - and say where he ended up.

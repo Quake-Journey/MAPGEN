@@ -36,7 +36,7 @@ DEFAULT_WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260831\pipeline")
 
 SOURCES = [
     "tools/mapgen_pipeline_driver.c",
-    "src/mapgen/mapgen_pipeline.c",
+    "src/mapgen/mapgen_pipeline.c", "src/mapgen/mapgen_warp.c",
     # The pipeline calls the fidelity-zero chain, so anything
     # that links the pipeline links what it invents maps with.
     "src/mapgen/mapgen_synthesis.c",

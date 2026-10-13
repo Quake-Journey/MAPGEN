@@ -138,6 +138,12 @@ const char *MapGenPipeline_ResultName(mapgen_pipeline_result_t r);
  * one of them used to miss.
  */
 #define MAPGEN_PIPELINE_MAX_ROUNDS 4u
+/*
+ * Brief 15 D4 (the PO's mg_10_6669: «ended_by=schedule» with 86 of 140 builds unused, the difference stuck at 62 %):
+ * past the four rounds the dealing goes on while builds are left and the last round accepted something - a round
+ * that accepted nothing has nothing new to offer, and ends the schedule. At most this many in all.
+ */
+#define MAPGEN_PIPELINE_MORE_ROUNDS 16u
 
 /*
  * How many attempts a run spends on being a fork rather than on being the
@@ -211,6 +217,9 @@ typedef struct {
      * honest number rather than a comfortable one.
      */
     uint32_t                  max_attempts;
+    /* brief 16 D6: the run's time, in seconds - the edits stop with what the map still needs after them kept back;
+       0 - none, the builds alone bound it */
+    uint32_t                  time_budget_s;
 
     /*
      * Fidelity ZERO only: what was learned, and what the target can resolve.
@@ -268,6 +277,31 @@ typedef struct {
      * on from the first attempt it does not name. The baseline is rebuilt.
      */
     bool                      resume;
+    /* brief 16: the ledger replayed dry - compiled again where its checkpoints are gone, every row's edit
+       proved as an observer - and the run stops at the ledger's end (a measurement, not a generation) */
+    bool                      replay_dry;
+    /* brief 16 D2: deal the plan, prove it, say its word - and stop (nothing built) */
+    bool                      plan_only;
+    /* brief 18 D2: the base's frame alone - warped, built, walked, kept as warped_base.bsp - and stop (a guard's and
+       a trace's seam: q3t2 at 1000 % is four walks of three minutes before any plan) */
+    bool                      warp_only;
+    /* ... and no more than this many tries of the frame (0: the rule's eight) - a guard asks the first try alone */
+    uint32_t                  warp_tries;
+    /* ... and the first this many edits of its order compiled alone on the base, the estimate checked (no walk) */
+    uint32_t                  plan_check;
+    /*
+     * The warp (the PO, 10.10: «хочется именно менять донора и уже к нему пристраивать ... размеры карты могут
+     * меняться как угодно»): the donor's plan stretched part by part before the first edit - its size as a share of
+     * the donor's area (0 or 100: kept), and how unequally its parts stretch (0..100). See mapgen_warp.h.
+     */
+    uint32_t                  warp_size;
+    uint32_t                  warp_shape;
+    /* ... turned (0 none, 1..3 quarter turns, 4 mirrored, 5..7 both, 8 drawn from the seed), and its ceilings - above
+       the highest place a player stands - lifted (percent, 100 or 0: kept) */
+    int32_t                   warp_turn;
+    uint32_t                  warp_height;
+    /* ... and its parts slid sideways against each other (0..100, mapgen_warp_t.lean) */
+    uint32_t                  warp_shift;
 
     /*
      * Hold the finished map to its DONOR's own walk rather than to the five absolutes (row 400): for a donor
@@ -449,5 +483,15 @@ mapgen_pipeline_result_t MapGenPipeline_Run(const char *donor_bsp,
                                             mapgen_pipeline_report_t *report,
                                             mapgen_pipeline_progress_fn progress,
                                             void *progress_user);
+
+/* Brief 18 D1 RED: false - the first light pass at the light tool's own patch size and lightmap room (the retries
+   alone, as before the plan); true, the rule - both chosen from the judged map's faces before it. */
+void MapGenPipeline_SetLightPlan(bool plan);
+/* ... and RED: false - one light pass, whatever the light tool said (no «again» past its two limits). */
+void MapGenPipeline_SetLightAgain(bool again);
+/* The plan itself, asked of a compiled map: the patch size, the lightmap's room (0: the tool's own 8 MB), the
+   patches at 64/128/256/512 and the lightmap's bytes as the map's faces say them. False when the file is not read. */
+bool MapGenPipeline_LightPlan(const char *bsp_path, int *subdiv, unsigned long long *maxdata, uint32_t patches_at[4],
+                              unsigned long long *lightmap);
 
 #endif /* MAPGEN_PIPELINE_H */

@@ -47,7 +47,7 @@ DEFAULT_WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260903"
 
 # Enough of the pipeline to open a transaction, which is where the gate lives.
 PIPELINE_SOURCES = [
-    "tools/mapgen_pipeline_driver.c", "src/mapgen/mapgen_pipeline.c",
+    "tools/mapgen_pipeline_driver.c", "src/mapgen/mapgen_pipeline.c", "src/mapgen/mapgen_warp.c",
     "src/mapgen/mapgen_synthesis.c", "src/mapgen/mapgen_architecture.c",
     "src/mapgen/mapgen_blueprint.c", "src/mapgen/mapgen_brush.c",
     "src/mapgen/mapgen_layout.c", "src/mapgen/mapgen_mix.c",

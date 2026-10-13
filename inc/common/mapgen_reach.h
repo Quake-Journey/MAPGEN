@@ -60,7 +60,9 @@ const char *MapGenReach_ResultName(mapgen_reach_result_t r);
  * how much it allocates.
  */
 #define MAPGEN_REACH_MAX_STATES     262144u
-#define MAPGEN_REACH_MAX_EDGES      2097152u
+/* Edges: q2dm1 warped to twice its area with unequal parts (the base's frame, 10.10) went past 2097152 inside 40000
+   places - a longer room is more landings from every ledge - and the walk said ERR_MEMORY; eight bytes an edge. */
+#define MAPGEN_REACH_MAX_EDGES      16777216u
 #define MAPGEN_REACH_MAX_SPAWNS     1024u
 /* How far apart two resting places have to be to be different places. Below
    this they are the same spot reached by two routes, and merging them is what
@@ -86,6 +88,11 @@ typedef struct {
 } mapgen_reach_state_t;
 
 typedef struct mapgen_reach_s mapgen_reach_t;
+
+/* The places a walk may open before it says the map is too large to walk. 40000 until 13.10: the PO's q3t2 at
+   1000 % and its proportional height walks 31180 before any edit, and every room dug into it adds its own. A map
+   under the old number walks as it did - the budget only ends a walk. */
+#define MAPGEN_REACH_BUDGET 60000u
 
 typedef struct {
     uint32_t states;
@@ -143,6 +150,11 @@ typedef struct {
     uint32_t landmarks;
     uint32_t landmarks_unreachable;
     float    worst_landmark[3];
+    /* the base's frame: the first MAPGEN_REACH_LANDMARKS_SAID of them, each room's centre and what it holds (1 start,
+       2 pickup, 4 a machine's deck), so a refusal names the landmark the map lost rather than a count */
+#define MAPGEN_REACH_LANDMARKS_SAID 8u
+    float    landmark_out[MAPGEN_REACH_LANDMARKS_SAID][3];
+    uint8_t  landmark_holds[MAPGEN_REACH_LANDMARKS_SAID];
 
     /*
      * Row 331: places simulated, and places a later round took from an earlier
@@ -151,6 +163,15 @@ typedef struct {
      */
     uint32_t simulated;
     uint32_t reused;
+    /*
+     * Brief 16 D5: of `reused`, the places taken from the parent's walk, and how many collision brushes the two
+     * compiled maps differ by (UINT32_MAX when the parent could not be used at all - none kept, other machines).
+     */
+    uint32_t inherited;
+    uint32_t brushes_changed;
+    /* ... and when the parent's walk was not used at all, why: 0 used (or none given), 1 it kept nothing, 2 its
+       machines are not these machines, 3 a machine's own brush changed, 4 more brushes changed than are worth it */
+    uint32_t parent_refused;
 
     /*
      * Row 404 (Fable's brief 4 G5-6): the teleporters with a destination and the push volumes, and how many of each
@@ -190,6 +211,20 @@ typedef struct {
     /* TEST SEAM (row 331): every round simulates every place again, as before
        the reuse. The reuse guard's reference walk is the only caller. */
     bool                  no_round_reuse;
+    /*
+     * Brief 16 D5 (the PO, 10.10: «вначале выкопаю яму, а потом проверю ... чему тогда там было работать 2 часа 42
+     * минуты»): 97 % of mg_10_6695's run was this walk, taken whole after every compile though one edit changes one
+     * corner of the map.
+     *
+     * `keep` keeps what this walk simulated - each place's arrivals and the box its simulation swept - with the walk,
+     * until `MapGenReach_Free`. `parent` is a walk kept so, of the map this one was made from: a place whose exact
+     * origin it simulated, under the same machines, where no collision brush that differs between the two compiled
+     * maps meets the box that simulation swept (every trace and every contents query it made lies inside it), is
+     * taken as it was - the round reuse of row 331, across two maps. Everything else is simulated. NULL walks every
+     * place, as before.
+     */
+    bool                  keep;
+    const mapgen_reach_t *parent;
 } mapgen_reach_options_t;
 
 /*
@@ -324,6 +359,16 @@ MapGenReach_FirstFailure(const mapgen_reach_report_t *report)
  * product path may use it.
  */
 bool MapGenReach_ConnectivityOnly(const mapgen_reach_report_t *report);
+
+/* Brief 18 D2 RED: true - a body that «settled» inside a solid is kept as a place (as before 13.10); false, the
+   rule - a place is where a player stands clear of every solid. */
+void MapGenReach_SetSolidPlaces(bool places);
+/* ... and RED: false - a start is settled at its origin alone, not nine over it as the game puts a player down:
+   with the rule above q3t2 (its starts 15 over their floors, a body there 9 inside the floor) has no place at all. */
+void MapGenReach_SetSpawnLift(bool lift);
+/* ... and RED: false - a push's flight is followed for 180 frames (2.9 s) and no longer: a pad whose throw lasts
+   longer on a map grown tall «throws nobody». */
+void MapGenReach_SetPushFlight(bool whole);
 
 /*
  * NO WORSE THAN THE DONOR (row 400, Fable's brief 4 G5-6).

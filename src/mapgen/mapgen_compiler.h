@@ -287,6 +287,15 @@ mapcompile_result_t MapCompile_RunProfile(const mapcompile_adapter_t *adapter,
 const char *MapCompile_ResultName(mapcompile_result_t result);
 
 /*
+ * The textures the DONORS themselves name (the base and the maps rooms are copied from). A «couldn't locate
+ * texture» for one of them is the donor's own lack in this game, not the build's: the donor survey of 09.10 met 14
+ * maps of the PO's game (grdm1: 15 of its 33 textures in no folder and no pak) refused at their first step for it,
+ * while the game plays them. A texture the build introduced and the game lacks still fails the build.
+ */
+void MapCompile_ClearKnownTextures(void);
+void MapCompile_AddKnownTexture(const char *name);
+
+/*
  * The compiler's own progress (ledger row 411; the PO, 05.10: «освещение - разве не должно было это показываться как
  * идет процесс»): q2tool prints a bar of tenths, «0...1...2...9... (n)», for each pass of a stage - the adapter calls
  * the tick with the stage («bsp», «vis», «rad»), the pass within it (0, 1, ...) and the tenths done (1..10). Nothing

@@ -52,7 +52,12 @@
    place and the demo corpus quantises onto, so the three can be talked about
    together. */
 #define MAPGEN_DIVERGENCE_CELL   32.0f
-#define MAPGEN_DIVERGENCE_MAX_CELLS 8388608u
+/* The whole world the format holds, as the rooms' lattice (259 cubed). Brief 18 D2: at 8388608 the PO's q3t2 at
+   1000 %, once it stood as tall as it grew wide (205 x 255 x 228 cells with its ceilings), could not be MEASURED -
+   every edit of mg_b18_q3t2 on 3.32's first cut came back REJECTED_UNMEASURED, the plan said «up to 100 %» of
+   nothing, and the run was on its way to deliver the bare base. 13 bytes a cell, two lattices a measure: 450 MB at
+   the most. */
+#define MAPGEN_DIVERGENCE_MAX_CELLS 17373979u
 
 /*
  * The schema of the numbers below.
@@ -189,7 +194,9 @@ mapgen_divergence_result_t MapGenDivergence_MeasureWitness(
  * already has instead of two new walks of the two files (D19, assignment 23).
  *
  * Each walk must be a walk of that very file at the route axis's budget
- * (40000), and `*_whole` says it finished. A NULL walk leaves the axis
+ * (MAPGEN_REACH_BUDGET - one number for the generator's walks, the request's
+ * and this axis's own; three that drifted apart cost every run two walks
+ * more, 13.10), and `*_whole` says it finished. A NULL walk leaves the axis
  * unmeasured and a walk that did not finish leaves it truncated - the same
  * answers a walk taken inside `MapGenDivergence_Measure` gives.
  */
@@ -200,7 +207,15 @@ mapgen_divergence_result_t MapGenDivergence_MeasureWalked(
     const struct mapgen_reach_s *candidate_walk, bool candidate_whole,
     uint32_t fidelity, mapgen_divergence_t *out);
 
+/* Brief 15 D7: count only the cells whose middle lies in [lo, hi] (NULL, NULL: every cell, the default). A tool's
+   question - the arena's share of a change; the pipeline never sets it. */
+void MapGenDivergence_SetRegion(const float lo[3], const float hi[3]);
+
 /* 10 * (100 - F), and nothing else is allowed to define it. */
 uint32_t MapGenDivergence_Target(uint32_t fidelity);
+
+/* Brief 18 D2 RED: the lattice's cap as it was (8388608) - a map larger than that cannot be measured, and every
+   edit of it is REJECTED_UNMEASURED. 0 puts it back. */
+void MapGenDivergence_SetMaxCells(uint32_t cells);
 
 #endif /* MAPGEN_DIVERGENCE_H */

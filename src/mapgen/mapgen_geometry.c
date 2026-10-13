@@ -18,6 +18,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Row 412: a turned and moved brush keeps its texture where it lay (TransformSubset); the room-cut guard's RED
+   takes it out. */
+static const bool g_texture_lock = true;
+
+
 const char *MapGenGeometry_ResultName(mapgen_geometry_result_t r)
 {
     switch (r) {
@@ -60,6 +65,8 @@ struct mapgen_geometry_s {
 
     uint32_t                  num_models;
     uint32_t                  orphan_brushes;
+    uint32_t                  degenerate_brushes;   /* the donor's brushes enclosing nothing, left out */
+    uint32_t                  buried_entities;      /* point entities deep in the donor's rock, left out */
 
     /* Capacity, so a candidate can grow. The donor's own extraction sizes
        these exactly and they only move when an edit adds something. */
@@ -453,6 +460,25 @@ static const char *skip_space(const char *p)
     return p;
 }
 
+/*
+ * A point entity buried in the donor's rock (the donor survey, 09.10): its origin and the six points 32 off it are
+ * all solid in the donor's own compiled map - outside the map's hull or deep in a wall, where nothing reaches it.
+ * q2rdm4's ammo_cells at -144 448 32 and a light of dm_purple stand so (moved after the map was compiled): the
+ * frozen compiler floods from them and calls the rebuilt copy leaked. Such an entity is left out of the copy, and
+ * the comparison does not call it missing.
+ */
+static bool entity_buried(const mapgen_bsp_t *bsp, const float origin[3])
+{
+    static const float OFF[7][3] = { { 0, 0, 0 }, { 32, 0, 0 }, { -32, 0, 0 }, { 0, 32, 0 }, { 0, -32, 0 },
+                                     { 0, 0, 32 }, { 0, 0, -32 } };
+    for (int i = 0; i < 7; i++) {
+        const float p[3] = { origin[0] + OFF[i][0], origin[1] + OFF[i][1], origin[2] + OFF[i][2] };
+        if (!(MapGenBsp_PointContents(bsp, p) & 1))       /* CONTENTS_SOLID */
+            return false;
+    }
+    return true;
+}
+
 static mapgen_geometry_result_t parse_entities(mapgen_geometry_t *g,
                                                const mapgen_bsp_t *bsp)
 {
@@ -539,6 +565,12 @@ static mapgen_geometry_result_t parse_entities(mapgen_geometry_t *g,
         }
 
         e->num_pairs = g->num_pairs - e->first_pair;
+        if (g->num_entities && !e->model && e->has_origin && entity_buried(bsp, e->origin)) {
+            g->num_pairs = e->first_pair;        /* left out: see entity_buried */
+            g->buried_entities++;
+            memset(e, 0, sizeof(*e));
+            continue;
+        }
         g->num_entities++;
     }
     return MAPGEN_GEOMETRY_OK;
@@ -1091,6 +1123,19 @@ static void respan_sides(mapgen_geometry_t *g, const mapgen_bsp_t *bsp)
     }
 }
 
+static bool g_geometry_drop_flat = true;        /* RED: a flat brush of the compiled map is read as a brush */
+static uint32_t g_geometry_flat_brushes;        /* how many were left out, over the process */
+
+void MapGenGeometry_SetDropFlat(bool drop)
+{
+    g_geometry_drop_flat = drop;
+}
+
+uint32_t MapGenGeometry_FlatBrushes(void)
+{
+    return g_geometry_flat_brushes;
+}
+
 mapgen_geometry_result_t MapGenGeometry_FromBsp(const mapgen_bsp_t *bsp,
                                                 mapgen_geometry_t **out)
 {
@@ -1170,6 +1215,34 @@ mapgen_geometry_result_t MapGenGeometry_FromBspWith(const mapgen_bsp_t *bsp, uin
         if (first > num_sides || first + count > num_sides) {
             rc = MAPGEN_GEOMETRY_ERR_LIMIT;
             break;
+        }
+
+        /*
+         * A world brush the compiler left FLAT is no brush (brief 18 D2). Two of its sides are one plane and its
+         * mirror - a sliver so thin (the wedge a cut leaves of a slanted trim: q3t2 at 1000 % and x3.11, 0.14
+         * thick at the cut y 960) that the compiler's plane table gave both faces the same plane. It holds no
+         * space and draws nothing; written back as a brush, the compiler says «mirrored plane», «no visible sides
+         * on brush» and leaves the WORLD's bounds at their start (+-1048576) - the rebuilt base then has areas of
+         * another size than its original's, «the warped base was not held by its rebuild», and the run went on the
+         * donor at 100 % of its size for the PO's 1000 %. Left out here, said in `flat_brushes`.
+         */
+        if (g_geometry_drop_flat && !(claimed[b] && owner[b])) {
+            bool flat = false;
+            for (uint32_t s = 0; s < count && !flat; s++) {
+                const mapgen_bsp_brushside_t *as = MapGenBsp_BrushSide(bsp, first + s);
+                const mapgen_bsp_plane_t *ap = as && as->planenum < num_planes ? MapGenBsp_Plane(bsp, as->planenum) : NULL;
+                for (uint32_t o = s + 1; ap && o < count && !flat; o++) {
+                    const mapgen_bsp_brushside_t *os = MapGenBsp_BrushSide(bsp, first + o);
+                    const mapgen_bsp_plane_t *op = os && os->planenum < num_planes ? MapGenBsp_Plane(bsp, os->planenum) : NULL;
+                    flat = op && ap->normal[0] * op->normal[0] + ap->normal[1] * op->normal[1]
+                                 + ap->normal[2] * op->normal[2] < -0.99999f
+                        && fabsf(ap->dist + op->dist) < 0.01f;
+                }
+            }
+            if (flat) {
+                g_geometry_flat_brushes++;
+                continue;
+            }
         }
 
         /* Each side's face is its plane, minus every bite the others take. */
@@ -1341,10 +1414,13 @@ mapgen_geometry_result_t MapGenGeometry_FromBspWith(const mapgen_bsp_t *bsp, uin
         }
 
         /* A pile of half-spaces enclosing nothing is not a brush, and writing
-           one out would hand the compiler a solid it cannot build. */
+           one out would hand the compiler a solid it cannot build. It is left
+           out - it drew nothing and blocked nothing in the donor either. The
+           PO, 09.10 (the donor survey): 2box4 has one, and the whole map was
+           refused in its first second with ERR_GENERATE and not a word. */
         if (!shaped) {
-            rc = MAPGEN_GEOMETRY_ERR_DEGENERATE;
-            break;
+            g->degenerate_brushes++;
+            continue;
         }
 
         g->num_sides += count;
@@ -1403,7 +1479,9 @@ mapgen_geometry_result_t MapGenGeometry_FromBspWith(const mapgen_bsp_t *bsp, uin
         const float pivot[3] = { 0.0f, 0.0f, 0.0f };
         if (any)
             MapGenGeometry_TransformSubset(g, mask, none, pivot, 0u, false, ent->origin);
-        for (uint32_t b = 0; any && b < g->num_brushes; b++) {
+        /* the texture with it - by the transform's own texture lock when it is on (row 412b); this second turn of
+           the offset (row 410, before the lock) put q2dm6's lift floors 2 x 576 off and refused the donor (09.10) */
+        for (uint32_t b = 0; any && !g_texture_lock && b < g->num_brushes; b++) {
             if (!mask[b])
                 continue;
             for (uint32_t s = 0; s < g->brushes[b].num_sides; s++) {
@@ -1459,6 +1537,8 @@ mapgen_geometry_result_t MapGenGeometry_Clone(const mapgen_geometry_t *src,
     g->text_len = g->text_cap = src->text_len;
     g->num_models = src->num_models;
     g->orphan_brushes = src->orphan_brushes;
+    g->degenerate_brushes = src->degenerate_brushes;
+    g->buried_entities = src->buried_entities;
 
     g->brushes = malloc((src->num_brushes ? src->num_brushes : 1) * sizeof(*g->brushes));
     g->sides = malloc((src->num_sides ? src->num_sides : 1) * sizeof(*g->sides));
@@ -2006,10 +2086,6 @@ const char *MapGenGeometry_EntityValue(const mapgen_geometry_t *g,
 }
 
 /* ---- the rigid transform --------------------------------------------------- */
-
-/* Row 412: a turned and moved brush keeps its texture where it lay (TransformSubset); the room-cut guard's RED
-   takes it out. */
-static const bool g_texture_lock = true;
 
 static void rotate_xy(float v[3], uint32_t quarter_turns, bool mirror_x)
 {
@@ -2634,6 +2710,58 @@ mapgen_geometry_result_t MapGenGeometry_DisplaceSide(mapgen_geometry_t *g,
         g->sides[side].center[a] += g->sides[side].normal[a] * delta;
 
     /*
+     * Growing, the brush's bevels go out with it.
+     *
+     * A bevel clips nothing off the brush it belongs to only for the shape it was made for: a face moved out past it
+     * is clipped by it, and the brush grows short of where the face went - the growth below promises to add solid all
+     * the way, and a ceiling slab grown over a wall pushed back stopped at its old corner and opened the room to the
+     * void above the wall (q2dm3 at 150 %, a reshape-room, «leaked», 10.10). Each side that had no face before the move
+     * is put back where it touches the grown brush and clips nothing again.
+     */
+    if (delta > 0.0f)
+        for (uint32_t b = 0; b < g->num_brushes; b++) {
+            mapgen_geometry_brush_t *brush = &g->brushes[b];
+            if (side < brush->first_side || side >= brush->first_side + brush->num_sides)
+                continue;
+            mapgen_geometry_side_t *own = &g->sides[brush->first_side];
+            const uint32_t n = brush->num_sides;
+            double top[MAPGEN_GEOMETRY_MAX_SIDES_PER_BRUSH];
+            bool was_bevel[MAPGEN_GEOMETRY_MAX_SIDES_PER_BRUSH];
+            if (n > MAPGEN_GEOMETRY_MAX_SIDES_PER_BRUSH)
+                break;
+            bool any = false;
+            for (uint32_t s = 0; s < n; s++) {
+                was_bevel[s] = own[s].bevel && brush->first_side + s != side;
+                top[s] = -1e30;
+                any = any || was_bevel[s];
+            }
+            if (!any)
+                break;
+            /* the grown brush without its bevels: every corner of every real face */
+            for (uint32_t s = 0; s < n; s++) {
+                if (was_bevel[s])
+                    continue;
+                winding_t w;
+                base_winding(own[s].normal, own[s].dist, &w);
+                for (uint32_t o = 0; o < n && w.count; o++)
+                    if (o != s && !was_bevel[o])
+                        clip_winding(&w, own[o].normal, own[o].dist);
+                for (uint32_t p = 0; p < w.count; p++)
+                    for (uint32_t k = 0; k < n; k++)
+                        if (was_bevel[k]) {
+                            const double d = own[k].normal[0] * w.p[p][0] + own[k].normal[1] * w.p[p][1]
+                                           + own[k].normal[2] * w.p[p][2];
+                            if (d > top[k])
+                                top[k] = d;
+                        }
+            }
+            for (uint32_t k = 0; k < n; k++)
+                if (was_bevel[k] && top[k] > (double)own[k].dist && top[k] < 1e29)
+                    own[k].dist = (float)top[k] + 0.001f;   /* a hair beyond: float never rounds it back in */
+            break;
+        }
+
+    /*
      * And the brush this side belongs to is a different shape now.
      *
      * A brush carries its own box, and every reader of this module trusts it:
@@ -3249,12 +3377,12 @@ static bool plane_is_canonical(const float normal[3])
  * irrational numbers in. These recover the integer form.
  */
 
-static long plane_gcd(long a, long b)
+static long long plane_gcd(long long a, long long b)
 {
     a = a < 0 ? -a : a;
     b = b < 0 ? -b : b;
     while (b) {
-        const long t = a % b;
+        const long long t = a % b;
         a = b;
         b = t;
     }
@@ -3262,12 +3390,12 @@ static long plane_gcd(long a, long b)
 }
 
 /* Bezout: returns gcd(a,b) and the u, v with a*u + b*v = gcd(a,b). */
-static long plane_bezout(long a, long b, long *u, long *v)
+static long long plane_bezout(long long a, long long b, long long *u, long long *v)
 {
-    long old_r = a, r = b, old_s = 1, s = 0, old_t = 0, t = 1;
+    long long old_r = a, r = b, old_s = 1, s = 0, old_t = 0, t = 1;
     while (r) {
-        const long q = old_r / r;
-        long tmp = old_r - q * r; old_r = r; r = tmp;
+        const long long q = old_r / r;
+        long long tmp = old_r - q * r; old_r = r; r = tmp;
         tmp = old_s - q * s; old_s = s; s = tmp;
         tmp = old_t - q * t; old_t = t; t = tmp;
     }
@@ -3291,7 +3419,7 @@ static long plane_bezout(long a, long b, long *u, long *v)
  * a plane that does not answer is left to the float path below.
  */
 static bool integer_plane(const float normal[3], float dist,
-                          long m[3], long *out_d)
+                          long long m[3], long long *out_d)
 {
     int major = 0;
     for (int a = 1; a < 3; a++)
@@ -3301,13 +3429,13 @@ static bool integer_plane(const float normal[3], float dist,
     if (big < 1e-6)
         return false;
 
-    for (long k = 1; k <= 1024; k++) {
+    for (long long k = 1; k <= 1024; k++) {
         const double scale = (double)k / big;
-        long r[3];
+        long long r[3];
         bool integral = true;
         for (int a = 0; a < 3; a++) {
             const double v = (double)normal[a] * scale;
-            r[a] = lround(v);
+            r[a] = llround(v);
             if (fabs(v - (double)r[a]) > 2e-3)
                 integral = false;
         }
@@ -3333,7 +3461,7 @@ static bool integer_plane(const float normal[3], float dist,
          * snapped onto it.
          */
         const double scaled = (double)dist * len;
-        const long D = lround(scaled);
+        const long long D = llround(scaled);
         /*
          * The slack is the stored float's own error at this magnitude, and no
          * more. MEASURED with a flat 0.02 in the scaled units instead: the
@@ -3346,7 +3474,7 @@ static bool integer_plane(const float normal[3], float dist,
         if (fabs(scaled - (double)D) > len * (slack > 1e-4 ? slack : 1e-4))
             continue;
 
-        const long g = plane_gcd(plane_gcd(r[0], r[1]), r[2]);
+        const long long g = plane_gcd(plane_gcd(r[0], r[1]), r[2]);
         if (g > 1) {
             if (D % g)
                 continue;          /* then no integer point lies on it */
@@ -3372,19 +3500,19 @@ static bool integer_plane(const float normal[3], float dist,
  * else - so two brushes that share a plane write the same three points and
  * still meet exactly after the round trip.
  */
-static bool integer_plane_points(const long m[3], long D, double p[3][3])
+static bool integer_plane_points(const long long m[3], long long D, double p[3][3])
 {
-    long u, v;
-    const long g1 = plane_bezout(m[0], m[1], &u, &v);
-    long pc, q;
-    const long g = plane_bezout(g1, m[2], &pc, &q);
+    long long u, v;
+    const long long g1 = plane_bezout(m[0], m[1], &u, &v);
+    long long pc, q;
+    const long long g = plane_bezout(g1, m[2], &pc, &q);
     if (!g || (D % g))
         return false;
-    const long t = D / g;
-    long base[3] = { u * pc * t, v * pc * t, q * t };
+    const long long t = D / g;
+    long long base[3] = { u * pc * t, v * pc * t, q * t };
 
     /* Two integer directions along the plane. */
-    long e1[3], e2[3];
+    long long e1[3], e2[3];
     if (m[0]) {
         e1[0] = m[1]; e1[1] = -m[0]; e1[2] = 0;
         e2[0] = m[2]; e2[1] = 0;     e2[2] = -m[0];
@@ -3413,8 +3541,8 @@ static bool integer_plane_points(const long m[3], long D, double p[3][3])
                 w[a] = foot[a] - (double)base[a];
             const double b1 = e1[0]*w[0] + e1[1]*w[1] + e1[2]*w[2];
             const double b2 = e2[0]*w[0] + e2[1]*w[1] + e2[2]*w[2];
-            const long s1 = lround((b1 * g22 - b2 * g12) / det);
-            const long s2 = lround((b2 * g11 - b1 * g12) / det);
+            const long long s1 = llround((b1 * g22 - b2 * g12) / det);
+            const long long s2 = llround((b2 * g11 - b1 * g12) / det);
             if (!s1 && !s2)
                 break;
             for (int a = 0; a < 3; a++)
@@ -3423,8 +3551,8 @@ static bool integer_plane_points(const long m[3], long D, double p[3][3])
     }
 
     /* Far enough apart that the compiler's own cross product is accurate. */
-    long k1 = lround(512.0 / sqrt(g11 > 0.0 ? g11 : 1.0));
-    long k2 = lround(512.0 / sqrt(g22 > 0.0 ? g22 : 1.0));
+    long long k1 = llround(512.0 / sqrt(g11 > 0.0 ? g11 : 1.0));
+    long long k2 = llround(512.0 / sqrt(g22 > 0.0 ? g22 : 1.0));
     if (k1 < 1) k1 = 1;
     if (k2 < 1) k2 = 1;
 
@@ -3443,6 +3571,16 @@ static bool integer_plane_points(const long m[3], long D, double p[3][3])
         memcpy(A, B, sizeof(A));
         memcpy(B, swap, sizeof(B));
     }
+    /*
+     * The point on the plane and near its foot, or the float path. q2dm6 (09.10): with `long` 32 bits wide on
+     * Windows the Bezout products overflowed and a rock slope's three points were written near 1e9 - the compiler
+     * lost the slope (9756 units of drawn face) and the donor was refused at its first step.
+     */
+    if (base[0] * m[0] + base[1] * m[1] + base[2] * m[2] != D)
+        return false;
+    for (int a = 0; a < 3; a++)
+        if (fabs((double)base[a] - foot[a]) > 65536.0 || fabs((double)base[a]) > 1048576.0)
+            return false;
     for (int a = 0; a < 3; a++) {
         p[1][a] = (double)base[a];
         p[0][a] = (double)base[a] + A[a];
@@ -3490,7 +3628,7 @@ static void plane_points(const mapgen_geometry_side_t *side, double p[3][3])
          * the two sides of a shared plane still write the same three points -
          * the same points, now, as the map was authored with.
          */
-        long m[3], D;
+        long long m[3], D;
         if (!integer_plane(canon.normal, canon.dist, m, &D)
             || !integer_plane_points(m, D, q))
             plane_points_synthetic(&canon, q);

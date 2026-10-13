@@ -73,9 +73,172 @@ static bool covered(const mapgen_geometry_t *g, const float p[3])
     return false;
 }
 
+
+/*
+ * Brief 15 D7: how much of the arena a plan changes, measured without a compile. Every edit of the plan whose box
+ * meets the arena (the largest reachable room) is applied in turn to a copy of the donor's geometry, as the schedule
+ * would; then the arena's box is cut into 32-unit cells, eight points a cell asked «inside a solid brush?» of both, and
+ * a cell CHANGED when any point's answer differs. Of the cells with a boundary in either (rock and air both in it -
+ * the cells the divergence module's surface axis counts) the share changed. A gauge of the brief's «15 % of the
+ * arena's cells», not the module's own number: that needs the compiled map.
+ */
+typedef struct { uint32_t *idx; uint32_t n, cap; } arena_bucket_t;
+
+static void arena_buckets(const mapgen_geometry_t *g, const float lo[3], const float hi[3], int nx, int ny,
+                          arena_bucket_t *b)
+{
+    for (uint32_t i = 0; i < MapGenGeometry_NumBrushes(g); i++) {
+        const mapgen_geometry_brush_t *br = MapGenGeometry_Brush(g, i);
+        if (!br || br->model || !(br->contents & 1))
+            continue;
+        if (br->maxs[0] < lo[0] || br->mins[0] > hi[0] || br->maxs[1] < lo[1] || br->mins[1] > hi[1]
+            || br->maxs[2] < lo[2] || br->mins[2] > hi[2])
+            continue;
+        int x0 = (int)((br->mins[0] - lo[0]) / 64.0f), x1 = (int)((br->maxs[0] - lo[0]) / 64.0f);
+        int y0 = (int)((br->mins[1] - lo[1]) / 64.0f), y1 = (int)((br->maxs[1] - lo[1]) / 64.0f);
+        x0 = x0 < 0 ? 0 : x0; y0 = y0 < 0 ? 0 : y0; x1 = x1 >= nx ? nx - 1 : x1; y1 = y1 >= ny ? ny - 1 : y1;
+        for (int y = y0; y <= y1; y++)
+            for (int x = x0; x <= x1; x++) {
+                arena_bucket_t *k = &b[y * nx + x];
+                if (k->n == k->cap) {
+                    k->cap = k->cap ? 2 * k->cap : 16;
+                    k->idx = realloc(k->idx, k->cap * sizeof(*k->idx));
+                }
+                k->idx[k->n++] = i;
+            }
+    }
+}
+
+static bool arena_solid(const mapgen_geometry_t *g, const arena_bucket_t *b, const float lo[3], int nx, int ny,
+                        const float p[3])
+{
+    int x = (int)((p[0] - lo[0]) / 64.0f), y = (int)((p[1] - lo[1]) / 64.0f);
+    if (x < 0 || y < 0 || x >= nx || y >= ny)
+        return false;
+    const arena_bucket_t *k = &b[y * nx + x];
+    for (uint32_t j = 0; j < k->n; j++) {
+        const mapgen_geometry_brush_t *br = MapGenGeometry_Brush(g, k->idx[j]);
+        if (p[0] < br->mins[0] || p[0] > br->maxs[0] || p[1] < br->mins[1] || p[1] > br->maxs[1] || p[2] < br->mins[2]
+            || p[2] > br->maxs[2])
+            continue;
+        bool in = true;
+        for (uint32_t s = 0; s < br->num_sides && in; s++) {
+            const mapgen_geometry_side_t *sd = MapGenGeometry_Side(g, br->first_side + s);
+            if (sd && !sd->bevel && sd->normal[0] * p[0] + sd->normal[1] * p[1] + sd->normal[2] * p[2] - sd->dist > 0.01f)
+                in = false;
+        }
+        if (in)
+            return true;
+    }
+    return false;
+}
+
+/* the families that change the base's own architecture - its skeleton - and not what is added beside it */
+static bool arena_base_kind(mapgen_edit_kind_t k)
+{
+    return k == MAPGEN_EDIT_REMODEL || k == MAPGEN_EDIT_BLOCK || k == MAPGEN_EDIT_FLOOR_SHIFT
+        || k == MAPGEN_EDIT_STAIR_RESHAPE || k == MAPGEN_EDIT_WIDEN_CONNECTOR || k == MAPGEN_EDIT_RESHAPE_ROOM
+        || k == MAPGEN_EDIT_TURN_BUNDLE || k == MAPGEN_EDIT_RELEVEL || k == MAPGEN_EDIT_STAIRS_RAMP
+        || k == MAPGEN_EDIT_STAIRS_LIFT || k == MAPGEN_EDIT_OPEN_CONNECTOR || k == MAPGEN_EDIT_PIT;
+}
+
+static void arena_change_of(const mapgen_geometry_edit_plan_t *plan, const mapgen_geometry_t *donor,
+                            const mapgen_bsp_t *bsp, bool base_only);
+
+static void arena_change(const mapgen_geometry_edit_plan_t *plan, const mapgen_geometry_t *donor,
+                         const mapgen_bsp_t *bsp)
+{
+    arena_change_of(plan, donor, bsp, false);
+    arena_change_of(plan, donor, bsp, true);
+}
+
+static void arena_change_of(const mapgen_geometry_edit_plan_t *plan, const mapgen_geometry_t *donor,
+                            const mapgen_bsp_t *bsp, bool base_only)
+{
+    mapgen_rooms_t *rooms = NULL;
+    if (MapGenRooms_Find(bsp, 64.0f, MAPGEN_ROOMS_PERSISTENCE, &rooms) != MAPGEN_ROOMS_OK || !rooms) {
+        printf("arena change: no rooms\n");
+        return;
+    }
+    const mapgen_room_t *arena = NULL;
+    float area = 0.0f;
+    for (uint32_t r = 0; r < MapGenRooms_Count(rooms); r++) {
+        const mapgen_room_t *room = MapGenRooms_Room(rooms, r);
+        if (room && room->reachable && (room->maxs[0] - room->mins[0]) * (room->maxs[1] - room->mins[1]) > area) {
+            area = (room->maxs[0] - room->mins[0]) * (room->maxs[1] - room->mins[1]);
+            arena = room;
+        }
+    }
+    if (!arena) {
+        MapGenRooms_Free(rooms);
+        return;
+    }
+    const float lo[3] = { arena->mins[0] - 32.0f, arena->mins[1] - 32.0f, arena->mins[2] - 64.0f };
+    const float hi[3] = { arena->maxs[0] + 32.0f, arena->maxs[1] + 32.0f, arena->maxs[2] + 32.0f };
+    mapgen_geometry_t *cand = NULL;
+    if (MapGenGeometry_Clone(donor, &cand) != MAPGEN_GEOMETRY_OK) {
+        MapGenRooms_Free(rooms);
+        return;
+    }
+    uint32_t in_box = 0, applied = 0;
+    char kinds[512] = "";
+    for (uint32_t i = 0; i < MapGenGeometryEdit_Count(plan); i++) {
+        const mapgen_geometry_edit_t *e = MapGenGeometryEdit_At(plan, i);
+        float elo[3], ehi[3];
+        if (!e || e->kind == MAPGEN_EDIT_RESKIN || e->kind == MAPGEN_EDIT_RELIGHT || e->kind == MAPGEN_EDIT_SWAP_ITEM
+            || e->kind == MAPGEN_EDIT_MOVE_SPAWN || !MapGenGeometryEdit_BoxOf(plan, NULL, NULL, i, elo, ehi))
+            continue;
+        if (base_only && !arena_base_kind((mapgen_edit_kind_t)e->kind))
+            continue;
+        if (ehi[0] < lo[0] || elo[0] > hi[0] || ehi[1] < lo[1] || elo[1] > hi[1] || ehi[2] < lo[2] || elo[2] > hi[2])
+            continue;
+        in_box++;
+        bool changed = false;
+        MapGenGeometryEdit_ApplyOne(plan, cand, donor, i, &changed);
+        if (changed) {
+            applied++;
+            const size_t used = strlen(kinds);
+            snprintf(kinds + used, sizeof(kinds) - used, "%s%s", used ? " " : "", MapGenGeometryEdit_KindName(e->kind));
+        }
+    }
+    const int nx = (int)((hi[0] - lo[0]) / 64.0f) + 1, ny = (int)((hi[1] - lo[1]) / 64.0f) + 1;
+    arena_bucket_t *bd = calloc((size_t)nx * ny, sizeof(*bd)), *bc = calloc((size_t)nx * ny, sizeof(*bc));
+    arena_buckets(donor, lo, hi, nx, ny, bd);
+    arena_buckets(cand, lo, hi, nx, ny, bc);
+    uint32_t bound = 0, changed = 0;
+    for (float z = lo[2]; z < hi[2]; z += 32.0f)
+        for (float y = lo[1]; y < hi[1]; y += 32.0f)
+            for (float x = lo[0]; x < hi[0]; x += 32.0f) {
+                uint32_t md = 0, mc = 0;
+                for (int k = 0; k < 8; k++) {
+                    const float p[3] = { x + ((k & 1) ? 24.0f : 8.0f), y + ((k & 2) ? 24.0f : 8.0f), z + ((k & 4) ? 24.0f : 8.0f) };
+                    md |= (uint32_t)arena_solid(donor, bd, lo, nx, ny, p) << k;
+                    mc |= (uint32_t)arena_solid(cand, bc, lo, nx, ny, p) << k;
+                }
+                const bool edge = (md != 0u && md != 0xFFu) || (mc != 0u && mc != 0xFFu);
+                if (!edge && md == mc)
+                    continue;
+                bound++;
+                changed += md != mc ? 1u : 0u;
+            }
+    printf("arena change%s: room %.0f %.0f %.0f .. %.0f %.0f %.0f; %u edits meet it, %u applied (%s); %u of %u boundary"
+           " cells changed = %.1f %%\n", base_only ? " (the base's own architecture)" : " (every edit)", (double)arena->mins[0], (double)arena->mins[1], (double)arena->mins[2],
+           (double)arena->maxs[0], (double)arena->maxs[1], (double)arena->maxs[2], in_box, applied, kinds, changed,
+           bound, bound ? 100.0 * changed / bound : 0.0);
+    for (int i = 0; i < nx * ny; i++) {
+        free(bd[i].idx);
+        free(bc[i].idx);
+    }
+    free(bd);
+    free(bc);
+    MapGenGeometry_Free(cand);
+    MapGenRooms_Free(rooms);
+}
+
 int main(int argc, char **argv)
 {
     const char *second_path = NULL;     /* brief 9: --second MAP.bsp */
+    bool note_accepted = false;         /* brief 18: --note-accepted */
     if (argc < 2) {
         fprintf(stderr, "usage: %s <donor.bsp> [--seed N] [--out FILE.map]"
                         " [--list] [--apply N] [--grow X Y Z] [--crates] [--recuts]"
@@ -88,11 +251,13 @@ int main(int argc, char **argv)
 
     uint64_t seed = 1;
     const char *out = NULL;
-    bool list = false, models = false, do_floor = false;
+    bool list = false, models = false, do_floor = false, arena_gauge = false;
     long apply = -1;
     /* Every edit the caller asked to apply, in order. */
-    uint32_t applies[64];
+    uint32_t applies[1024];
     uint32_t num_applies = 0;
+    bool apply_base = false;          /* brief 15: every edit of the base's own architecture, in schedule order */
+    bool apply_all = false;           /* brief 15 D9: every edit of the plan, in schedule order - the plan's ceiling */
     float grow_at[3] = { 0, 0, 0 };
     bool do_grow = false;
     float probe[3] = { 0, 0, 0 };
@@ -120,6 +285,49 @@ int main(int argc, char **argv)
             out = argv[++a];
         else if (!strcmp(argv[a], "--list"))
             list = true;
+        /* brief 18: an earlier round's accepted edit the reshaping families keep clear of (a later round's map) */
+        else if (!strcmp(argv[a], "--prior") && a + 6 < argc) {
+            float plo[3], phi[3];
+            for (int k = 0; k < 3; k++)
+                plo[k] = strtof(argv[++a], NULL);
+            for (int k = 0; k < 3; k++)
+                phi[k] = strtof(argv[++a], NULL);
+            MapGenGeometryEdit_SeedPrior(plo, phi, MAPGEN_EDIT_DIG);
+        }
+        /* brief 18: an earlier window cut there (a later cut in that wall is refused when applied) */
+        else if (!strcmp(argv[a], "--prior-cut") && a + 6 < argc) {
+            float plo[3], phi[3];
+            for (int k = 0; k < 3; k++)
+                plo[k] = strtof(argv[++a], NULL);
+            for (int k = 0; k < 3; k++)
+                phi[k] = strtof(argv[++a], NULL);
+            MapGenGeometryEdit_SeedPrior(plo, phi, MAPGEN_EDIT_WINDOW);
+        }
+        /* brief 18: every edit the chain of --apply changed counts as accepted (MapGenGeometryEdit_NoteAccepted) */
+        else if (!strcmp(argv[a], "--note-accepted"))
+            note_accepted = true;
+        /* brief 18: what each window question of the walls in this box came to («window why:» lines of the listing) */
+        else if (!strcmp(argv[a], "--window-why") && a + 6 < argc) {
+            float wlo[3], whi[3];
+            for (int k = 0; k < 3; k++)
+                wlo[k] = strtof(argv[++a], NULL);
+            for (int k = 0; k < 3; k++)
+                whi[k] = strtof(argv[++a], NULL);
+            MapGenGeometryEdit_WindowWhy(wlo, whi);
+        }
+        /* brief 18 RED: a window wall's side in a room's own cell only */
+        else if (!strcmp(argv[a], "--window-room-exact"))
+            MapGenGeometryEdit_WindowRoomNear(false);
+        /* brief 18 RED: a moved start where the floor scan stopped, 4..12 over the floor */
+        else if (!strcmp(argv[a], "--old-spawn-place"))
+            MapGenGeometryEdit_SpawnOnFloor(false);
+        /* brief 18 RED: the reshaping families forget the earlier rounds' edits */
+        else if (!strcmp(argv[a], "--forget-prior"))
+            MapGenGeometryEdit_KeepPrior(false);
+        else if (!strcmp(argv[a], "--arena-change")) {      /* brief 15 D7 */
+            list = true;
+            arena_gauge = true;
+        }
         /* The room block is not dealt into any product schedule;
            this asks for it back, and is what
            `check_mapgen_no_crates.py` uses to prove the gate is what
@@ -235,6 +443,16 @@ int main(int argc, char **argv)
             MapGenGeometryEdit_DigStoreys((uint32_t)strtoul(argv[++a], NULL, 10));
         else if (!strcmp(argv[a], "--spans") && a + 1 < argc)
             MapGenGeometryEdit_DigSpans((uint32_t)strtoul(argv[++a], NULL, 10));
+        else if (!strcmp(argv[a], "--remodels") && a + 1 < argc)       /* brief 15 D6 */
+            MapGenGeometryEdit_DigRemodels((int32_t)strtol(argv[++a], NULL, 10));
+        else if (!strcmp(argv[a], "--blocks") && a + 1 < argc)         /* brief 15 D6 */
+            MapGenGeometryEdit_DigBlocks((int32_t)strtol(argv[++a], NULL, 10));
+        else if (!strcmp(argv[a], "--floor-shifts") && a + 1 < argc)   /* brief 15 D6 */
+            MapGenGeometryEdit_DigFloorShifts((int32_t)strtol(argv[++a], NULL, 10));
+        else if (!strcmp(argv[a], "--stair-reshapes") && a + 1 < argc) /* brief 15 D6 */
+            MapGenGeometryEdit_DigStairReshapes((int32_t)strtol(argv[++a], NULL, 10));
+        else if (!strcmp(argv[a], "--span-scale") && a + 1 < argc)     /* the base's frame: longer tunnels */
+            MapGenGeometryEdit_SetSpanScale((float)atof(argv[++a]));
         /* brief 11 D1: stairways up the rooms' walls, 0..10 */
         else if (!strcmp(argv[a], "--stairways") && a + 1 < argc)
             MapGenGeometryEdit_DigStairways((uint32_t)strtoul(argv[++a], NULL, 10));
@@ -281,6 +499,15 @@ int main(int argc, char **argv)
             for (int i = 0; i < 3; i++)
                 climb_hi[i] = strtof(argv[++a], NULL);
             do_climb = true;
+        }
+        else if (!strcmp(argv[a], "--apply-all")) {
+            apply_all = true;
+            apply_base = true;
+            apply = apply < 0 ? 0 : apply;
+        }
+        else if (!strcmp(argv[a], "--apply-base")) {
+            apply_base = true;
+            apply = apply < 0 ? 0 : apply;
         }
         else if (!strcmp(argv[a], "--apply") && a + 1 < argc) {
             apply = strtol(argv[++a], NULL, 10);
@@ -459,6 +686,8 @@ int main(int argc, char **argv)
     if (plan && after)
         MapGenGeometryEdit_SetGround(plan, after);
 
+    if (list && arena_gauge && plan)
+        arena_change(plan, donor, ground ? ground : bsp);
     if (list) {
         /* What the family did NOT offer, and why - which is the half of a
            schedule that a silent `continue` used to hide. */
@@ -674,6 +903,13 @@ int main(int argc, char **argv)
                 }
                 continue;
             }
+            /* the base's frame: every other family named too, so an edit the pipeline refused can be applied alone */
+            if (e->kind == MAPGEN_EDIT_RESHAPE_ROOM || e->kind == MAPGEN_EDIT_OPEN_CONNECTOR
+                || e->kind == MAPGEN_EDIT_WIDEN_CONNECTOR) {
+                printf("  edit %u  %s  target %u  amount %d\n", i,
+                       MapGenGeometryEdit_KindName(e->kind), e->target, e->amount);
+                continue;
+            }
             if (e->kind != MAPGEN_EDIT_PUSH_WALL)
                 continue;
             float rlo[3] = { 0, 0, 0 }, rhi[3] = { 0, 0, 0 };
@@ -681,6 +917,20 @@ int main(int argc, char **argv)
             printf("  edit %u  push  %4d  region %.0f %.0f %.0f .."
                    " %.0f %.0f %.0f\n", i,
                    e->amount, rlo[0], rlo[1], rlo[2], rhi[0], rhi[1], rhi[2]);
+        }
+        /* and every edit's place, the ledger's box, whatever its family: an edit the pipeline tried is found here */
+        for (uint32_t i = 0; i < n; i++) {
+            const mapgen_geometry_edit_t *e = MapGenGeometryEdit_At(plan, i);
+            float blo[3], bhi[3];
+            if (e && MapGenGeometryEdit_BoxOf(plan, NULL, NULL, i, blo, bhi))
+                printf("  editbox %u %s %.0f %.0f %.0f %.0f %.0f %.0f\n", i, MapGenGeometryEdit_KindName(e->kind),
+                       (double)blo[0], (double)blo[1], (double)blo[2], (double)bhi[0], (double)bhi[1], (double)bhi[2]);
+        }
+        /* brief 18: where each moved start goes (the starts gate asks it stands in air on a floor) */
+        for (uint32_t i = 0; i < n; i++) {
+            float to[3];
+            if (MapGenGeometryEdit_SpawnMoveOf(plan, i, to))
+                printf("  spawn-move %u to %.2f %.2f %.2f\n", i, (double)to[0], (double)to[1], (double)to[2]);
         }
     }
 
@@ -707,18 +957,31 @@ int main(int argc, char **argv)
      * schedule would have applied them in when they are given in ascending
      * order.
      */
+    if (apply_base && plan) {
+        num_applies = 0;
+        for (uint32_t i = 0; i < MapGenGeometryEdit_Count(plan) && num_applies < 1024u; i++) {
+            const mapgen_geometry_edit_t *e = MapGenGeometryEdit_At(plan, i);
+            if (e && (apply_all || e->kind == MAPGEN_EDIT_REMODEL || e->kind == MAPGEN_EDIT_BLOCK
+                      || e->kind == MAPGEN_EDIT_FLOOR_SHIFT || e->kind == MAPGEN_EDIT_STAIR_RESHAPE))
+                applies[num_applies++] = i;
+        }
+        printf("apply-base: %u edits of the base's own architecture\n", num_applies);
+    }
     for (uint32_t k = 0; k < num_applies; k++) {
         bool changed = false;
         const mapgen_geometry_result_t rc =
             MapGenGeometryEdit_ApplyOne(plan, candidate, donor,
                                         applies[k], &changed);
-        printf("apply %u: %s, changed %s, %u brushes\n", applies[k],
+        printf("apply %u (%s): %s, changed %s, %u brushes\n", applies[k],
+               MapGenGeometryEdit_KindName(MapGenGeometryEdit_At(plan, applies[k])->kind),
                MapGenGeometry_ResultName(rc), changed ? "yes" : "no",
                MapGenGeometry_NumBrushes(candidate));
         /* And, when it did nothing, WHY - in the operator's own words rather
            than as a silent "changed no". */
         if (!changed && MapGenGeometryEdit_WhyDeclined())
             printf("declined: %s\n", MapGenGeometryEdit_WhyDeclined());
+        if (changed && note_accepted)
+            MapGenGeometryEdit_NoteAccepted(plan, applies[k]);
     }
     if (num_applies) {
         /*
@@ -843,6 +1106,7 @@ int main(int argc, char **argv)
            MapGenGeometryEdit_SkyLiftClipBrushes(), MapGenGeometryEdit_SkyLiftSkyBrushes());
     if (MapGenGeometryEdit_SkyLifts())
         printf("sky lift: %s\n", MapGenGeometryEdit_SkyLiftSaid());
+        printf("window looks: %s\n", MapGenGeometryEdit_WindowLooksSaid());
     /* row 369: whether these points lie in a skinned dig's gap, as the
        transaction's crack rule asks it */
     for (uint32_t i = 0; i < num_gapat; i++)

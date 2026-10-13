@@ -573,13 +573,14 @@ def m_overlength_value(b: E.BspFile) -> bool:
 
 
 def m_duplicate_key(b: E.BspFile) -> bool:
-    """The same key twice: Quake takes the last, a sorted canonical form takes
-    whichever sorts first, and the two cannot both be right."""
+    """The same key twice: Quake takes the last, and so does the comparison now (the donor survey of 09.10:
+    johnnydm4's start carries "_color" twice). A start whose LAST angle is one no start of the donor has is a
+    different start - an entity difference, not a string refused."""
     blocks = E.entity_blocks(b.entities)
     at = E.find_block_prefix(blocks, "info_player_")
     if at is None:
         return False
-    blocks[at] = blocks[at][:-1].rstrip() + '\n"angle" "90"\n"angle" "270"\n}'
+    blocks[at] = blocks[at][:-1].rstrip() + '\n"angle" "90"\n"angle" "271"\n}'
     b.entities = E.blocks_to_text(blocks)
     return True
 
@@ -750,6 +751,7 @@ RED = [
     ("trigger without a counterpart", "mover", d_trigger_added, "donor"),
     ("areaportal opened", "traversal", m_areaportal_opened, "baseline"),
     ("item removed", "entity", m_item_removed, "baseline"),
+    ("the same key twice, the last one new", "entity", m_duplicate_key, "baseline"),
     ("light removed", "entity", m_light_removed, "baseline"),
     ("pickup left without a floor", "traversal", m_item_floats, "baseline"),
     ("spawn pushed into the floor", "traversal", m_spawn_moved_into_solid,
@@ -904,7 +906,6 @@ PORTAL_GREEN = [
 REFUSED = [
     ("a thirty-third key/value pair", m_thirty_third_pair),
     ("a value too long to compare exactly", m_overlength_value),
-    ("the same key twice", m_duplicate_key),
     ("a block that never closes", m_malformed_block),
 ]
 

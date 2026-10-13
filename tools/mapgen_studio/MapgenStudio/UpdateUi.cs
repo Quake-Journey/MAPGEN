@@ -15,7 +15,7 @@ public sealed partial class MainWindow
     /// <summary>At the first showing: a finished update's «what's new», a failed one said, and the check when it is on.</summary>
     private async void OnFirstOpened(object? sender, EventArgs e)
     {
-        if (_firstOpened || SelfTesting || UiTesting)
+        if (_firstOpened || SelfTesting || UiTesting || StartupTesting)
             return;
         _firstOpened = true;
         if (Update.TakeFailure() is { } failed)
@@ -80,7 +80,9 @@ public sealed partial class MainWindow
     private async Task WhatsNew(string was)
     {
         var (now, all) = Update.History();
-        var body = new StackPanel { Spacing = 10, MaxWidth = 640 };
+        /* the PO, 08.10: «окошко сделай пошире ... раза в два шире» - twice the 640 it was, never wider than the window */
+        var wide = Math.Max(640.0, Math.Min(1280.0, Bounds.Width - 160.0));
+        var body = new StackPanel { Spacing = 10, Width = wide };
         body.Children.Add(new TextBlock { Text = Loc.F("whatsnew.from", was), Opacity = 0.75, TextWrapping = TextWrapping.Wrap });
         body.Children.Add(new TextBlock { Text = now, TextWrapping = TextWrapping.Wrap });
         body.Children.Add(new TextBlock { Text = Loc.T("whatsnew.all"), FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 6, 0, 0) });
@@ -89,26 +91,29 @@ public sealed partial class MainWindow
             MaxHeight = 320,
             Content = new TextBlock { Text = all, TextWrapping = TextWrapping.Wrap, FontSize = 13 },
         });
-        await new FAContentDialog
+        var dialog = new FAContentDialog
         {
             Title = Loc.F("whatsnew.title", Versions.Current),
             Content = body,
             CloseButtonText = Loc.T("whatsnew.close"),
-        }.ShowAsync(this);
+        };
+        dialog.Resources["ContentDialogMaxWidth"] = wide + 64.0;      /* the dialog's own cap (548) held it narrow */
+        await dialog.ShowAsync(this);
     }
 
     /// <summary>The settings' «Обновления» rows: the automatic check and the button.</summary>
-    private void UpdateRows(StackPanel p)
+    private List<Control> UpdateRows()
     {
-        p.Children.Add(Ui.Section(Loc.T("set.updates")));
+        var rows = new List<Control>();
         var auto = new ToggleSwitch { IsChecked = S.AutoUpdateCheck };
         auto.IsCheckedChanged += (_, _) =>
         {
             S.AutoUpdateCheck = auto.IsChecked == true;
             S.Save();
         };
-        p.Children.Add(Ui.Setting("set.update_check", "set.update_check.desc", FASymbol.Sync, auto, "set.update_check.tip"));
-        p.Children.Add(Ui.Setting("update.check", "update.check.desc", FASymbol.Download, UpdateButton(), "update.check.tip"));
+        rows.Add(Ui.Setting("set.update_check", "set.update_check.desc", FASymbol.Sync, auto, "set.update_check.tip"));
+        rows.Add(Ui.Setting("update.check", "update.check.desc", FASymbol.Download, UpdateButton(), "update.check.tip"));
+        return rows;
     }
 
     private Control UpdateButton()

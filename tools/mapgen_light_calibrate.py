@@ -62,6 +62,14 @@ def donor_light(donor: Path) -> tuple[str, dict]:
     import json
     table = json.loads((Path(__file__).resolve().parent / "mapgen_donor_light.json").read_text(encoding="utf-8"))
     sha = hashlib.sha256(donor.read_bytes()).hexdigest()
+    # 08.10: a ruined map's own refit (`mapgen_light_autofit.py --after-rooms --no-store`) - this run's, first; the
+    # donor's calibration is not touched by it
+    import os
+    override = os.environ.get("MAPGEN_LIGHT_OVERRIDE", "")
+    if override and Path(override).is_file():
+        own = json.loads(Path(override).read_text(encoding="utf-8"))
+        if own.get("sha256") == sha:
+            return own.get("flags", ""), own.get("keys", {})
     entry = table.get(sha)
     if entry is None:
         # a donor not in the table: its own automatic fit beside it, made once on the first map built from it

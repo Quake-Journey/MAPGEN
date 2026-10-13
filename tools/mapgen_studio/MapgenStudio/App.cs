@@ -11,12 +11,31 @@ public sealed class App : Application
 {
     public static Settings Settings { get; private set; } = new();
 
+    /// <summary>A plain start (no test, no command): the loading window opens first and loads the window look itself.</summary>
+    private static bool PlainStart =>
+        !Environment.GetCommandLineArgs().Skip(1).Any(a => a.StartsWith("--") && a != "--startup-test");
+
     public override void Initialize()
     {
-        Styles.Add(new FluentAvaloniaTheme());
+        CopyText.Install();         // brief 15, the PO: any text of any window copied by the right mouse button
         Settings = Settings.Load();
         Settings.EnsureFolders();
         Loc.Language = Settings.Language;
+        // the PO, 12.10: the window look (the Fluent theme) is the slowest part of a start - a plain start loads it
+        // under the loading window (Splash), every other use of the program at once
+        if (!PlainStart)
+            LoadTheme();
+    }
+
+    private static bool s_themed;
+
+    /// <summary>The window look: the Fluent theme and the light or dark one chosen. Once.</summary>
+    public static void LoadTheme()
+    {
+        if (s_themed || Current == null)
+            return;
+        s_themed = true;
+        Current.Styles.Add(new FluentAvaloniaTheme());
         ApplyTheme(Settings.Theme);
     }
 
@@ -174,9 +193,14 @@ public sealed class App : Application
                 base.OnFrameworkInitializationCompleted();
                 return;
             }
-            // brief 13 W4: the faulty cores read on a pool thread now, not on the window's at the first run
-            NativeJob.WarmFaultyCpus();
-            desktop.MainWindow = new MainWindow();
+            // the PO, 12.10: a loading window with the share done and the step under way; it builds the Studio's
+            // window (the faulty cores' read begun on a pool thread there, brief 13 W4) and gives way to it.
+            // `--startup-test`: the same start off screen, the steps' times in startup_test.txt
+            var test = Environment.GetCommandLineArgs().Contains("--startup-test");
+            MainWindow.StartupTesting = test;
+            var splash = new Splash(test);
+            desktop.MainWindow = splash;
+            splash.Opened += async (_, _) => await splash.Run(desktop);
         }
         base.OnFrameworkInitializationCompleted();
     }

@@ -34,9 +34,26 @@ public sealed class Settings
     /* row 410: the rest of the Generate page, kept the same way - it was rebuilt to 20 / 42 / every family on each
        redraw (ticking a base redraws it) */
     public int Fidelity { get; set; } = 20;
+    /*
+     * The PO, 07.10: «нужен регулятор баланса скорости генерации карты ... по умолчанию - как сейчас, среднее значение
+     * ... чем правей, тем дольше, но точнее; чем левей - тем быстрей, но меньше отличий». The trial builds a run may
+     * spend (each edit built and walked, about a minute on q2dm1): the middle is today's 45.
+     */
+    public int Speed { get; set; } = 3;
+    public static readonly int[] SpeedBuilds = { 15, 25, 35, 45, 70, 100, 140 };
+    /*
+     * Brief 16 D6 (the PO, 10.10: mg_10_6695 - 2 h 42 min for 27 %): the slider is TIME now - 15, 30, 60 or 120
+     * minutes; the generator stops when it is spent (or the plan is), and the builds are a ceiling the time decides.
+     */
+    public int Minutes { get; set; } = 1;
+    public static readonly int[] MinuteSteps = { 15, 30, 60, 120 };
+    public int TimeMinutes => MinuteSteps[Math.Clamp(Minutes, 0, MinuteSteps.Length - 1)];
+    public int Builds => TimeMinutes * 10;
     public long Seed { get; set; } = 42;
     public List<string> SkipFamilies { get; set; } = new();
-    public GenerationOptions Options { get; set; } = new();
+    /* the base's frame changes by default (the PO, 10.10: «мне нужна вариативность, размеры карты могут меняться как
+       угодно»): half again its area, its parts unequal - a generation from before the frame existed keeps 100 and 0 */
+    public GenerationOptions Options { get; set; } = new(WarpSize: 150, WarpShape: 50);
     public int CpuDayShare { get; set; } = 60;            // percent of the logical CPUs, 09:00-23:00
     public int CpuNightShare { get; set; } = 30;          // percent at night
     public int DayFrom { get; set; } = 9;
@@ -97,6 +114,8 @@ public sealed class Settings
                 case "bases": s.Bases = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(); break;
                 case "graft_mode": s.GraftMode = value is "1" or "true" or "yes"; break;
                 case "fidelity": s.Fidelity = Clamp(value, 1, 100, 20); break;
+                case "speed": s.Speed = Clamp(value, 0, SpeedBuilds.Length - 1, 3); break;
+                case "minutes": s.Minutes = Clamp(value, 0, MinuteSteps.Length - 1, 1); break;
                 case "seed": s.Seed = long.TryParse(value, out var sd) && sd >= 0 ? sd : 42; break;
                 case "skip_families": s.SkipFamilies = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(); break;
                 case "opt_digs": s.Options = s.Options with { Digs = Clamp(value, 0, 16, 0) }; break;
@@ -111,7 +130,16 @@ public sealed class Settings
                 case "opt_new_slime": s.Options = s.Options with { NewSlime = Clamp(value, -1, 100, -1) }; break;
                 case "opt_new_lava": s.Options = s.Options with { NewLava = Clamp(value, -1, 100, -1) }; break;
                 case "opt_stairways": s.Options = s.Options with { Stairways = Clamp(value, 0, 10, 0) }; break;
-                case "opt_destruction": s.Options = s.Options with { Destruction = Clamp(value, 0, 100, 0) }; break;
+                case "opt_destruction": s.Options = s.Options with { Destruction = Clamp(value, 0, 10000, 0) }; break;
+                case "opt_remodels": s.Options = s.Options with { Remodels = Clamp(value, -1, 16, -1) }; break;
+                case "opt_warp_size": s.Options = s.Options with { WarpSize = Clamp(value, 10, 1000, 100) }; break;
+                case "opt_warp_shape": s.Options = s.Options with { WarpShape = Clamp(value, 0, 100, 0) }; break;
+                case "opt_warp_turn": s.Options = s.Options with { WarpTurn = Clamp(value, 0, 8, 0) }; break;
+                case "opt_warp_height": s.Options = s.Options with { WarpHeight = Clamp(value, 100, 200, 100) }; break;
+                case "opt_warp_shift": s.Options = s.Options with { WarpShift = Clamp(value, 0, 100, 0) }; break;
+                case "opt_blocks": s.Options = s.Options with { Blocks = Clamp(value, -1, 16, -1) }; break;
+                case "opt_floor_shifts": s.Options = s.Options with { FloorShifts = Clamp(value, -1, 12, -1) }; break;
+                case "opt_stair_reshapes": s.Options = s.Options with { StairReshapes = Clamp(value, -1, 8, -1) }; break;
                 case "cpu_day": s.CpuDayShare = Clamp(value, 5, 100, 60); break;
                 case "cpu_night": s.CpuNightShare = Clamp(value, 5, 100, 30); break;
                 case "day_from": s.DayFrom = Clamp(value, 0, 23, 9); break;
@@ -152,6 +180,8 @@ public sealed class Settings
         b.AppendLine($"bases={string.Join(",", Bases)}");
         b.AppendLine($"graft_mode={(GraftMode ? 1 : 0)}");
         b.AppendLine($"fidelity={Fidelity}");
+        b.AppendLine($"speed={Speed}");
+        b.AppendLine($"minutes={Minutes}");
         b.AppendLine($"seed={Seed}");
         b.AppendLine($"skip_families={string.Join(",", SkipFamilies)}");
         b.AppendLine($"opt_digs={Options.Digs}");
@@ -167,6 +197,15 @@ public sealed class Settings
         b.AppendLine($"opt_new_lava={Options.NewLava}");
         b.AppendLine($"opt_stairways={Options.Stairways}");
         b.AppendLine($"opt_destruction={Options.Destruction}");
+        b.AppendLine($"opt_remodels={Options.Remodels}");
+        b.AppendLine($"opt_warp_size={Options.WarpSize}");
+        b.AppendLine($"opt_warp_shape={Options.WarpShape}");
+        b.AppendLine($"opt_warp_turn={Options.WarpTurn}");
+        b.AppendLine($"opt_warp_height={Options.WarpHeight}");
+        b.AppendLine($"opt_warp_shift={Options.WarpShift}");
+        b.AppendLine($"opt_blocks={Options.Blocks}");
+        b.AppendLine($"opt_floor_shifts={Options.FloorShifts}");
+        b.AppendLine($"opt_stair_reshapes={Options.StairReshapes}");
         b.AppendLine("[cpu]");
         b.AppendLine($"cpu_day={CpuDayShare}");
         b.AppendLine($"cpu_night={CpuNightShare}");

@@ -423,7 +423,9 @@ typedef struct {
 /* A big floor legitimately carries many mappings: q2dm2's has
    eleven. The first version held eight and reported the overflow
    as a drift of 8.0, which read like an eight-unit slide. */
-#define GROUP_MAX_AXES 64
+/* 256 (was 64): the donor survey of 09.10 met awoken's floor 1und/flo2a with more, and the donor was refused as
+   «more distinct texture mappings than the comparison holds» - a limit of the comparison, not a difference */
+#define GROUP_MAX_AXES 256
 
 typedef struct {
     cplane_t plane;                          /* oriented: which way it faces */
@@ -438,7 +440,7 @@ typedef struct {
      * face happened to come first.
      */
     float    axes[GROUP_MAX_AXES][2][4];
-    uint8_t  num_axes;
+    uint16_t num_axes;
     bool     too_many_axes;
     float    axis[2][4];                     /* the first, for the report */
     double   area;
@@ -460,7 +462,7 @@ static bool same_axes(const float a[2][4], const float b[2][4], float eps)
 
 static void group_add_axes(group_t *g, const float axis[2][4], float eps)
 {
-    for (uint8_t i = 0; i < g->num_axes; i++)
+    for (uint16_t i = 0; i < g->num_axes; i++)
         if (same_axes(g->axes[i], axis, eps))
             return;
     if (g->num_axes >= GROUP_MAX_AXES) {
@@ -777,6 +779,8 @@ static double polygon_centroid(const float (*pt)[3], uint32_t n, double out[3])
     return total;
 }
 
+static bool invisible_material(const char *texture);
+
 static bool collect_materials(const mapgen_bsp_t *bsp, const mapgen_bsp_t *other,
                               const model_identity_t *ident,
                               materials_t *ms, double *out_area, uint32_t *sealed)
@@ -842,7 +846,8 @@ static bool collect_materials(const mapgen_bsp_t *bsp, const mapgen_bsp_t *other
         for (int u = 0; u < 2; u++)
             for (int a = 0; a < 4; a++)
                 m->axis[u][a] += area * (double)ti->axis[u][a];
-        total += area;
+        if (!invisible_material(ti->texture))
+            total += area;              /* what a player sees: caulk and nodraw are not counted */
     }
     free(owner);
     if (out_area)
@@ -1087,10 +1092,27 @@ static bool planeset_has(const planeset_t *ps, const cplane_t *pl,
     return false;
 }
 
+/*
+ * A face of a material meant never to be seen - caulk, nodraw (the donor survey, 09.10: bloodrun, a map converted from
+ * Quake III, was compiled with common/caulk drawn, 294018 units of it; the frozen compiler takes the texture's own
+ * nodraw flag and draws none). Its presence or absence is not the map's architecture or surface.
+ */
+static bool invisible_material(const char *texture)
+{
+    char lower[MAPGEN_BSP_TEXNAME + 1];
+    size_t n = 0;
+    for (; texture[n] && n < sizeof(lower) - 1; n++)
+        lower[n] = (char)(texture[n] >= 'A' && texture[n] <= 'Z' ? texture[n] - 'A' + 'a' : texture[n]);
+    lower[n] = '\0';
+    return strstr(lower, "caulk") || strstr(lower, "nodraw");
+}
+
 static bool collect_planes(const groups_t *gs, planeset_t *ps,
                            const mapgen_equiv_policy_t *pol)
 {
     for (uint32_t i = 0; i < gs->n; i++) {
+        if (invisible_material(gs->g[i].texture))
+            continue;
         cplane_t c = gs->g[i].plane;
         canon_plane(&c);
         if (!planeset_add(ps, &c, pol))
@@ -1530,18 +1552,26 @@ static bool parse_entities(const mapgen_bsp_t *bsp,
              * Dropping the thirty-third pair hid whatever it said; a block with
              * more pairs than this can hold is a block this cannot compare.
              */
-            if (block.n >= sizeof(block.kv) / sizeof(block.kv[0]))
-                return false;
+            /*
+             * The same key twice: Quake's own rule - the last one stands (its
+             * spawn sets the field again for each pair). The donor survey of
+             * 09.10: johnnydm4's start carries "_color" twice and the whole
+             * map was refused as an entity string not read exactly.
+             */
+            uint32_t slot = block.n;
             for (uint32_t k = 0; k < block.n; k++)
                 if (!strcmp(block.kv[k].key, key))
-                    return false;      /* duplicate: Quake's rule is not this */
-            snprintf(block.kv[block.n].key, EKEY, "%s", key);
+                    slot = k;
+            if (slot == block.n && block.n >= sizeof(block.kv) / sizeof(block.kv[0]))
+                return false;
+            snprintf(block.kv[slot].key, EKEY, "%s", key);
             if (key_is_measurement(key))
-                normalize_value(value, block.kv[block.n].value, EVAL,
+                normalize_value(value, block.kv[slot].value, EVAL,
                                 pol->value_epsilon);
             else
-                snprintf(block.kv[block.n].value, EVAL, "%s", value);
-            block.n++;
+                snprintf(block.kv[slot].value, EVAL, "%s", value);
+            if (slot == block.n)
+                block.n++;
         }
         if (p >= end || *p != '}')
             return false;             /* a block that does not close */
@@ -1569,6 +1599,73 @@ static bool parse_entities(const mapgen_bsp_t *bsp,
     return true;
 }
 
+/*
+ * Two records the same: their words equal and their numbers within a unit. The donor survey of 09.10: q2campgrnds'
+ * func_wall *31 ends at y 1800.4999 in the donor and 1800.5 in the baseline - rounded, 1800 and 1801, and the same
+ * wall read as unmatched. A record's numbers are the compiler's own measurements; a unit is below what a map shows.
+ */
+static bool fields_same(const char *a, size_t na, const char *b, size_t nb)
+{
+    /* a field of coordinates (it holds a space): its numbers within a unit; any other field exactly */
+    if (!memchr(a, ' ', na) && !memchr(b, ' ', nb))
+        return na == nb && !strncmp(a, b, na);
+    const char *ea = a + na, *eb = b + nb;
+    for (;;) {
+        while (a < ea && (*a == ' ' || *a == ';' || *a == ','))
+            a++;
+        while (b < eb && (*b == ' ' || *b == ';' || *b == ','))
+            b++;
+        if (a >= ea || b >= eb)
+            return a >= ea && b >= eb;
+        const char *ta = a, *tb = b;
+        while (ta < ea && *ta != ' ' && *ta != ';' && *ta != ',')
+            ta++;
+        while (tb < eb && *tb != ' ' && *tb != ';' && *tb != ',')
+            tb++;
+        char bufa[64], bufb[64];
+        const size_t la = (size_t)(ta - a) < 63 ? (size_t)(ta - a) : 63, lb = (size_t)(tb - b) < 63 ? (size_t)(tb - b) : 63;
+        memcpy(bufa, a, la);
+        bufa[la] = '\0';
+        memcpy(bufb, b, lb);
+        bufb[lb] = '\0';
+        char *xa = NULL, *xb = NULL;
+        const double x = strtod(bufa, &xa), y = strtod(bufb, &xb);
+        if (*xa || *xb || xa == bufa || xb == bufb) {
+            if (strcmp(bufa, bufb))
+                return false;
+        } else if (fabs(x - y) > 1.0) {
+            return false;
+        }
+        a = ta;
+        b = tb;
+    }
+}
+
+static bool records_same(const char *a, const char *b)
+{
+    for (;;) {
+        const char *ea = strchr(a, '|'), *eb = strchr(b, '|');
+        const size_t na = ea ? (size_t)(ea - a) : strlen(a), nb = eb ? (size_t)(eb - b) : strlen(b);
+        if (!fields_same(a, na, b, nb))
+            return false;
+        if (!ea || !eb)
+            return !ea && !eb;
+        a = ea + 1;
+        b = eb + 1;
+    }
+}
+
+/*
+ * A coordinate as the texts that match two maps' records print it: rounded, and a negative zero is zero. The donor
+ * survey of 09.10: a door's box ending at z 0 in the donor and at -0 in the baseline printed "0" and "-0", and 18 of
+ * the PO's maps were refused for brush models «not matching» that were the same models (q2duel4: 36 bindings).
+ */
+static double nz(double v)
+{
+    const double r = floor(v + 0.5);
+    return r == 0.0 ? 0.0 : r;
+}
+
 static void binding_text(const eblock_t *e, const mapgen_bsp_model_t *m,
                          char *out, size_t cap);
 
@@ -1588,6 +1685,7 @@ static void identify_models(const mapgen_bsp_t *d, const entities_t *ed,
 
     char want[192], have[192];
     uint32_t next = 1;
+    bool *taken = calloc(eb->n ? eb->n : 1u, sizeof(*taken));
     for (uint32_t i = 0; i < ed->n; i++) {
         const eblock_t *e = &ed->b[i];
         if (e->model <= 0 || (uint32_t)e->model >= MAX_MODELS)
@@ -1605,9 +1703,13 @@ static void identify_models(const mapgen_bsp_t *d, const entities_t *ed,
                                                            (uint32_t)o->model);
             if (!om)
                 continue;
-            binding_text(o, om, have, sizeof(have));
-            if (strcmp(want, have))
+            if (taken && taken[k])
                 continue;
+            binding_text(o, om, have, sizeof(have));
+            if (!records_same(want, have))
+                continue;
+            if (taken)
+                taken[k] = true;
             /* The same machine in both maps, whatever it is numbered. */
             id_d->of[e->model] = next;
             id_b->of[o->model] = next;
@@ -1615,6 +1717,7 @@ static void identify_models(const mapgen_bsp_t *d, const entities_t *ed,
             break;
         }
     }
+    free(taken);
     id_d->count = next;
     id_b->count = next;
 }
@@ -2278,6 +2381,21 @@ axis_presence(const mapgen_bsp_t *d, const mapgen_bsp_t *b,
             r->drawn_groups[side]++;
             if (group_present(to, g, pol))
                 continue;
+            if (invisible_material(g->texture))
+                continue;                       /* caulk, nodraw: drawn by one compiler, not the other */
+            if (side == 0 && (g->flags & (0x10 | 0x20))) {
+                /* glass: absent here, but the same pane's material drawn elsewhere in the baseline - a layer the
+                   frozen compiler culls between touching panes */
+                bool drawn_elsewhere = false;
+                for (uint32_t k = 0; k < to->n && !drawn_elsewhere; k++)
+                    drawn_elsewhere = to->g[k].model == g->model && !strcmp(to->g[k].texture, g->texture)
+                                      && to->g[k].area >= (double)pol->sliver_area;
+                if (drawn_elsewhere) {
+                    r->glass_layers_dropped++;
+                    r->glass_layers_area += g->area;
+                    continue;
+                }
+            }
             mapgen_equiv_surface_diff_t *d = note_diff((int)side, NULL);
             if (d) {
                 snprintf(d->texture, sizeof(d->texture), "%s", g->texture);
@@ -2371,6 +2489,8 @@ axis_surface(materials_t *md, materials_t *mb,
     for (uint32_t i = 0; i < md->n; i++) {
         material_t *want = &md->m[i];
         material_t *have = material_find(mb, want);
+        if (!have && invisible_material(want->texture))
+            continue;                   /* caulk, nodraw: see invisible_material */
         if (!have) {
             mapgen_equiv_surface_diff_t *d = note_diff(0, want);
             if (d) {
@@ -2436,7 +2556,7 @@ axis_surface(materials_t *md, materials_t *mb,
         }
     }
     for (uint32_t i = 0; i < mb->n; i++) {
-        if (mb->m[i].matched)
+        if (mb->m[i].matched || invisible_material(mb->m[i].texture))
             continue;
         r->surface_mismatch++;
         mapgen_equiv_surface_diff_t *d = note_diff(1, &mb->m[i]);
@@ -2496,6 +2616,44 @@ axis_surface(materials_t *md, materials_t *mb,
  * A group with no counterpart belongs to the surface axis; this one only looks
  * at pairs that matched.
  */
+/*
+ * A mapping as it sits ON its wall (brief 18 D2).
+ *
+ * A texture axis may lean out of its wall's plane by any amount and draw the same: for a point of the wall
+ * p . n = d, so an axis a + c n with the offset less c d gives every point the same coordinate as a. On a wall along
+ * a world axis nobody writes it so; on a SLANTED one two writers do - the base's frame lays an axis into the face's
+ * plane, a rebuild states it from the face's own points - and the raw numbers then differ by c in the axis and c d
+ * in the offset (q3t2 at 1000 %, x3.11: «28 surfaces carry different texture axes; the worst ... on the plane
+ * 0.734 0 -0.679 at 1181.6, off by 1282» - 1.085 along the normal, times 1181.6). 28 of 2219 is over the one in a
+ * hundred a rebuilt base may differ by, the PO's frame «was not held by its rebuild» and the run went on the donor
+ * as it was. Compared here with the part along the normal taken out and paid into the offset: what is the same
+ * on the wall is the same, and a texture slid ON the wall is slid as before.
+ */
+static bool g_equiv_mapping_on_plane = true;    /* RED: the raw numbers, as before 13.10 */
+/*
+ * ... and an offset may differ by what the map's own size does to it. A rebuilt axis agrees with its original to
+ * the fourth decimal (0.4344 for 0.4345) and the offset that goes with it is the texture's place a map's reach away:
+ * on q3t2 at x3.11, its far corner 4032 out, seven slanted walls came back 0.06 .. 0.26 of a texel off - nothing an
+ * eye finds, each «another mapping» by the absolute 0.05 that suits a donor of 2000 across, and with them the count
+ * stood at 26 of 2219 where 22 is the most a rebuilt base may differ by. A ten-thousandth of the reach is allowed
+ * on top (0.4 of a texel there, 0.2 on a donor); a texture slid by a texel is slid as before.
+ */
+static double g_equiv_reach;                    /* the original map's farthest coordinate, this comparison */
+
+void MapGenEquivalence_SetMappingOnPlane(bool on_plane)
+{
+    g_equiv_mapping_on_plane = on_plane;
+}
+
+static void mapping_on_plane(const float axis[4], const cplane_t *pl, double out[4])
+{
+    const double c = g_equiv_mapping_on_plane
+                   ? (double)axis[0] * pl->n[0] + (double)axis[1] * pl->n[1] + (double)axis[2] * pl->n[2] : 0.0;
+    for (int a = 0; a < 3; a++)
+        out[a] = (double)axis[a] - c * (double)pl->n[a];
+    out[3] = (double)axis[3] + c * (double)pl->d;
+}
+
 static mapgen_equiv_result_t
 axis_mapping(const groups_t *gd, const groups_t *gb,
              const mapgen_equiv_policy_t *pol, mapgen_equiv_report_t *r)
@@ -2525,18 +2683,24 @@ axis_mapping(const groups_t *gd, const groups_t *gb,
          * compiler's business; inventing a mapping is not, and a texture slid
          * by any amount invents one.
          */
-        for (uint8_t k = 0; k < have->num_axes; k++) {
+        for (uint16_t k = 0; k < have->num_axes; k++) {
             double nearest = 1e30;
-            for (uint8_t j = 0; j < want->num_axes; j++) {
+            for (uint16_t j = 0; j < want->num_axes; j++) {
                 double drift = 0.0;
-                for (int u = 0; u < 2; u++)
+                for (int u = 0; u < 2; u++) {
+                    double mine[4], theirs[4];
+                    mapping_on_plane(have->axes[k][u], &have->plane, mine);
+                    mapping_on_plane(want->axes[j][u], &want->plane, theirs);
                     for (int a = 0; a < 4; a++) {
-                        const double delta =
-                            fabs((double)have->axes[k][u][a]
-                                 - (double)want->axes[j][u][a]);
+                        double delta = fabs(mine[a] - theirs[a]);
+                        if (a == 3 && g_equiv_mapping_on_plane) {
+                            const double slack = 1e-4 * g_equiv_reach;      /* the offset: see g_equiv_reach */
+                            delta = delta > slack ? delta - slack : 0.0;
+                        }
                         if (delta > drift)
                             drift = delta;
                     }
+                }
                 if (drift < nearest)
                     nearest = drift;
             }
@@ -2544,8 +2708,28 @@ axis_mapping(const groups_t *gd, const groups_t *gb,
                 worst = nearest;
                 worst_group = want;
             }
-            if (nearest > (double)pol->axis_epsilon)
+            if (nearest > (double)pol->axis_epsilon) {
                 r->mapping_mismatch++;
+                /* a diagnostic: MAPGEN_EQUIV_SAY_MAPPING=1 says each mapping the rebuild has and the original has not */
+                if (getenv("MAPGEN_EQUIV_SAY_MAPPING")) {
+                    double mine[2][4];
+                    mapping_on_plane(have->axes[k][0], &have->plane, mine[0]);
+                    mapping_on_plane(have->axes[k][1], &have->plane, mine[1]);
+                    fprintf(stderr, "MAPPING %s plane %.3f %.3f %.3f at %.1f area %.0f: rebuilt s %.4f %.4f %.4f %.2f t "
+                            "%.4f %.4f %.4f %.2f; nearest of the original's %u is %.3f off\n", want->texture,
+                            (double)want->plane.n[0], (double)want->plane.n[1], (double)want->plane.n[2],
+                            (double)want->plane.d, want->area, mine[0][0], mine[0][1], mine[0][2], mine[0][3],
+                            mine[1][0], mine[1][1], mine[1][2], mine[1][3], (unsigned)want->num_axes, nearest);
+                    for (uint16_t j = 0; j < want->num_axes && j < 3; j++) {
+                        double theirs[2][4];
+                        mapping_on_plane(want->axes[j][0], &want->plane, theirs[0]);
+                        mapping_on_plane(want->axes[j][1], &want->plane, theirs[1]);
+                        fprintf(stderr, "MAPPING    original s %.4f %.4f %.4f %.2f t %.4f %.4f %.4f %.2f\n", theirs[0][0],
+                                theirs[0][1], theirs[0][2], theirs[0][3], theirs[1][0], theirs[1][1], theirs[1][2],
+                                theirs[1][3]);
+                    }
+                }
+            }
         }
     }
 
@@ -2583,8 +2767,8 @@ static void binding_text(const eblock_t *e, const mapgen_bsp_model_t *m,
 {
     snprintf(out, cap, "%s|%s|%s|%.0f %.0f %.0f|%.0f %.0f %.0f",
              e->classname, e->targetname, e->target,
-             (double)m->mins[0], (double)m->mins[1], (double)m->mins[2],
-             (double)m->maxs[0], (double)m->maxs[1], (double)m->maxs[2]);
+             nz(m->mins[0]), nz(m->mins[1]), nz(m->mins[2]),
+             nz(m->maxs[0]), nz(m->maxs[1]), nz(m->maxs[2]));
 }
 
 static mapgen_equiv_result_t
@@ -2663,7 +2847,7 @@ axis_ownership(const mapgen_bsp_t *d, const mapgen_bsp_t *b,
     for (uint32_t i = 0; i < nw; i++) {
         bool found = false;
         for (uint32_t k = 0; k < nh && !found; k++) {
-            if (used[k] || strcmp(want[i], have[k]) != 0)
+            if (used[k] || !records_same(want[i], have[k]))
                 continue;
             used[k] = true;
             found = true;
@@ -2691,8 +2875,27 @@ axis_ownership(const mapgen_bsp_t *d, const mapgen_bsp_t *b,
     return MAPGEN_EQUIV_OK;
 }
 
+/*
+ * A point entity buried in the donor's rock (the donor survey, 09.10): its origin and the six points 32 off it are
+ * all solid in the donor's own compiled map - outside the map's hull or deep in a wall, where nothing reaches it.
+ * q2rdm4's ammo_cells at -144 448 32 and a light of dm_purple stand so (moved after the map was compiled): the
+ * frozen compiler floods from them and calls the rebuilt copy leaked. Such an entity is left out of the copy, and
+ * the comparison does not call it missing.
+ */
+static bool entity_buried(const mapgen_bsp_t *bsp, const float origin[3])
+{
+    static const float OFF[7][3] = { { 0, 0, 0 }, { 32, 0, 0 }, { -32, 0, 0 }, { 0, 32, 0 }, { 0, -32, 0 },
+                                     { 0, 0, 32 }, { 0, 0, -32 } };
+    for (int i = 0; i < 7; i++) {
+        const float p[3] = { origin[0] + OFF[i][0], origin[1] + OFF[i][1], origin[2] + OFF[i][2] };
+        if (!(MapGenBsp_PointContents(bsp, p) & 1))       /* CONTENTS_SOLID */
+            return false;
+    }
+    return true;
+}
+
 static mapgen_equiv_result_t
-axis_entity(entities_t *ed, entities_t *eb, mapgen_equiv_report_t *r)
+axis_entity(const mapgen_bsp_t *d, entities_t *ed, entities_t *eb, mapgen_equiv_report_t *r)
 {
     r->entities[0] = ed->n;
     r->entities[1] = eb->n;
@@ -2707,6 +2910,11 @@ axis_entity(entities_t *ed, entities_t *eb, mapgen_equiv_report_t *r)
             i++;
             k++;
         } else if (cmp < 0) {
+            if (ed->b[i].has_origin && ed->b[i].model <= 0 && entity_buried(d, ed->b[i].origin)) {
+                r->entities_buried++;
+                i++;
+                continue;
+            }
             if (!r->entities_missing)
                 snprintf(r->worst_entity, sizeof(r->worst_entity), "%s",
                          ed->b[i].classname);
@@ -2721,6 +2929,10 @@ axis_entity(entities_t *ed, entities_t *eb, mapgen_equiv_report_t *r)
         }
     }
     for (; i < ed->n; i++) {
+        if (ed->b[i].has_origin && ed->b[i].model <= 0 && entity_buried(d, ed->b[i].origin)) {
+            r->entities_buried++;
+            continue;
+        }
         if (!r->entities_missing)
             snprintf(r->worst_entity, sizeof(r->worst_entity), "%s",
                      ed->b[i].classname);
@@ -2757,8 +2969,8 @@ static void mover_text(const mapgen_mover_t *m, char *out, size_t cap)
     size_t used = (size_t)snprintf(out, cap,
         "%s|%s|%s|%s|%.0f %.0f %.0f|%.0f %.0f %.0f|%d%d%d%d|",
         MapGenMovers_KindName(m->kind), m->classname, m->targetname, m->target,
-        (double)m->mins[0], (double)m->mins[1], (double)m->mins[2],
-        (double)m->maxs[0], (double)m->maxs[1], (double)m->maxs[2],
+        nz(m->mins[0]), nz(m->mins[1]), nz(m->mins[2]),
+        nz(m->maxs[0]), nz(m->maxs[1]), nz(m->maxs[2]),
         m->player_operated ? 1 : 0, m->carries ? 1 : 0,
         m->inoperable ? 1 : 0, m->obstructed ? 1 : 0);
     for (uint32_t s = 0; s < m->num_stops && used + 1 < cap; s++)
@@ -2771,8 +2983,8 @@ static void operator_text(const mapgen_mover_operator_t *o, char *out,
                           size_t cap)
 {
     snprintf(out, cap, "%s|%.0f %.0f %.0f|%.0f %.0f %.0f|%d", o->target,
-             (double)o->mins[0], (double)o->mins[1], (double)o->mins[2],
-             (double)o->maxs[0], (double)o->maxs[1], (double)o->maxs[2],
+             nz(o->mins[0]), nz(o->mins[1]), nz(o->mins[2]),
+             nz(o->maxs[0]), nz(o->maxs[1]), nz(o->maxs[2]),
              o->shootable ? 1 : 0);
 }
 
@@ -2780,11 +2992,11 @@ static void portal_text(const mapgen_mover_portal_t *p, char *out, size_t cap)
 {
     snprintf(out, cap, "%s|%.0f %.0f %.0f|%.0f %.0f %.0f|%d|%.0f %.0f %.0f",
              p->target,
-             (double)p->mins[0], (double)p->mins[1], (double)p->mins[2],
-             (double)p->maxs[0], (double)p->maxs[1], (double)p->maxs[2],
+             nz(p->mins[0]), nz(p->mins[1]), nz(p->mins[2]),
+             nz(p->maxs[0]), nz(p->maxs[1]), nz(p->maxs[2]),
              p->has_destination ? 1 : 0,
-             (double)p->destination[0], (double)p->destination[1],
-             (double)p->destination[2]);
+             nz(p->destination[0]), nz(p->destination[1]),
+             nz(p->destination[2]));
 }
 
 static void relay_text(const mapgen_mover_relay_t *r, char *out, size_t cap)
@@ -2795,10 +3007,10 @@ static void relay_text(const mapgen_mover_relay_t *r, char *out, size_t cap)
 static void push_text(const mapgen_mover_push_t *p, char *out, size_t cap)
 {
     snprintf(out, cap, "%.0f %.0f %.0f|%.0f %.0f %.0f|%.0f %.0f %.0f",
-             (double)p->mins[0], (double)p->mins[1], (double)p->mins[2],
-             (double)p->maxs[0], (double)p->maxs[1], (double)p->maxs[2],
-             (double)p->velocity[0], (double)p->velocity[1],
-             (double)p->velocity[2]);
+             nz(p->mins[0]), nz(p->mins[1]), nz(p->mins[2]),
+             nz(p->maxs[0]), nz(p->maxs[1]), nz(p->maxs[2]),
+             nz(p->velocity[0]), nz(p->velocity[1]),
+             nz(p->velocity[2]));
 }
 
 /*
@@ -2815,9 +3027,9 @@ static uint32_t unmatched_records(const void *left, uint32_t nleft,
                                   size_t stride, record_fn render,
                                   char *first, size_t first_size)
 {
-    if (nleft > 64 || nright > 64)
-        return nleft + nright;        /* more than the table holds */
-    bool used[64] = { false };
+    bool *used = calloc(nright ? nright : 1u, sizeof(*used));
+    if (!used)
+        return nleft + nright;
     uint32_t unmatched = 0;
     char a[512], b[512];
     for (uint32_t i = 0; i < nleft; i++) {
@@ -2827,7 +3039,7 @@ static uint32_t unmatched_records(const void *left, uint32_t nleft,
             if (used[k])
                 continue;
             render((const char *)right + k * stride, b, sizeof(b));
-            if (!strcmp(a, b)) {
+            if (records_same(a, b)) {
                 used[k] = true;
                 found = true;
             }
@@ -2841,6 +3053,7 @@ static uint32_t unmatched_records(const void *left, uint32_t nleft,
     for (uint32_t k = 0; k < nright; k++)
         if (!used[k])
             unmatched++;
+    free(used);
     return unmatched;
 }
 
@@ -2997,6 +3210,8 @@ static uint32_t collect_obligations(const entities_t *e,
         if (!block->has_origin
             || (!is_spawn(block->classname) && !is_pickup(block->classname)))
             continue;
+        if (block->model <= 0 && entity_buried(bsp, block->origin))
+            continue;                   /* buried in the rock: left out of the copy (entity_buried) */
         obligation_text(block, bsp, out[n], OBLIGATION_TEXT);
         n++;
     }
@@ -3282,6 +3497,8 @@ axis_traversal(const mapgen_bsp_t *d, const mapgen_bsp_t *b,
         if (!block->has_origin
             || (!is_spawn(block->classname) && !is_pickup(block->classname)))
             continue;
+        if (block->model <= 0 && entity_buried(d, block->origin))
+            continue;                   /* buried in the donor's rock: left out of the copy (entity_buried) */
         const int cd = class_at(d, block->origin);
         const int cb = class_at(b, block->origin);
         const float sd = support_depth(d, block->origin);
@@ -3375,6 +3592,18 @@ MapGenEquivalence_Compare(const mapgen_bsp_t *donor,
     axis_done(out, axis_presence(donor, baseline, &gd, &gb, &ident_d,
                                  &ident_b, policy, out));
     axis_done(out, axis_surface(&md, &mb, policy, out));
+    {
+        const mapgen_bsp_model_t *world = MapGenBsp_Model(donor, 0);
+        g_equiv_reach = 0.0;
+        for (int a = 0; world && a < 3; a++) {
+            if (fabs((double)world->mins[a]) > g_equiv_reach)
+                g_equiv_reach = fabs((double)world->mins[a]);
+            if (fabs((double)world->maxs[a]) > g_equiv_reach)
+                g_equiv_reach = fabs((double)world->maxs[a]);
+        }
+        if (g_equiv_reach > 8192.0)
+            g_equiv_reach = 8192.0;         /* a map whose bounds were never set is no licence */
+    }
     axis_done(out, axis_mapping(&gd, &gb, policy, out));
 
     rc = axis_ownership(donor, baseline, &ed, &eb, out);
@@ -3382,7 +3611,7 @@ MapGenEquivalence_Compare(const mapgen_bsp_t *donor,
         goto done;
     axis_done(out, rc);
 
-    axis_done(out, axis_entity(&ed, &eb, out));
+    axis_done(out, axis_entity(donor, &ed, &eb, out));
     axis_done(out, axis_mover(donor, baseline, out));
     if (policy->compare_traversal)
         axis_done(out, axis_traversal(donor, baseline, &ed, &eb, policy, out));

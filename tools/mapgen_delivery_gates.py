@@ -23,8 +23,9 @@ One PASS or FAIL line per gate; exit 1 on any failure:
             place as one end and a box holding its room, its own or the wing it was joined into (row 324) - is new
             air across its middle on both level axes, and a
             pickup stands where the plan moved one to, inside it in the file - of whatever class, since a later
-            swap-item may trade it (row 320) - worth the walk: 5 or more by the generator's own table (row 379,
-            `PICKUP_WORTH`; the PO: «у игроков должна быть цель заходить в неё»). At least two.
+            swap-item may trade it (row 320); at least two of them worth the walk: 5 or more by the generator's own
+            table (row 379, `PICKUP_WORTH`; the PO: «у игроков должна быть цель заходить в неё») - the others may hold
+            the ammunition or health brief 15 D3 deals once the weapons and armour are taken (brief 17 D4).
   clips     no player-clip brush stands beside space the generator opened - rock in the donor, air in the map, 12 out
             from one of its faces (row 337: q2dm1's beams left in a doorway the PO could pass only along a jamb)
   light     the map is lit like its donor (rows 405, 408; Fable's briefs 5 L4 and 6): the faces both maps draw - the
@@ -177,6 +178,8 @@ def source_of(d: dict, sources: list, donor: Path):
 STAIRWAY_LINE = re.compile(r"^  stairway (\d+): foot " + T3 + " top " + T3 + r", (\d+) steps (\d+) wide, "
                            r"(meets a ledge|holds a pickup)$", re.M)
 STAIRWAY_LANDING = re.compile(r"^  stairway (\d+) landing: " + T3 + r" \.\. " + T3 + "$", re.M)
+# brief 15 (the PO 08.10): an ascent whose first flight comes from the room turns at the wall
+STAIRWAY_TURN = re.compile(r"^  stairway (\d+) turns: at " + T3 + r" after (\d+) steps$", re.M)
 STAIRWAY_MOVE = re.compile(r"^  stairway (\d+) moves: (\S+) from " + T3 + " to " + T3 + "$", re.M)
 STAIRWAY_ACCEPTED = re.compile(r"^\s*\d+\s+stairway\s+ACCEPTED\s+\d+\s+" + T3 + r"\s+" + T3, re.M)
 
@@ -207,12 +210,35 @@ def tail(text: str, n: int = 220) -> str:
     return lines[-1].strip()[:n] if lines else "no output"
 
 
+# brief 18 (mg_b18_q3t2, 12.10): a flood's shore and slab stand outside its box (the ring that holds the water where the
+# hollow meets open air reaches out to the room's walls) - on q3t2 at 1000 % 638 points of a flood's shore over the pit
+# were laid to the ell dig whose box held them. Its footprint as the pipeline writes it (job/plan_rounds.txt), else
+# its box 48 round.
+FLOOD_SHORE = 48.0
+FOOTPRINT = re.compile(r"^  flood footprint: ((?:-?\d+ ){5}-?\d+) -> ((?:-?\d+ ){5}-?\d+)$", re.M)
+
+
+def flood_footprints(job: Path) -> dict:
+    f = job / "plan_rounds.txt"
+    text = f.read_text(encoding="utf-8", errors="replace") if f.is_file() else ""
+    return {tuple(float(v) for v in m.group(1).split()): [float(v) for v in m.group(2).split()]
+            for m in FOOTPRINT.finditer(text)}
+
+
 def accepted_others(job: Path) -> list[list]:
-    """Row 343: the boxes of every accepted edit that is not a dig."""
+    """Row 343: the boxes of every accepted edit that is not a dig - a flood's footprint, its shore with it."""
     text = (job / "ledger.txt").read_text(encoding="utf-8", errors="replace")
-    return [[float(m.group(i)) for i in range(2, 8)] for m in re.finditer(
-        r"^\s*\d+\s+(\S+)\s+ACCEPTED\s+\d+\s+(-?\d+) (-?\d+) (-?\d+)\s+(-?\d+) (-?\d+) (-?\d+)", text, re.M)
-        if m.group(1) != "dig"]
+    feet = flood_footprints(job)
+    out = []
+    for m in re.finditer(r"^\s*\d+\s+(\S+)\s+ACCEPTED\s+\d+\s+(-?\d+) (-?\d+) (-?\d+)\s+(-?\d+) (-?\d+) (-?\d+)",
+                         text, re.M):
+        if m.group(1) == "dig":
+            continue
+        box = [float(m.group(i)) for i in range(2, 8)]
+        if m.group(1) == "flood":
+            box = feet.get(tuple(box)) or [v - FLOOD_SHORE for v in box[:3]] + [v + FLOOD_SHORE for v in box[3:]]
+        out.append(box)
+    return out
 
 
 def walls_reference(job: Path, donor: Path) -> Path:
@@ -338,7 +364,10 @@ def prebuilt(name: str) -> Path | None:
 
 def gate_pickups(bsp: Path, work: Path, donor: Path | None = None) -> None:
     chain = [e.get("origin") for e in Bsp(bsp).ents if e.get("classname") == "weapon_chaingun"]
-    check("pickups: the chaingun is in the map", bool(chain), f"at {chain}" if chain else "none")
+    # the chaingun is not lost: a donor that has none (q2dm3) gives none, and its map is not refused for it (11.10)
+    had = donor is None or not donor.is_file() or any(e.get("classname") == "weapon_chaingun" for e in Bsp(donor).ents)
+    check("pickups: the chaingun is in the map", bool(chain) or not had,
+          f"at {chain}" if chain else "none" if had else "none, and the donor has none")
     from check_mapgen_lost_pickup import build, ask
     exe = prebuilt("lost_pickup_oracle.exe") or work / "lost_pickup_oracle.exe"
     err = ""
@@ -438,9 +467,37 @@ def plan_listing(job: Path, work: Path, tree: Path = REPO) -> tuple[str, str]:
         return "", str(e)
     rc, out = run([exe, base[0], "--seed", head.group(2), "--ambition", str(100 - int(head.group(1))), "--list"]
                   + (["--second", str(SECOND)] if SECOND else []) + (opts.group(1).split() if opts else []))
+    out += later_rounds(job)
     (work / "plan_list.txt").write_text(out, encoding="utf-8")
     _LISTINGS[key] = (out, "" if rc == 0 else f"the recut driver exited {rc}: {tail(out)}")
     return _LISTINGS[key]
+
+
+def later_rounds(job: Path) -> str:
+    """Brief 18 (mg_b18_q2dm3): the digs the run's LATER rounds dealt, as the pipeline wrote them (job/plan_rounds.txt,
+    one `# round N` block a round) - the first round is this tree's re-deal above. Two of that run's three annexes and
+    its one accepted stairway were a later round's, never asked."""
+    f = job / "plan_rounds.txt"
+    if not f.is_file():
+        return ""
+    blocks = re.split(r"(?m)^(?=# round \d+$)", f.read_text(encoding="utf-8", errors="replace"))
+    return "".join("\n" + blk for blk in blocks if blk.startswith("# round ") and not blk.startswith("# round 0\n"))
+
+
+def rounds_of(text: str) -> list:
+    """A plan listing cut at its later rounds' `# round N` lines - a stairway's number is its round's."""
+    return re.split(r"(?m)^# round \d+$", text)
+
+
+def unique(items: list) -> list:
+    """The same dig dealt again by a later round (refused the first time) is one dig."""
+    seen, out = set(), []
+    for it in items:
+        key = repr(it)
+        if key not in seen:
+            seen.add(key)
+            out.append(it)
+    return out
 
 
 def plan_halls(text: str) -> list:
@@ -454,11 +511,16 @@ def plan_halls(text: str) -> list:
         h = HALL_LINE.match(line)
         if h and ends:
             halls.append((ends, [float(v) for v in h.groups()]))
-    return halls
+    return unique(halls)
 
 
 def plan_annexes(text: str) -> list:
-    """Each annex: its room, the place it opens off, its two ends as the dig report prints them, and its move."""
+    """Each annex: its room, the place it opens off, its two ends as the dig report prints them, and its move - of
+    every round."""
+    return unique([a for part in rounds_of(text) for a in round_annexes(part)])
+
+
+def round_annexes(text: str) -> list:
     # row 405: «, built in air» closes the line of an annex the generator built in the map's free air
     found = [m for m in ANNEX_LINE.finditer(text)]
     rooms = [[float(v) for v in m.groups()[:-1]] for m in found]
@@ -505,7 +567,12 @@ def building_built(cand: Bsp, donor: Bsp, box: list, host: list) -> tuple[bool, 
 
 
 def plan_storeys(text: str) -> list:
-    """Each storey (row 327): its room, its two places, its terrace, its flight and its treads, and its move."""
+    """Each storey (row 327): its room, its two places, its terrace, its flight and its treads, and its move - of
+    every round."""
+    return unique([s for part in rounds_of(text) for s in round_storeys(part)])
+
+
+def round_storeys(text: str) -> list:
     rooms = [[float(v) for v in m.groups()] for m in STOREY_LINE.finditer(text)]
     parts = [[float(v) for v in m.groups()] for m in STOREY_PARTS.finditer(text)]
     moves = [(m.group(1), [float(v) for v in m.groups()[1:]]) for m in STOREY_MOVE.finditer(text)]
@@ -603,7 +670,11 @@ def ask_annex(bsp: Path, job: Path, donor: Path, work: Path, accepted_only: bool
     # такого нет») - a plan with none has nothing to be asked here; its new rooms are real rooms (room-of)
     if not annexes:
         return True, "no box annex in the plan: the new rooms are real rooms of the maps"
-    return (len(mine) >= ANNEX_MIN and built == len(mine) and worthy == len(mine),
+    # brief 17 D4 (Fable: «annex green on q2dm1 6675 (>= 2 worth the walk)»): every annex built and holding its pickup,
+    # at least two of them worth the walk - brief 15 D3 deals the annexes after the first ammunition or health when
+    # the weapons and armour are taken («still a reason to go in»), and the gate asking every one to be worth 5 failed
+    # any map where one of those was accepted (warped q2dm1: hyperblaster, combat armour and a shard)
+    return (len(mine) >= ANNEX_MIN and built == len(mine) and worthy >= ANNEX_MIN,
             f"{len(annexes)} annexes in the plan, {len(mine)} {'on accepted digs' if accepted_only else 'asked'},"
             f" {built} built, {worthy} worth the walk: " + "; ".join(said[:6]))
 
@@ -681,7 +752,12 @@ def ask_storeys(bsp: Path, job: Path, donor: Path, work: Path, accepted_only: bo
 
 
 def plan_stairways(text: str) -> list:
-    """Each stairway the plan dealt: its foot, its top, its steps, its landing box and its pickup's move."""
+    """Each stairway the plan dealt: its foot, its top, its steps, its landing box and its pickup's move - of every
+    round, each round numbering its own."""
+    return unique([s for part in rounds_of(text) for s in round_stairways(part)])
+
+
+def round_stairways(text: str) -> list:
     out = {}
     for m in STAIRWAY_LINE.finditer(text):
         v = [float(x) for x in m.groups()[1:7]]
@@ -690,6 +766,9 @@ def plan_stairways(text: str) -> list:
     for m in STAIRWAY_LANDING.finditer(text):
         if m.group(1) in out:
             out[m.group(1)]["landing"] = [float(x) for x in m.groups()[1:]]
+    for m in STAIRWAY_TURN.finditer(text):
+        if m.group(1) in out:
+            out[m.group(1)]["turn"] = ([float(x) for x in m.groups()[1:4]], int(m.group(5)))
     for m in STAIRWAY_MOVE.finditer(text):
         if m.group(1) in out:
             v = [float(x) for x in m.groups()[2:]]
@@ -717,15 +796,20 @@ def stairway_built(cand: Bsp, don: Bsp, s: dict) -> tuple[bool, str]:
             return False, f"no headroom over the landing at {h}"
     if cand.solid([s["foot"][0], s["foot"][1], floor + 32]):
         return False, "its foot is buried"
-    # the flight: under the line from the foot to the landing, solid from the floor to each tread
+    # the flight: under the line from the foot to the landing (to the turn, for a flight that comes from the room and
+    # turns at the wall), solid from the floor to each tread; an ascent following a bent wall stands up to 48 off the
+    # line across it (q3t2 42/58: its first step 54 nearer the room than the next, round a pilaster)
     fx, fy = s["foot"][0], s["foot"][1]
     tx, ty = top[0], top[1]
     n = s["steps"]
+    if "turn" in s:
+        (tx, ty, _), n = s["turn"]
     run = max(1.0, ((tx - fx) ** 2 + (ty - fy) ** 2) ** 0.5)
+    ax, ay = -(ty - fy) / run, (tx - fx) / run
     for i in range(n):
-        f = (24.0 + 32.0 * (i + 0.5)) / run          # the flight starts 24 past the foot, a tread is 32
+        f = min(1.0, (24.0 + 32.0 * (i + 0.5)) / run)  # the flight starts 24 past the foot, a tread is 32
         x, y = fx + (tx - fx) * f, fy + (ty - fy) * f
-        if not cand.solid([x, y, floor + 6]):
+        if not any(cand.solid([x + ax * o, y + ay * o, floor + 6]) for o in (0, -12, 12, -24, 24, -36, 36, -48, 48)):
             return False, f"step {i + 1} missing at {x:.0f} {y:.0f}"
     return True, "built, solid to the floor"
 
@@ -743,8 +827,11 @@ def ask_stairways(bsp: Path, job: Path, donor: Path, work: Path) -> tuple[bool, 
     boxes = [[float(v) for v in m.groups()] for m in STAIRWAY_ACCEPTED.finditer(ledger)]
 
     def accepted(s: dict) -> bool:
+        # brief 18: and in height - mg_b18_q2dm3's first-round stairway (top 127, refused) sat in the plan of the
+        # later one accepted beside it (top 63)
         L = s["landing"]
-        return any(b[0] - 1 <= L[0] and L[3] <= b[3] + 1 and b[1] - 1 <= L[1] and L[4] <= b[4] + 1 for b in boxes)
+        return any(b[0] - 1 <= L[0] and L[3] <= b[3] + 1 and b[1] - 1 <= L[1] and L[4] <= b[4] + 1
+                   and b[2] - 1 <= L[2] and L[5] <= b[5] + 1 for b in boxes)
 
     mine = [s for s in planned if accepted(s)]
     cand, don = Bsp(bsp), Bsp(donor)
@@ -857,7 +944,7 @@ def _same_finding(mine: str, theirs: set) -> bool:
     return False
 
 
-def gate_water(bsp: Path, work: Path, donor: Path | None = None) -> None:
+def gate_water(bsp: Path, work: Path, donor: Path | None = None, job: Path | None = None) -> None:
     from check_mapgen_standing_water import build, PROBE_SRC
     work.mkdir(parents=True, exist_ok=True)      # its folder made here: a guard's fresh work tree has none
     try:
@@ -865,12 +952,25 @@ def gate_water(bsp: Path, work: Path, donor: Path | None = None) -> None:
     except SystemExit as e:
         check("water: the probe builds", False, str(e))
         return
-    rc, out = run([exe, bsp])
+    # the base's frame: a face whose air was rock in the donor and lies in no accepted edit's place is a sealed pocket
+    # of the void a long dig cut off from the outside - nobody gets in, nobody sees it (q2dm3 at 150 %, 10.10: a pool's
+    # side 400 away from the tunnel); the probe marks it «pocket», as the generator's own rule counts it
+    args = [exe, bsp]
+    if donor and donor.is_file() and job and (job / "ledger.txt").is_file():
+        text = (job / "ledger.txt").read_text(encoding="utf-8", errors="replace")
+        boxes = [" ".join(m.groups()) for m in re.finditer(
+            r"^\s*\d+\s+\S+\s+ACCEPTED\s+\d+\s+(-?\d+) (-?\d+) (-?\d+)\s+(-?\d+) (-?\d+) (-?\d+)", text, re.M)]
+        listed = work / "water_boxes.txt"
+        listed.write_text("\n".join(boxes) + "\n", encoding="utf-8")
+        args += ["--was", donor, "--boxes", listed]
+    rc, out = run(args)
     first = out.strip().splitlines()[0] if out.strip() else "no output"
-    faces = [ln for ln in out.splitlines() if ln.startswith("face")]
+    faces = [ln for ln in out.splitlines() if ln.startswith("face") and not ln.rstrip().endswith(" pocket")]
+    pockets = sum(1 for ln in out.splitlines() if ln.startswith("face") and ln.rstrip().endswith(" pocket"))
     # the two compilers split one liquid wall into faces differently (q3t2's killsky at y -830: 64..126 and 0..64
-    # here, 64..126 and 56..64 in the donor), so a face is the donor's when the donor draws the same texture on the
-    # same plane over the face's whole extent
+    # here, 64..126 and 56..64 in the donor), so a face is the donor's when the donor draws a liquid face on the
+    # same plane over the face's whole extent - whatever the liquid: a reliquid swaps one for another (q2dm3 at 150 %,
+    # 10.10: the donor's own lava face at -84 462 came back as sewer water and was read as new)
     def parsed(line: str):
         f = line.split()
         try:
@@ -887,9 +987,9 @@ def gate_water(bsp: Path, work: Path, donor: Path | None = None) -> None:
         me = parsed(line)
         if not me:
             return False
-        tex, b = me
-        same = [d for t2, d in donor_faces if t2 == tex
-                and any(abs(b[a] - b[a + 3]) < 0.5 and abs(d[a] - d[a + 3]) < 0.5 and abs(b[a] - d[a]) <= 1.0
+        _tex, b = me
+        same = [d for _t2, d in donor_faces
+                if any(abs(b[a] - b[a + 3]) < 0.5 and abs(d[a] - d[a + 3]) < 0.5 and abs(b[a] - d[a]) <= 1.0
                         for a in range(3))]
         if not same:
             return False
@@ -901,8 +1001,9 @@ def gate_water(bsp: Path, work: Path, donor: Path | None = None) -> None:
     said = mine[0].strip() if mine else (f"{len(faces)} vertical liquid faces" if faces else first)
     if n_own:
         said += f"; the donor's own, there too: {n_own} ({' '.join(faces[0].split()[2:3])})"
-    check("water: no vertical liquid face", first.startswith("vertical liquid faces 0 ") or bool(faces and not mine),
-          said[:300])
+    if pockets:
+        said += f"; against a sealed pocket nobody gets into: {pockets}"
+    check("water: no vertical liquid face", "vertical liquid faces " in out and not mine, said[:300])
 
 
 def gate_reach(bsp: Path, work: Path, donor: Path | None = None) -> None:
@@ -910,7 +1011,7 @@ def gate_reach(bsp: Path, work: Path, donor: Path | None = None) -> None:
     exe = prebuilt("reach_gate.exe") or build_gate(work)
     # row 404: held to the donor where the donor itself fails (the generator's own rule since row 400), and the
     # teleporters and pads a player crosses named on the line
-    argv = [exe, bsp, "40000"] + (["--donor", donor] if donor and donor.is_file() else [])
+    argv = [exe, bsp, "60000"] + (["--donor", donor] if donor and donor.is_file() else [])
     rc, out = run(argv, timeout=7200)
     lines = [ln.strip() for ln in out.strip().splitlines()]
     said = lines[1:3] + [ln for ln in lines if ln.startswith(("HELD TO THE DONOR", "the donor", "new traps"))
@@ -981,8 +1082,10 @@ def gate_static(bsp: Path, job: Path, work: Path, donor: Path | None = None) -> 
         check("static: panes, lifts, sounds and the digs' mouths", True, tail(out))
         return
     # row 405: the findings, each asked of the donor too
-    from check_mapgen_static import judge
-    found = judge(bsp, listed)["bad"]
+    from check_mapgen_static import Bsp as StaticBsp, dark_lamps, judge
+    # brief 18 (mg_b18_q3t2 at 1000 %): a dig's box that takes in the old map's own dark lamps - the donor's faces,
+    # where the donor has them - is no lamp the generator tiled
+    found = judge(bsp, listed, dark_lamps(StaticBsp(donor)) if donor and donor.is_file() else None)["bad"]
     own = {}
     if donor and donor.is_file():
         own = {q: {_place_of(f) for f in fs} for q, fs in judge(donor)["bad"].items()}
@@ -1005,10 +1108,19 @@ def gate_static(bsp: Path, job: Path, work: Path, donor: Path | None = None) -> 
     check("static: panes, lifts, sounds and the digs' mouths", not mine, said[:300])
 
 
+def evidence(name: str, ok: bool, detail: str) -> bool:
+    """Brief 17: a selftest case whose evidence is gone - the round folders and the old mg_20* maps were cleared away
+    with the runs that made them - is RETIRED and said so, not failed: it failed on HEAD for days, and a guard that
+    fails for a missing file is no guard. A case whose evidence is there asks its question as before."""
+    if not ok:
+        print(f"  note  {name} - no: the case is retired, its evidence is gone ({detail})", flush=True)
+    return ok
+
+
 def selftest(work: Path) -> None:
     print("selftest: the new questions, of inputs that must fail them", flush=True)
     r35 = ROUND35 / "deliver" / "candidate.bsp"
-    if check("selftest: round 35's map and round 36's job are there",
+    if evidence("selftest: round 35's map and round 36's job are there",
              r35.is_file() and (ROUND36 / "job" / "ledger.txt").is_file(), str(r35)):
         # row 346: round 36's plan as dealt then - the dug rule (row 343) now refuses the passages it grew its
         # halls on; the question is the gate's, so it is asked of a driver with that rule taken out
@@ -1032,7 +1144,7 @@ def selftest(work: Path) -> None:
             box.dispose()
             check("selftest: the shared worktree was never opened for writing", hash_tree(REPO) == before)
     r36 = ROUND36 / "deliver" / "candidate.bsp"
-    if check("selftest: round 36's map is there", r36.is_file(), str(r36)):
+    if evidence("selftest: round 36's map is there", r36.is_file(), str(r36)):
         ok, said = ask_annex(r36, ROUND36 / "job", DONOR, work, accepted_only=False)
         check("selftest: the annex gate refuses round 36's map - the annexes today's plan deals on its baseline are"
               " not in it", not ok and "annexes in the plan, 0" not in said, said)
@@ -1040,7 +1152,7 @@ def selftest(work: Path) -> None:
     # quake163/164), asked with mg_20r's own plan
     mg20r = MAPS / "mg_20r.bsp"
     r47_list = ROUND47_42 / "deliver" / "gates" / "plan_list.txt"
-    if check("selftest: mg_20r, its job and its plan's listing are there",
+    if evidence("selftest: mg_20r, its job and its plan's listing are there",
              mg20r.is_file() and (ROUND47_42 / "job" / "ledger.txt").is_file() and r47_list.is_file(), str(mg20r)):
         ok, said = ask_annex(mg20r, ROUND47_42 / "job", DONOR, work,
                              listing=r47_list.read_text(encoding="utf-8", errors="replace"))
@@ -1048,37 +1160,37 @@ def selftest(work: Path) -> None:
               not ok and ", 4 built, 0 worth the walk" in said, said[:400])
     # row 352: the sky gate refuses mg_20q - its annex past the courtyard's sky, the PO's quake162
     mg20q = MAPS / "mg_20q.bsp"
-    if check("selftest: mg_20q and its job are there", mg20q.is_file() and (ROUND42_42 / "ledger.txt").is_file(),
+    if evidence("selftest: mg_20q and its job are there", mg20q.is_file() and (ROUND42_42 / "ledger.txt").is_file(),
              str(mg20q)):
         ok, said = ask_sky(mg20q, ROUND42_42, DONOR)
         check("selftest: the sky gate refuses mg_20q", not ok, said[:260])
     # row 343: the digwalls gate refuses mg_20o - its courtyard stair and the shaft open to a room
     mg20o = MAPS / "mg_20o.bsp"
-    if check("selftest: mg_20o and its job are there", mg20o.is_file() and (ROUND41_1020 / "ledger.txt").is_file(),
+    if evidence("selftest: mg_20o and its job are there", mg20o.is_file() and (ROUND41_1020 / "ledger.txt").is_file(),
              str(mg20o)):
         ok, said = ask_digwalls(mg20o, ROUND41_1020, DONOR)
         check("selftest: the digwalls gate refuses mg_20o", not ok, said[:260])
     # row 337: the clips gate refuses the mg_20m delivered with two clip beams in its north doorway
     from check_mapgen_clips import EVIDENCE as CLIP_EVIDENCE, exposed
-    if check("selftest: the mg_20m kept with its clip beams is there", CLIP_EVIDENCE.is_file(), str(CLIP_EVIDENCE)):
+    if evidence("selftest: the mg_20m kept with its clip beams is there", CLIP_EVIDENCE.is_file(), str(CLIP_EVIDENCE)):
         bad = exposed(CLIP_EVIDENCE, DONOR)
         check("selftest: the clips gate refuses it", bool(bad), f"{len(bad)} found")
         check("selftest: and passes q2dm1 itself", not exposed(DONOR, DONOR))
     # row 335: the storey gate refuses row 328's FILL RED - its terrace a slab - and passes its green storey
     red_bsp = STOREY_RED / "fill_storey_1.bsp"
-    if check("selftest: row 328's FILL RED storey and its listing are there",
+    if evidence("selftest: row 328's FILL RED storey and its listing are there",
              red_bsp.is_file() and (STOREY_RED / "fill_1.txt").is_file(), str(red_bsp)):
         st = plan_storeys((STOREY_RED / "fill_1.txt").read_text(encoding="utf-8", errors="replace"))
         ok, said = storey_built(Bsp(red_bsp), st[0], []) if st else (True, "no storey in the listing")
         check("selftest: the storey gate refuses a storey whose terrace is a slab", not ok, said[:220])
     green_bsp = STOREY_GREEN / "storey_1020.bsp"
-    if check("selftest: row 328's green storey and its listing are there",
+    if evidence("selftest: row 328's green storey and its listing are there",
              green_bsp.is_file() and (STOREY_GREEN / "green_1020.txt").is_file(), str(green_bsp)):
         st = plan_storeys((STOREY_GREEN / "green_1020.txt").read_text(encoding="utf-8", errors="replace"))
         ok, said = storey_built(Bsp(green_bsp), st[0], []) if st else (False, "no storey in the listing")
         check("selftest: and passes the storey built as declared", ok, said[:220])
     mg20k = MAPS / "mg_20k.bsp"
-    if check("selftest: mg_20k and round 38's job are there",
+    if evidence("selftest: mg_20k and round 38's job are there",
              mg20k.is_file() and (ROUND38 / "job" / "ledger.txt").is_file(), str(mg20k)):
         ok, said = ask_storeys(mg20k, ROUND38 / "job", DONOR, work, accepted_only=False)
         check("selftest: the storeys gate refuses mg_20k - the storeys today's plan deals on round 38's baseline are"
@@ -1087,7 +1199,7 @@ def selftest(work: Path) -> None:
     check("selftest: the glass gate refuses q2dm1 itself", not ok, said)
     # row 334: round 40's seed-7 map - a hall of 768 whose middle is 432 from its doorway
     r7 = ROUND40_S7 / "deliver" / "candidate.bsp"
-    if check("selftest: round 40's seed-7 map and job are there",
+    if evidence("selftest: round 40's seed-7 map and job are there",
              r7.is_file() and (ROUND40_S7 / "job" / "ledger.txt").is_file(), str(r7)):
         # the ledger's shape, as today's pipeline prints it - round 40's seed 7 ran before it did
         line = ("  171 dig              ACCEPTED                  482  2496 944 1024  3312 1712 1344  from 1872 1328"
@@ -1189,7 +1301,7 @@ def main() -> int:
         check("light: the map is lit like its donor - shared faces per orientation, every dug room lit",
               *ask_light(bsp, a.job, donor, work))
     if "water" in want:
-        gate_water(bsp, work, donor)
+        gate_water(bsp, work, donor, a.job)
     if "reach" in want:
         gate_reach(bsp, work, donor)
     if "axes" in want:

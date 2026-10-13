@@ -194,7 +194,9 @@ public static class Covers
                                        .Where(f => File.GetLastWriteTime(f) >= r.Game.Began.AddSeconds(-1))
                                        .OrderBy(File.GetLastWriteTime))
             {
-                File.Move(f, Path.Combine(target, $"cover_{n++:00}.png"), true);
+                var to = Path.Combine(target, $"cover_{n++:00}.png");
+                File.Move(f, to, true);
+                Library.ToJpeg(to);         // the PO, 12.10: a JPEG at a tenth of the PNG's size
             }
         foreach (var t in r.TempFiles)
         {

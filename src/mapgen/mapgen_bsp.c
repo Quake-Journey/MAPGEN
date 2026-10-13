@@ -1267,7 +1267,22 @@ mapgen_bsp_seams_result_t MapGenBsp_SeamsWithin(const mapgen_bsp_t *b,
     return overflowed ? MAPGEN_SEAMS_ERR_FULL : MAPGEN_SEAMS_OK;
 }
 
+static uint32_t standing_water(const mapgen_bsp_t *b, const mapgen_bsp_t *was, const float *lo, const float *hi,
+                               double *out_area);
+
 uint32_t MapGenBsp_StandingWater(const mapgen_bsp_t *b, double *out_area)
+{
+    return standing_water(b, NULL, NULL, NULL, out_area);
+}
+
+uint32_t MapGenBsp_StandingWaterNear(const mapgen_bsp_t *b, const mapgen_bsp_t *was, const float lo[3],
+                                     const float hi[3], double *out_area)
+{
+    return standing_water(b, was, lo, hi, out_area);
+}
+
+static uint32_t standing_water(const mapgen_bsp_t *b, const mapgen_bsp_t *was, const float *lo, const float *hi,
+                               double *out_area)
 {
     if (out_area)
         *out_area = 0.0;
@@ -1335,6 +1350,15 @@ uint32_t MapGenBsp_StandingWater(const mapgen_bsp_t *b, double *out_area)
             || ((cb & STANDING_LIQUID) && !(cf & (STANDING_LIQUID | STANDING_SOLID)));
         if (!water_air)
             continue;
+        if (was && lo && hi) {
+            /* its air somebody could be in: the map's own air before the edit, or the edit's own place */
+            const float *air = (cf & STANDING_LIQUID) ? back : front;
+            bool by_edit = true;
+            for (int a = 0; a < 3 && by_edit; a++)
+                by_edit = air[a] >= lo[a] && air[a] <= hi[a];
+            if (!by_edit && (MapGenBsp_PointContents(was, air) & STANDING_SOLID))
+                continue;
+        }
 
         count++;
         area += 0.5 * sqrt((double)sum[0] * sum[0] + (double)sum[1] * sum[1]

@@ -85,7 +85,9 @@ public sealed class SchemeGlView : OpenGlControlBase
     private SchemeModel.Snapshot? _loaded;
     private int _program, _vao, _vbo, _boxVbo;
     private int _faceCount, _liquidFirst, _liquidCount, _edgeFirst, _edgeCount;
-    private int _uMvp, _uEye, _uCut, _uBias;
+    /* the PO, 11.10 - each stage drawn: the frame's part lines, the lamps' rays, the light pass's portals */
+    private int _partFirst, _partCount, _rayFirst, _rayCount, _portalFirst, _portalCount, _portalLineFirst, _portalLineCount;
+    private int _uMvp, _uEye, _uCut, _uBias, _uMorph, _uGlow, _uVis;
     private bool _es;
     private BlendFunc? _blend;
     private ReadPixels? _read;
@@ -141,7 +143,7 @@ public sealed class SchemeGlView : OpenGlControlBase
                       GL_ONE_MINUS_SRC_ALPHA = 0x0303, GL_COLOR_BUFFER_BIT = 0x4000, GL_DEPTH_BUFFER_BIT = 0x100,
                       GL_VERTEX_SHADER = 0x8B31, GL_FRAGMENT_SHADER = 0x8B30, GL_RGBA = 0x1908, GL_UNSIGNED_BYTE = 0x1401,
                       GL_LEQUAL = 0x0203;
-    private const int Stride = 12;            // x y z, nx ny nz, r g b a, zlo, flags
+    private const int Stride = 15;            // x y z, nx ny nz, r g b a, zlo, flags, and where the frame takes x y z
 
     public SchemeGlView(SchemeModel model, Func<Generation?> run, SchemeCamera camera)
     {
@@ -158,16 +160,21 @@ layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec4 aColor;
 layout(location = 3) in float aZlo;
 layout(location = 4) in float aFlags;
+layout(location = 5) in vec3 aTarget;
 uniform mat4 uMvp;
 uniform float uBias;
+uniform float uMorph;
+uniform float uGlow;
 out vec4 vColor;
 out vec3 vNormal;
 out vec3 vWorld;
 out float vZlo;
 out float vFlags;
 void main() {
-    vColor = aColor; vNormal = aNormal; vWorld = aPos; vZlo = aZlo; vFlags = aFlags;
-    gl_Position = uMvp * vec4(aPos, 1.0);
+    // a ray grows from its lamp (aTarget) out to its tip; a portal stays; the map goes from the donor to its frame
+    vec3 p = aFlags >= 8.0 ? mix(aTarget, aPos, uGlow) : aFlags >= 4.0 ? aPos : mix(aPos, aTarget, uMorph);
+    vColor = aColor; vNormal = aNormal; vWorld = p; vZlo = aZlo; vFlags = aFlags;
+    gl_Position = uMvp * vec4(p, 1.0);
     gl_Position.z -= uBias * gl_Position.w;
 }";
 
@@ -180,8 +187,19 @@ in float vZlo;
 in float vFlags;
 uniform vec3 uEye;
 uniform float uCut;
+uniform float uVis;
 out vec4 outColor;
 void main() {
+    if (vFlags >= 8.0) { outColor = vColor; return; }
+    if (vFlags >= 4.0) {
+        // a portal: vZlo its turn in the visibility's wave - done green, still to come faint cyan, the front bright
+        if (vWorld.z > uCut + 1.0) discard;
+        bool done = vZlo <= uVis;
+        vec4 c = done ? vec4(0.29, 0.87, 0.50, 0.24) : vec4(0.13, 0.83, 0.93, 0.07);
+        if (done && vZlo > uVis - 0.04) c = vec4(0.85, 1.0, 0.90, 0.70);
+        outColor = vec4(c.rgb, min(1.0, c.a * vColor.a));
+        return;
+    }
     bool wall = mod(vFlags, 2.0) >= 1.0;
     bool both = vFlags >= 2.0;
     if (!wall && vZlo > uCut + 1.0) discard;
@@ -211,6 +229,9 @@ void main() {
             _uEye = gl.GetUniformLocationString(_program, "uEye");
             _uCut = gl.GetUniformLocationString(_program, "uCut");
             _uBias = gl.GetUniformLocationString(_program, "uBias");
+            _uMorph = gl.GetUniformLocationString(_program, "uMorph");
+            _uGlow = gl.GetUniformLocationString(_program, "uGlow");
+            _uVis = gl.GetUniformLocationString(_program, "uVis");
             _vao = gl.GenVertexArray();
             _vbo = gl.GenBuffer();
             _boxVbo = gl.GenBuffer();
@@ -258,12 +279,112 @@ void main() {
         Ready = false;
     }
 
-    private static void Put(List<float> v, Vector3 p, Vector3 n, (float r, float g, float b, float a) c, float zlo, float flags)
+    private static void Put(List<float> v, Vector3 p, Vector3 n, (float r, float g, float b, float a) c, float zlo, float flags,
+                            Vector3? target = null)
     {
         v.Add(p.X); v.Add(p.Y); v.Add(p.Z);
         v.Add(n.X); v.Add(n.Y); v.Add(n.Z);
         v.Add(c.r); v.Add(c.g); v.Add(c.b); v.Add(c.a);
         v.Add(zlo); v.Add(flags);
+        var t = target ?? p;
+        v.Add(t.X); v.Add(t.Y); v.Add(t.Z);
+    }
+
+    /* the parts of a frame, told apart by a soft tint each (the PO, 11.10: the frame drawn) */
+    private static readonly (float r, float g, float b)[] BandHues =
+    {
+        (0.96f, 0.62f, 0.04f), (0.23f, 0.51f, 0.96f), (0.13f, 0.77f, 0.37f), (0.66f, 0.55f, 0.98f), (0.96f, 0.45f, 0.71f),
+        (0.18f, 0.83f, 0.75f),
+    };
+
+    /// <summary>The frame's part lines, the lamps' rays and the portals, after the map in the same buffer.</summary>
+    private static void Stages(SchemeModel.Snapshot s, WarpMap? warp, List<float> parts, List<float> rays, List<float> portals,
+                               List<float> portalLines)
+    {
+        var up = Vector3.UnitZ;
+        if (warp != null)
+        {
+            // each cut of the donor as a frame line on the floor and at the top, carried with the stretch
+            var amber = (0.96f, 0.62f, 0.04f, 0.85f);
+            var lo = s.Faces.Count > 0 ? s.Faces.SelectMany(f => f.V).Aggregate(Vector3.Min) : Vector3.Zero;
+            var hi = s.Faces.Count > 0 ? s.Faces.SelectMany(f => f.V).Aggregate(Vector3.Max) : Vector3.Zero;
+            void Segmented(Vector3 a, Vector3 c)
+            {
+                const int n = 24;
+                for (var i = 0; i < n; i++)
+                {
+                    var p0 = Vector3.Lerp(a, c, i / (float)n);
+                    var p1 = Vector3.Lerp(a, c, (i + 1) / (float)n);
+                    Put(parts, p0, up, amber, -1e9f, 3, warp.Apply(p0));
+                    Put(parts, p1, up, amber, -1e9f, 3, warp.Apply(p1));
+                }
+            }
+            for (var axis = 0; axis < 2; axis++)
+                foreach (var cut in warp.At[axis])
+                    foreach (var z in new[] { lo.Z, hi.Z })
+                        if (axis == 0)
+                            Segmented(new Vector3(cut, lo.Y, z), new Vector3(cut, hi.Y, z));
+                        else
+                            Segmented(new Vector3(lo.X, cut, z), new Vector3(hi.X, cut, z));
+        }
+        // each lamp's rays: from the lamp out, as long as the lamp is strong, in its colour fading to nothing
+        var dirs = new List<Vector3>();
+        for (var k = 0; k < 10; k++)
+        {
+            var a = k * MathF.PI * 2 / 10;
+            dirs.Add(new Vector3(MathF.Cos(a), MathF.Sin(a), -0.35f));
+        }
+        dirs.Add(new Vector3(0, 0, -1));
+        dirs.Add(new Vector3(0.4f, 0.3f, -0.9f));
+        dirs.Add(new Vector3(-0.35f, -0.4f, -0.85f));
+        foreach (var lamp in s.Lamps.Take(600))
+        {
+            var col = (lamp.Colour.X, lamp.Colour.Y, lamp.Colour.Z, 0.55f);
+            var tip = (lamp.Colour.X, lamp.Colour.Y, lamp.Colour.Z, 0f);
+            var reach = 48f + Math.Clamp(lamp.Level, 50f, 1200f) * 0.55f;
+            if (lamp.Toward is { } to && Vector3.Distance(to, lamp.At) > 1)
+            {
+                var d = Vector3.Normalize(to - lamp.At);
+                var side = Vector3.Normalize(Vector3.Cross(d, Math.Abs(d.Z) < 0.9f ? up : Vector3.UnitX));
+                var other = Vector3.Cross(d, side);
+                Put(rays, lamp.At, up, (col.X, col.Y, col.Z, 0.85f), -1e9f, 8, lamp.At);
+                Put(rays, lamp.At + d * reach * 1.6f, up, tip, -1e9f, 8, lamp.At);
+                for (var k = 0; k < 8; k++)
+                {
+                    var a = k * MathF.PI / 4;
+                    var e = Vector3.Normalize(d + 0.35f * (MathF.Cos(a) * side + MathF.Sin(a) * other));
+                    Put(rays, lamp.At, up, col, -1e9f, 8, lamp.At);
+                    Put(rays, lamp.At + e * reach * 1.3f, up, tip, -1e9f, 8, lamp.At);
+                }
+                continue;
+            }
+            foreach (var d0 in dirs)
+            {
+                var d = Vector3.Normalize(d0);
+                Put(rays, lamp.At, up, col, -1e9f, 8, lamp.At);
+                Put(rays, lamp.At + d * reach, up, tip, -1e9f, 8, lamp.At);
+            }
+        }
+        // the portals: each one's turn in the visibility's wave in its zlo, 0 first to 1 last
+        if (s.Portals is { Count: > 0 } ps)
+            for (var i = 0; i < ps.Count; i++)
+            {
+                var poly = ps[i];
+                var order = (i + 0.5f) / ps.Count;
+                var n = Vector3.Cross(poly[1] - poly[0], poly[2] - poly[0]);
+                n = n.LengthSquared() > 0 ? Vector3.Normalize(n) : up;
+                for (var k = 1; k + 1 < poly.Length; k++)
+                {
+                    Put(portals, poly[0], n, (1f, 1f, 1f, 1f), order, 4);
+                    Put(portals, poly[k], n, (1f, 1f, 1f, 1f), order, 4);
+                    Put(portals, poly[k + 1], n, (1f, 1f, 1f, 1f), order, 4);
+                }
+                for (var k = 0; k < poly.Length; k++)
+                {
+                    Put(portalLines, poly[k], n, (1f, 1f, 1f, 3.6f), order, 4);
+                    Put(portalLines, poly[(k + 1) % poly.Length], n, (1f, 1f, 1f, 3.6f), order, 4);
+                }
+            }
     }
 
     /// <summary>The map into the card: opaque faces, then the liquids, then every face's edges.</summary>
@@ -274,6 +395,7 @@ void main() {
         var opaque = new List<float>(s.Faces.Count * 6 * Stride);
         var liquid = new List<float>();
         var edges = new List<float>(s.Faces.Count * 8 * Stride);
+        var warp = s.Warp is { } w0 && s.IsDonor ? w0 : null;
         foreach (var f in s.Faces)
         {
             if (f.Kind == 2 || f.V.Length < 3)
@@ -294,28 +416,54 @@ void main() {
             var isLiquid = f.Kind is 3 or 4 or 5;
             var flags = (f.Kind == 1 ? 1f : 0f) + (isLiquid ? 2f : 0f);
             var into = isLiquid ? liquid : opaque;
+            Vector3 T(Vector3 v) => warp?.Apply(v) ?? v;
+            if (warp != null && !isLiquid)
+            {
+                var mid = Vector3.Zero;
+                foreach (var v in f.V)
+                    mid += v;
+                var (bx, by) = warp.Band(mid / f.V.Length);
+                var hue = BandHues[(bx * 2 + by * 3) % BandHues.Length];
+                c = (c.Item1 * 0.62f + hue.r * 0.38f, c.Item2 * 0.62f + hue.g * 0.38f, c.Item3 * 0.62f + hue.b * 0.38f, c.Item4);
+            }
             for (var i = 1; i + 1 < f.V.Length; i++)
             {
-                Put(into, f.V[0], f.N, c, f.ZLo, flags);
-                Put(into, f.V[i], f.N, c, f.ZLo, flags);
-                Put(into, f.V[i + 1], f.N, c, f.ZLo, flags);
+                Put(into, f.V[0], f.N, c, f.ZLo, flags, T(f.V[0]));
+                Put(into, f.V[i], f.N, c, f.ZLo, flags, T(f.V[i]));
+                Put(into, f.V[i + 1], f.N, c, f.ZLo, flags, T(f.V[i + 1]));
             }
             var edge = (0f, 0f, 0f, f.Kind == 1 ? 0.30f : 0.18f);
             for (var i = 0; i < f.V.Length; i++)
             {
-                Put(edges, f.V[i], f.N, edge, f.ZLo, flags);
-                Put(edges, f.V[(i + 1) % f.V.Length], f.N, edge, f.ZLo, flags);
+                Put(edges, f.V[i], f.N, edge, f.ZLo, flags, T(f.V[i]));
+                Put(edges, f.V[(i + 1) % f.V.Length], f.N, edge, f.ZLo, flags, T(f.V[(i + 1) % f.V.Length]));
             }
         }
+        var parts = new List<float>();
+        var rays = new List<float>();
+        var portals = new List<float>();
+        var portalLines = new List<float>();
+        Stages(s, warp, parts, rays, portals, portalLines);
         _faceCount = opaque.Count / Stride;
         _liquidFirst = _faceCount;
         _liquidCount = liquid.Count / Stride;
         _edgeFirst = _liquidFirst + _liquidCount;
         _edgeCount = edges.Count / Stride;
-        var all = new float[opaque.Count + liquid.Count + edges.Count];
-        opaque.CopyTo(all, 0);
-        liquid.CopyTo(all, opaque.Count);
-        edges.CopyTo(all, opaque.Count + liquid.Count);
+        _partFirst = _edgeFirst + _edgeCount;
+        _partCount = parts.Count / Stride;
+        _rayFirst = _partFirst + _partCount;
+        _rayCount = rays.Count / Stride;
+        _portalFirst = _rayFirst + _rayCount;
+        _portalCount = portals.Count / Stride;
+        _portalLineFirst = _portalFirst + _portalCount;
+        _portalLineCount = portalLines.Count / Stride;
+        var all = new float[opaque.Count + liquid.Count + edges.Count + parts.Count + rays.Count + portals.Count + portalLines.Count];
+        var at = 0;
+        foreach (var list in new[] { opaque, liquid, edges, parts, rays, portals, portalLines })
+        {
+            list.CopyTo(all, at);
+            at += list.Count;
+        }
         gl.BindBuffer(GL_ARRAY_BUFFER, _vbo);
         fixed (float* p = all)
             gl.BufferData(GL_ARRAY_BUFFER, new IntPtr(all.Length * 4), new IntPtr(p), GL_STATIC_DRAW);
@@ -327,13 +475,14 @@ void main() {
 
     private void Attribs(GlInterface gl)
     {
-        for (var i = 0; i < 5; i++)
+        for (var i = 0; i < 6; i++)
             gl.EnableVertexAttribArray(i);
         gl.VertexAttribPointer(0, 3, GL_FLOAT, 0, Stride * 4, IntPtr.Zero);
         gl.VertexAttribPointer(1, 3, GL_FLOAT, 0, Stride * 4, new IntPtr(3 * 4));
         gl.VertexAttribPointer(2, 4, GL_FLOAT, 0, Stride * 4, new IntPtr(6 * 4));
         gl.VertexAttribPointer(3, 1, GL_FLOAT, 0, Stride * 4, new IntPtr(10 * 4));
         gl.VertexAttribPointer(4, 1, GL_FLOAT, 0, Stride * 4, new IntPtr(11 * 4));
+        gl.VertexAttribPointer(5, 3, GL_FLOAT, 0, Stride * 4, new IntPtr(12 * 4));
     }
 
     /// <summary>The edits as boxes this frame: the one tried blinking blue, refused red fading, accepted green to brown.</summary>
@@ -374,7 +523,8 @@ void main() {
             {
                 if (pe.Index <= rg.AtEdit || pe.Box is not { } pb || (cut is { } pc && pb[2] > pc + 1))
                     continue;
-                var colour = Generation.Category(pe.Family, pe.Shape) switch
+                var colour = Generation.ChangesBase(pe.Family) ? (0x2d / 255f, 0xd4 / 255f, 0xbf / 255f)
+                    : Generation.Category(pe.Family, pe.Shape) switch
                 {
                     "digs" or "annexes" or "storeys" => (0xf5 / 255f, 0x9e / 255f, 0x0b / 255f),
                     "spans" => (0xa7 / 255f, 0x8b / 255f, 0xfa / 255f),
@@ -390,7 +540,14 @@ void main() {
             if (e.Box is not { } b || (cut is { } c && b[2] > c + 1))
                 continue;
             var age = (now - e.Seen).TotalSeconds;
-            if (e.Verdict == "ACCEPTED")
+            if (e.Verdict == "ACCEPTED" && Generation.ChangesBase(e.Family) && Editing())
+            {
+                /* the base itself changed: teal (purple read as the refusal's red - the PO 08.10), while the edits go
+                   on; after them it fades as the green ones do */
+                var k = e.Old ? 1 : Math.Clamp((age - 20) / 10, 0, 1);
+                Box(b, (0x2d / 255f, 0xd4 / 255f, 0xbf / 255f), e.Old ? 0.30 : 0.70 - 0.40 * k);
+            }
+            else if (e.Verdict == "ACCEPTED")
             {
                 var k = e.Old ? 1 : Math.Clamp((age - 20) / 10, 0, 1);
                 var col = ((float)(0x22 + (0x9a - 0x22) * k) / 255f, (float)(0xc5 + (0x6a - 0xc5) * k) / 255f,
@@ -414,6 +571,9 @@ void main() {
         }
         return v;
     }
+
+    /* the edits stage: the base's changes shown apart only then */
+    private bool Editing() => _run() is { Running: true, Stage: "attempt" or "plan" or "resume" or "baseline" };
 
     protected override void OnSizeChanged(SizeChangedEventArgs e)
     {
@@ -507,6 +667,10 @@ void main() {
         if (uEye3 != IntPtr.Zero)
             Marshal.GetDelegateForFunctionPointer<Uniform3f>(uEye3)(_uEye, eye.X, eye.Y, eye.Z);
         gl.Uniform1f(_uCut, Camera.Cut is { } cut ? (float)cut : 1e9f);
+        var art = StageArt.Now(_run(), s);
+        gl.Uniform1f(_uMorph, art.Morph);
+        gl.Uniform1f(_uGlow, art.Glow);
+        gl.Uniform1f(_uVis, art.Vis);
         gl.Enable(GL_DEPTH_TEST);
         gl.DepthFunc(GL_LEQUAL);
         gl.DepthMask(1);
@@ -521,6 +685,22 @@ void main() {
         gl.Uniform1f(_uBias, 0);
         gl.DepthMask(0);
         gl.DrawArrays(GL_TRIANGLES, _liquidFirst, new IntPtr(_liquidCount));
+        // the stage under way over the map: the frame's lines, the portals as the visibility reaches them, the rays
+        if (_partCount > 0)
+        {
+            gl.Disable(GL_DEPTH_TEST);
+            gl.DrawArrays(GL_LINES, _partFirst, new IntPtr(_partCount));
+            gl.Enable(GL_DEPTH_TEST);
+        }
+        if (art.Portals && _portalCount > 0)
+        {
+            gl.Disable(GL_DEPTH_TEST);
+            gl.DrawArrays(GL_TRIANGLES, _portalFirst, new IntPtr(_portalCount));
+            gl.DrawArrays(GL_LINES, _portalLineFirst, new IntPtr(_portalLineCount));
+            gl.Enable(GL_DEPTH_TEST);
+        }
+        if (art.Lamps && art.Glow > 0 && _rayCount > 0)
+            gl.DrawArrays(GL_LINES, _rayFirst, new IntPtr(_rayCount));
         // the edits over everything, as the CPU drawing had them
         var boxes = Boxes(Camera.Cut).ToArray();
         if (boxes.Length > 0)
@@ -553,8 +733,11 @@ void main() {
 /// What is drawn over the card's picture each beat - cheap, a hundred marks and a few lines of text: the pickups and
 /// spawns at their places, the edit being tried pinned and named, the last events in the corner.
 /// </summary>
-public sealed class SchemeOverlay : Control
+public sealed class SchemeOverlay : Control, CopyText.IDrawnText
 {
+    /// <summary>Brief 15: the words this overlay drew last (its feed and its labels) - for «Копировать».</summary>
+    public string DrawnText { get; private set; } = "";
+
     private readonly SchemeModel _model;
     private readonly Func<Generation?> _run;
     private readonly SchemeCamera _live;
@@ -585,16 +768,96 @@ public sealed class SchemeOverlay : Control
         }
         var size = Bounds.Size;
         var _camera = Under?.Invoke() ?? _live;
-        foreach (var (what, at) in s.Marks)
+        var run = _run();
+        var art = StageArt.Now(run, s);
+        // the PO, 11.10: the light's stage - each lamp a glow in its colour, growing as the light spreads; a spotlight's
+        // beam to where it points
+        if (art.Lamps)
         {
+            var pulse = 0.85 + 0.15 * Math.Sin(DateTime.Now.TimeOfDay.TotalSeconds * 3.1);
+            foreach (var lamp in s.Lamps.Take(600))
+            {
+                if (_camera.Cut is { } lc && lamp.At.Z > lc + 64)
+                    continue;
+                if (_camera.Project(lamp.At, size) is not { } lp)
+                    continue;
+                var colour = Color.FromRgb((byte)(255 * lamp.Colour.X), (byte)(255 * lamp.Colour.Y), (byte)(255 * lamp.Colour.Z));
+                var r = (7 + 16 * Math.Sqrt(Math.Clamp(lamp.Level, 50, 1200) / 300.0)) * (0.45 + 0.9 * art.Glow) * pulse;
+                var glow = new RadialGradientBrush
+                {
+                    GradientStops =
+                    {
+                        new GradientStop(Color.FromArgb(0xe0, colour.R, colour.G, colour.B), 0),
+                        new GradientStop(Color.FromArgb(0x55, colour.R, colour.G, colour.B), 0.35),
+                        new GradientStop(Color.FromArgb(0, colour.R, colour.G, colour.B), 1),
+                    },
+                };
+                ctx.DrawEllipse(glow, null, lp, r, r);
+                ctx.DrawEllipse(Brushes.White, null, lp, 2.2, 2.2);
+                if (lamp.Toward is { } to && _camera.Project(to, size) is { } tp)
+                    ctx.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb((byte)(80 + 140 * art.Glow), colour.R, colour.G, colour.B)), 2,
+                                         dashStyle: new DashStyle(new double[] { 4, 3 }, 0)), lp, tp);
+            }
+        }
+        // the visibility's stage: an eye at the wave's front looking at the portals checked next - what sees what
+        if (art.Portals && s.Portals is { Count: > 0 } ps)
+        {
+            var front = Math.Clamp((int)(art.Vis * ps.Count), 0, ps.Count - 1);
+            var eye3 = StageArt.Mid(ps[front]);
+            if ((_camera.Cut is not { } ec || eye3.Z <= ec + 64) && _camera.Project(eye3, size) is { } eye)
+            {
+                var t = DateTime.Now.TimeOfDay.TotalSeconds;
+                var cyan = Color.FromRgb(0x22, 0xd3, 0xee);
+                for (var k = 1; k <= 18 && front + k < ps.Count; k++)
+                {
+                    var at3 = StageArt.Mid(ps[front + k]);
+                    if (_camera.Cut is { } pc && at3.Z > pc + 64)
+                        continue;
+                    if (_camera.Project(at3, size) is not { } at)
+                        continue;
+                    var a = (byte)(200 - k * 9);
+                    ctx.DrawLine(new Pen(new SolidColorBrush(Color.FromArgb(a, cyan.R, cyan.G, cyan.B)), 1.4), eye, at);
+                    ctx.DrawEllipse(new SolidColorBrush(Color.FromArgb(a, cyan.R, cyan.G, cyan.B)), null, at, 2.5, 2.5);
+                }
+                // the portals just reached: rings that widen and fade
+                for (var k = 0; k < 10 && front - k * 3 >= 0; k++)
+                {
+                    var at3 = StageArt.Mid(ps[front - k * 3]);
+                    if (_camera.Project(at3, size) is not { } at)
+                        continue;
+                    var phase = (t * 1.5 + k * 0.17) % 1.0;
+                    var green = Color.FromArgb((byte)(200 * (1 - phase)), 0x4a, 0xde, 0x80);
+                    ctx.DrawEllipse(null, new Pen(new SolidColorBrush(green), 2), at, 4 + 14 * phase, 4 + 14 * phase);
+                }
+                var pulse = 7 + 2 * Math.Sin(t * 5);
+                ctx.DrawEllipse(new SolidColorBrush(Color.FromArgb(0x60, 0xff, 0xff, 0xff)), null, eye, pulse + 6, pulse + 6);
+                ctx.DrawEllipse(Brushes.White, new Pen(new SolidColorBrush(cyan), 2), eye, pulse, pulse * 0.62);
+                ctx.DrawEllipse(new SolidColorBrush(Color.FromRgb(0x0e, 0x74, 0x90)), null, eye, pulse * 0.45, pulse * 0.45);
+            }
+        }
+        // the frame's stage: the marks go with the map as it stretches
+        var morph = s.Warp is { } warp && s.IsDonor ? warp : null;
+        foreach (var (what, at0) in s.Marks)
+        {
+            var at = morph != null ? Vector3.Lerp(at0, morph.Apply(at0), art.Morph) : at0;
             if (_camera.Cut is { } c && at.Z > c + 64)
                 continue;
             if (_camera.Project(at, size) is { } p)
                 Mark(ctx, what, p);
         }
+        // what the stage is doing, in words, at the top right
+        if (art.Caption.Length > 0)
+        {
+            var t = new FormattedText(art.Caption, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                                      new Typeface(Typeface.Default.FontFamily, FontStyle.Normal, FontWeight.SemiBold), 15, Brushes.White);
+            var w = Math.Min(t.Width, Math.Max(200, size.Width - 40));
+            var box = new Rect(size.Width - w - 34, 12, w + 22, t.Height + 12);
+            ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(0xc8, 0x14, 0x16, 0x1c)), box, 8);
+            ctx.DrawRectangle(null, new Pen(new SolidColorBrush(Color.FromArgb(0x90, 0xfb, 0xbf, 0x24)), 1), box, 8);
+            ctx.DrawText(t, new Point(box.X + 11, box.Y + 6));
+        }
         var now = DateTime.Now;
         var feed = new List<(IBrush dot, string text)>();
-        var run = _run();
         if (run is { Running: true, Stage: "light" } lr && lr.LightNow() is { Length: > 0 } step)
             feed.Add((new SolidColorBrush(Color.FromRgb(0xfb, 0xbf, 0x24)), Loc.F("scheme.light", step)));
         else if (s.Lit && run is not { Stage: "attempt" or "plan" or "baseline" or "resume" })
@@ -620,6 +883,32 @@ public sealed class SchemeOverlay : Control
             }
             feed.Add((new SolidColorBrush(Color.FromRgb(0x60, 0xa5, 0xfa)), $"{Loc.T("scheme.trying")}: {Kind(g.TryFamily)}  {(int)since.TotalMinutes}:{since.Seconds:00}"));
         }
+        List<SchemeModel.Edit> rebuilt;
+        /* named only while the edits go on (the PO, 08.10: the labels filled the light's stage) */
+        var editing = run is { Running: true, Stage: "attempt" or "plan" or "resume" or "baseline" };
+        lock (_model.Sync)
+            rebuilt = editing
+                ? _model.Edits.Where(x => x.Verdict == "ACCEPTED" && Generation.ChangesBase(x.Family) && x.Box != null)
+                                  .Reverse().Take(24).ToList()
+                : new List<SchemeModel.Edit>();
+        /* the PO, 08.10: «отдельным цветом и надписью» - each change of the base named over its box */
+        var purple = Color.FromRgb(0x2d, 0xd4, 0xbf);
+        foreach (var e in rebuilt)
+        {
+            var b = e.Box!;
+            if (_camera.Cut is { } c && b[2] > c + 1)
+                continue;
+            var top = new Vector3((b[0] + b[3]) / 2, (b[1] + b[4]) / 2, b[5]);
+            if (_camera.Project(top, size) is not { } at)
+                continue;
+            var t = new FormattedText(Kind(e.Family), CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, Typeface.Default,
+                                      12, Brushes.White);
+            ctx.FillRectangle(new SolidColorBrush(Color.FromArgb(0xc8, 0x0f, 0x4f, 0x4a)),
+                              new Rect(at.X - t.Width / 2 - 5, at.Y - t.Height - 6, t.Width + 10, t.Height + 4), 3);
+            ctx.DrawRectangle(null, new Pen(new SolidColorBrush(purple), 1),
+                              new Rect(at.X - t.Width / 2 - 5, at.Y - t.Height - 6, t.Width + 10, t.Height + 4), 3);
+            ctx.DrawText(t, new Point(at.X - t.Width / 2, at.Y - t.Height - 4));
+        }
         List<SchemeModel.Edit> edits;
         lock (_model.Sync)
             edits = _model.Edits.Where(x => !x.Old && x.Verdict != "REJECTED_NOT_APPLIED").Reverse().Take(7).ToList();
@@ -627,13 +916,15 @@ public sealed class SchemeOverlay : Control
         var timeline = edits.Select(e =>
         {
             var ok = e.Verdict == "ACCEPTED";
-            return (when: e.Seen, dot: (IBrush)new SolidColorBrush(ok ? Color.FromRgb(0x4a, 0xde, 0x80) : Color.FromRgb(0xf8, 0x71, 0x71)),
-                    text: $"{Loc.T(ok ? "verdict.accepted" : "verdict.rejected")}: {Kind(e.Family)}  {e.Seen:HH:mm:ss}");
+            var rebuild = ok && Generation.ChangesBase(e.Family);
+            return (when: e.Seen, dot: (IBrush)new SolidColorBrush(rebuild ? purple : ok ? Color.FromRgb(0x4a, 0xde, 0x80) : Color.FromRgb(0xf8, 0x71, 0x71)),
+                    text: $"{Loc.T(rebuild ? "verdict.rebuilt" : ok ? "verdict.accepted" : "verdict.rejected")}: {Kind(e.Family)}  {e.Seen:HH:mm:ss}");
         }).Concat((run?.Events() ?? new()).Select(x => (when: x.when, dot: (IBrush)new SolidColorBrush(Color.FromRgb(0xc4, 0xb5, 0xfd)),
                                                         text: $"{x.what}  {x.when:HH:mm:ss}")))
           .OrderByDescending(x => x.when).Take(7);
         foreach (var x in timeline)
             feed.Add((x.dot, x.text));
+        DrawnText = string.Join(Environment.NewLine, feed.Select(f => f.text).Concat(rebuilt.Select(e => Kind(e.Family))));
         if (feed.Count > 0)
         {
             var texts = feed.Select(f => new FormattedText(f.text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
@@ -649,7 +940,7 @@ public sealed class SchemeOverlay : Control
         }
     }
 
-    private static void Mark(DrawingContext ctx, string what, Point p)
+    internal static void Mark(DrawingContext ctx, string what, Point p)
     {
         switch (what)
         {
@@ -802,11 +1093,15 @@ public sealed class SchemeHost : Panel
     /// <summary>One frame: the card asked to draw again, the overlay redrawn; the CPU's drawing if the card failed.</summary>
     private void Beat()
     {
-        if (_model.Current is { } s && _fitted == null)
+        if (_model.Current is { } s && (_fitted == null || Grown(_fitted, s)))
         {
             _fitted = s;
             Camera.Fit(s);
         }
+        var moving = StageArt.Moving(_run(), _model.Current);
+        var want = TimeSpan.FromMilliseconds(moving ? 33 : 100);
+        if (_timer.Interval != want)
+            _timer.Interval = want;
         if (_cpu == null && _gl.Failed)
         {
             // the card could not be used: the CPU's drawing in its place (slower, the same picture)
@@ -821,6 +1116,14 @@ public sealed class SchemeHost : Panel
         }
         _gl.RequestNextFrameRendering();
         _overlay.InvalidateVisual();
+    }
+
+    /// <summary>The map's extent changed by more than a third (the donor and its frame, a base 10 times larger).</summary>
+    private static bool Grown(SchemeModel.Snapshot was, SchemeModel.Snapshot now)
+    {
+        var a = was.Max - was.Min;
+        var b = now.Max - now.Min;
+        return MathF.Abs(a.X - b.X) > a.X / 3 || MathF.Abs(a.Y - b.Y) > a.Y / 3;
     }
 
     public void Top()

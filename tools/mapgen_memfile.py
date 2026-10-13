@@ -117,7 +117,8 @@ def compile_bsp_in_memory(compiler, stages: list[list[str]], bsp: bytes, prt: by
     if not compiler_has_memory_files(compiler):
         return None, None
     import mapgen_load_guard as guard
-    room = max(64 << 20, 4 * len(bsp) + (16 << 20))
+    # brief 18 D1: a large map's lightmap may grow past 8 MB (the relight raises -maxdata to what it needs)
+    room = max(64 << 20, 6 * len(bsp) + (48 << 20))
     results = []
     with Sections(unique_dir(label), "q2mg", room) as mem:
         mem["bsp"].put(bsp)

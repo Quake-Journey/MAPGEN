@@ -46,7 +46,7 @@ DEFAULT_WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260831"
                     r"\synthesis")
 
 MAPGEN = [
-    "src/mapgen/mapgen_pipeline.c",
+    "src/mapgen/mapgen_pipeline.c", "src/mapgen/mapgen_warp.c",
     "src/mapgen/mapgen_transaction.c",
     "src/mapgen/mapgen_equivalence.c",
     "src/mapgen/mapgen_synthesis.c",
@@ -267,7 +267,7 @@ def red(work: Path) -> None:
         target.write_bytes(data.replace(anchor, patched, 1))
         red_exe = box.root / "red.exe"
         err = build(box.root, ["tools/mapgen_generate.c"] + [
-            s for s in MAPGEN if s not in ("src/mapgen/mapgen_pipeline.c",
+            s for s in MAPGEN if s not in ("src/mapgen/mapgen_pipeline.c", "src/mapgen/mapgen_warp.c",
                                            "src/mapgen/mapgen_transaction.c",
                                            "src/mapgen/mapgen_compiler.c",
                                            "src/mapgen/mapgen_divergence.c",

@@ -17,6 +17,10 @@ Brief 14 F3 (the PO, quake223 at 1398 1729 926: «Левые текстуры н
 `blum15_1`, a wall of lit panels, for its sides): every dealt stairway of the cases above and of q2dm1 6662/99 with
 10 stairways wears ONE floor material for treads and sides, never a light, sky, liquid, glass or nodraw texture of
 the donor nor a `ceil*` one. RED: the sides from the nearest wall again - the PO's case goes red.
+Brief 15 (the PO 08.10, mg_5_6675: «Лестницы-пристройки ... бессмысленные», his picture of stairs up the walls to the
+upper floor): every stairway is an ASCENT to a tier the wall carries, or meets a walkway past its landing's end - none
+holds a pickup on a landing of its own any more. An ascent follows a bent wall (its steps up to 48 off the line from
+its foot to its top), and one whose first flight comes from the room is checked from its foot to its turn.
 RED: the same generator with the landing's support taken out (`g_stair_support`, a sandbox copy): the landing is a
 slab in the air - the case above goes red. The back's check has no RED here: none of the five stairways dealt on the
 two donors at 42/58 stands at a receding wall, with the back's reach or without it (measured 07.10) - its proof is the
@@ -108,11 +112,15 @@ def standing(tree, s: dict) -> list[str]:
     if any(tree_solid(tree, (top[0], top[1], top[2] + h)) for h in (8, 40, 64)):
         bad.append("no headroom over the landing")
     fx, fy, tx, ty, n = s["foot"][0], s["foot"][1], top[0], top[1], s["steps"]
+    if "turn" in s:                                  # brief 15: the first flight from the room, to its turn
+        (tx, ty, _), n = s["turn"]
     run = max(1.0, ((tx - fx) ** 2 + (ty - fy) ** 2) ** 0.5)
+    ax, ay = -(ty - fy) / run, (tx - fx) / run
     for i in range(n):
-        f = (24.0 + 32.0 * (i + 0.5)) / run          # the flight starts 24 past the foot, a tread is 32
+        f = min(1.0, (24.0 + 32.0 * (i + 0.5)) / run)  # the flight starts 24 past the foot, a tread is 32
         x, y = fx + (tx - fx) * f, fy + (ty - fy) * f
-        if not tree_solid(tree, (x, y, floor + 6)):
+        # an ascent following a bent wall stands up to 48 off the line across it
+        if not any(tree_solid(tree, (x + ax * o, y + ay * o, floor + 6)) for o in (0, -12, 12, -24, 24, -36, 36, -48, 48)):
             bad.append(f"step {i + 1} missing at {x:.0f} {y:.0f}")
             break
     return bad
@@ -158,7 +166,7 @@ def run(exe: Path, work: Path, tag: str) -> dict:
             mp = work / f"{tag}_{donor}_{k}.map"
             said = drive(exe, str(bsp), "--seed", seed, "--ambition", amb, "--stairways", "3", "--apply", edit,
                          "--out", str(mp))
-            if re.search(r"^apply \d+: OK, changed no", said, re.M):
+            if re.search(r"^apply \d+(?: \([^)]*\))?: OK, changed no", said, re.M):
                 why = re.search(r"^declined: (.*)$", said, re.M)
                 results.append((s, ["declined: " + (why.group(1) if why else "?")]))
                 continue

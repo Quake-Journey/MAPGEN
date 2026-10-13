@@ -35,7 +35,8 @@ STUDIO = Path(r"O:\Claude2\MapgenStudio")
 WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\plan_options")
 # the plan's options and how many words follow each, as the Studio passes them (Options.Args())
 PLAN_FLAGS = {"--digs": 1, "--annexes": 4, "--storeys": 1, "--spans": 1, "--halls": 1, "--liquids": 1, "--decor": 1,
-              "--stairways": 1, "--new-water": 1, "--new-slime": 1, "--new-lava": 1}
+              "--stairways": 1, "--new-water": 1, "--new-slime": 1, "--new-lava": 1, "--remodels": 1, "--blocks": 1,
+              "--floor-shifts": 1, "--stair-reshapes": 1}
 FAILS = 0
 
 

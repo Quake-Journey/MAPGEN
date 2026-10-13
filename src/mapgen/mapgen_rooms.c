@@ -50,6 +50,7 @@ struct mapgen_rooms_s {
 
     mapgen_room_t      rooms[MAPGEN_ROOMS_MAX];
     uint32_t           num_rooms;
+    uint32_t           seeds_lost;  /* brief 18: cells that were a room's middle with the table of rooms full */
     mapgen_room_link_t links[MAPGEN_ROOMS_MAX_LINKS];
     uint32_t           num_links;
 };
@@ -255,6 +256,8 @@ static bool segment(mapgen_rooms_t *r, float min_clearance)
             memcpy(room->mins, c, sizeof(room->mins));
             memcpy(room->maxs, c, sizeof(room->maxs));
         }
+        else if (r->clearance[at] >= seed_at && r->clearance[at] >= tallest_neighbour)
+            r->seeds_lost++;
         /* Anything narrower than the seed threshold with nothing assigned
            around it yet is left alone; a later pass over the same sorted order
            would pick it up, and in practice it is the inside of a solid pocket
@@ -576,6 +579,13 @@ static void count_entities(const mapgen_bsp_t *bsp, mapgen_rooms_t *r)
 
 /* ---- the entry point --------------------------------------------------------- */
 
+static uint64_t g_rooms_max_cells = MAPGEN_ROOMS_MAX_CELLS;
+
+void MapGenRooms_SetMaxCells(uint32_t cells)
+{
+    g_rooms_max_cells = cells ? cells : MAPGEN_ROOMS_MAX_CELLS;      /* RED: 8388608, the cap before 13.10 */
+}
+
 mapgen_rooms_result_t MapGenRooms_Find(const mapgen_bsp_t *bsp,
                                        float min_clearance,
                                        float persistence,
@@ -607,7 +617,7 @@ mapgen_rooms_result_t MapGenRooms_Find(const mapgen_bsp_t *bsp,
             return MAPGEN_ROOMS_ERR_ARGS;
         }
         total *= (uint64_t)r->size[i];
-        if (total > MAPGEN_ROOMS_MAX_CELLS) {
+        if (total > g_rooms_max_cells) {
             free(r);
             return MAPGEN_ROOMS_ERR_TOO_LARGE;
         }
@@ -668,6 +678,64 @@ uint32_t MapGenRooms_NumLinks(const mapgen_rooms_t *r)
 const mapgen_room_link_t *MapGenRooms_Link(const mapgen_rooms_t *r, uint32_t i)
 {
     return r && i < r->num_links ? &r->links[i] : NULL;
+}
+
+uint32_t MapGenRooms_SeedsLost(const mapgen_rooms_t *r)
+{
+    return r ? r->seeds_lost : 0;
+}
+
+/*
+ * Brief 18 (mg_b18_q2dm1): the room a point belongs to when its own cell is in none.
+ *
+ * The table holds MAPGEN_ROOMS_MAX rooms while the watershed runs, before the shallow ones are merged, and a middle
+ * found with the table full starts no room: its cells stay roomless (`seeds_lost` - 1247 on q2dm1, 3100 on q2dm1
+ * made half as large again and 1.16 taller, where a corridor 132 wide between two glazed walls of every earlier run
+ * was in no room and lost its windows). The segmentation is left as it is - every family is dealt from it; a caller
+ * that needs only «whose space is this» walks the open cells from the point, nearest first, to a cell that has a
+ * room, `reach` cells at most.
+ */
+uint32_t MapGenRooms_Near(const mapgen_rooms_t *r, const float point[3], uint32_t reach)
+{
+    const uint32_t direct = MapGenRooms_At(r, point);
+    if (direct != NO_ROOM || !r || !point || !reach)
+        return direct;
+    const int64_t start = index_of(r, cell_of(point[0]) - r->mins[0], cell_of(point[1]) - r->mins[1],
+                                   cell_of(point[2]) - r->mins[2]);
+    if (start < 0 || r->solid[start])
+        return NO_ROOM;
+    const uint32_t side = 2u * reach + 1u;
+    const size_t cap = (size_t)side * side * side;
+    uint32_t *queue = malloc(cap * sizeof(*queue));
+    uint8_t *depth = calloc(r->count, 1);       /* steps from the start + 1; 0 - not seen */
+    uint32_t found = NO_ROOM;
+    if (queue && depth) {
+        size_t head = 0, tail = 0;
+        queue[tail++] = (uint32_t)start;
+        depth[start] = 1;
+        while (head < tail && found == NO_ROOM) {
+            const uint32_t at = queue[head++];
+            const int32_t x = (int32_t)(at % (uint32_t)r->size[0]);
+            const int32_t y = (int32_t)((at / (uint32_t)r->size[0]) % (uint32_t)r->size[1]);
+            const int32_t z = (int32_t)(at / ((uint32_t)r->size[0] * (uint32_t)r->size[1]));
+            for (int s = 0; s < 6 && found == NO_ROOM; s++) {
+                const int64_t next = index_of(r, x + SIDES[s][0], y + SIDES[s][1], z + SIDES[s][2]);
+                if (next < 0 || r->solid[next] || depth[next])
+                    continue;
+                if (r->room[next] != NO_ROOM) {
+                    found = r->room[next];
+                    break;
+                }
+                if (depth[at] > reach || tail >= cap)
+                    continue;
+                depth[next] = (uint8_t)(depth[at] + 1);
+                queue[tail++] = (uint32_t)next;
+            }
+        }
+    }
+    free(queue);
+    free(depth);
+    return found;
 }
 
 uint32_t MapGenRooms_At(const mapgen_rooms_t *r, const float point[3])

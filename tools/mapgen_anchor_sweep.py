@@ -54,7 +54,7 @@ GAME = Path(r"O:\Claude2\q2pro-release\baseq2")
 
 SOURCES = [
     "tools/mapgen_pipeline_driver.c",
-    "src/mapgen/mapgen_pipeline.c",
+    "src/mapgen/mapgen_pipeline.c", "src/mapgen/mapgen_warp.c",
     # The pipeline invents a map at fidelity zero, so everything the
     # chain is built on is linked with it.
     "src/mapgen/mapgen_synthesis.c",

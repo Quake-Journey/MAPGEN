@@ -48,7 +48,12 @@
    corpus and the divergence oracle use, so all four can be talked about in the
    same sentence. */
 #define MAPGEN_ROOMS_CELL       32.0f
-#define MAPGEN_ROOMS_MAX_CELLS  8388608u
+/* The whole world the format holds: 8192 a side is 256 cells, and one more each side with the lattice's own margin -
+   259 cubed. Brief 18 D2: at 8388608 the PO's q3t2 at 1000 % had no rooms once it stood as tall as it had grown wide
+   (205 x 255 x 205 cells at x3.11, 205 x 255 x 164 at x2.48), «no segmentation» is «a landmark out of reach», and
+   the map was refused its proportional height twice and its ceilings at 200 % for the size of an array - 7 bytes a
+   cell, 120 MB at the most. */
+#define MAPGEN_ROOMS_MAX_CELLS  17373979u
 #define MAPGEN_ROOMS_MAX        256u
 #define MAPGEN_ROOMS_MAX_LINKS  1024u
 #define MAPGEN_ROOMS_MAX_ITEMS  64u
@@ -101,6 +106,9 @@ typedef struct mapgen_rooms_s mapgen_rooms_t;
  * over - is the sane default and is what a caller should pass unless it is
  * measuring something specific.
  */
+/* Brief 18 D2 RED: the lattice's cap as it was (8388608) - a map larger than that has no rooms. 0 puts it back. */
+void MapGenRooms_SetMaxCells(uint32_t cells);
+
 mapgen_rooms_result_t MapGenRooms_Find(const mapgen_bsp_t *bsp,
                                        float min_clearance,
                                        float persistence,
@@ -132,6 +140,11 @@ uint32_t MapGenRooms_NumLinks(const mapgen_rooms_t *r);
 const mapgen_room_link_t *MapGenRooms_Link(const mapgen_rooms_t *r, uint32_t i);
 
 /* Which room a point is in, or UINT32_MAX for solid and for the void. */
+/* Brief 18: how many middles of rooms found the table of rooms (MAPGEN_ROOMS_MAX) full - their cells are in no room. */
+uint32_t MapGenRooms_SeedsLost(const mapgen_rooms_t *r);
+/* Brief 18: the room of a point, or - its own cell being in none - of the nearest cell that has one through at most
+   `reach` open cells (254 at most); UINT32_MAX when there is none or the point is in rock. */
+uint32_t MapGenRooms_Near(const mapgen_rooms_t *r, const float point[3], uint32_t reach);
 uint32_t MapGenRooms_At(const mapgen_rooms_t *r, const float point[3]);
 
 /*

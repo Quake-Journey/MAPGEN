@@ -97,6 +97,13 @@ typedef struct {
      */
     uint16_t travel_permille;
     uint16_t rider_permille;
+    /*
+     * The share of the WHOLE body's travel inside world solid, not its deck's (the PO, 09.10, mg_10_6695: a column
+     * stood across q2dm3's train *10 - a block 224 high whose top 16 run in the ceiling the whole way, travel 1000
+     * permille in the donor itself, so the deck's measure could not see anything put in its way). Judged per
+     * machine against its own room in the map as last accepted.
+     */
+    uint16_t body_permille;
 } mapgen_mover_t;
 
 /*

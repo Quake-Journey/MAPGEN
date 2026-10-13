@@ -28,6 +28,100 @@
 #include <sys/stat.h>
 #include <time.h>
 
+static char  (*g_known)[64];
+static uint32_t g_num_known, g_cap_known;
+
+void MapCompile_ClearKnownTextures(void)
+{
+    g_num_known = 0;
+}
+
+void MapCompile_AddKnownTexture(const char *name)
+{
+    if (!name || !name[0] || strlen(name) >= 64)
+        return;
+    for (uint32_t i = 0; i < g_num_known; i++)
+        if (!strcmp(g_known[i], name))
+            return;
+    if (g_num_known == g_cap_known) {
+        const uint32_t cap = g_cap_known ? 2u * g_cap_known : 256u;
+        char (*grown)[64] = realloc(g_known, (size_t)cap * sizeof(*grown));
+        if (!grown)
+            return;
+        g_known = grown;
+        g_cap_known = cap;
+    }
+    snprintf(g_known[g_num_known++], 64, "%s", name);
+}
+
+static bool known_texture(const char *name, size_t n)
+{
+    for (uint32_t i = 0; i < g_num_known; i++) {
+        const char *k = g_known[i];
+        size_t j = 0;
+        for (; j < n && k[j]; j++) {
+            char a = name[j], b = k[j];
+            if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+            if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+            if (a == '\\') a = '/';
+            if (a != b)
+                break;
+        }
+        if (j == n && !k[j])
+            return true;
+    }
+    return false;
+}
+
+/* Every «couldn't locate texture NAME» (and its wordings) in the log: true when one names a texture no donor
+   names - the build's own lack. A line of that kind whose name cannot be read counts as the build's. */
+static bool missing_beyond_donors(const char *log)
+{
+    static const char *const SAID[] = { "couldn't locate", "could not locate", "could not find", "couldn't find" };
+    if (!log)
+        return false;
+    for (const char *at = log; *at; at++) {
+        for (int k = 0; k < 4; k++) {
+            const size_t n = strlen(SAID[k]);
+            size_t i = 0;
+            while (i < n && at[i]) {
+                char a = at[i];
+                if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+                if (a != SAID[k][i])
+                    break;
+                i++;
+            }
+            if (i != n)
+                continue;
+            /* the name: after «texture», else the next word */
+            const char *p = at + n;
+            while (*p == ' ' || *p == ':')
+                p++;
+            if (!strncmp(p, "texture", 7)) {
+                p += 7;
+                while (*p == ' ' || *p == ':' || *p == '"' || *p == '\'')
+                    p++;
+            }
+            const char *e = p;
+            while (*e && *e != ' ' && *e != '\n' && *e != '\r' && *e != '"' && *e != '\'' && *e != '\t')
+                e++;
+            size_t len = (size_t)(e - p);
+            if (len > 4 && !strncmp(e - 4, ".wal", 4))
+                len -= 4;
+            /* a path: the name after its last «textures/» (or «textures\\») */
+            for (size_t q = 0; q + 9 <= len; q++)
+                if (!strncmp(p + q, "textures", 8) && (p[q + 8] == '/' || p[q + 8] == '\\')) {
+                    p += q + 9;
+                    len -= q + 9;
+                    q = (size_t)-1;
+                }
+            if (!len || !known_texture(p, len))
+                return true;
+        }
+    }
+    return false;
+}
+
 const char *MapCompile_ResultName(mapcompile_result_t result)
 {
     switch (result) {
@@ -475,10 +569,7 @@ mapcompile_result_t MapCompile_RunProfile(const mapcompile_adapter_t *adapter,
          * A map that compiled without its materials is not a map, and nothing
          * but the log says so.
          */
-        if (says(stage->stdout_captured, "couldn't locate")
-            || says(stage->stdout_captured, "could not locate")
-            || says(stage->stdout_captured, "could not find")
-            || says(stage->stdout_captured, "couldn't find"))
+        if (missing_beyond_donors(stage->stdout_captured))
             missing_asset = true;
     }
 

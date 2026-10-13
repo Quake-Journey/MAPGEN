@@ -120,8 +120,8 @@ def make_shots(work: Path, pages: list[str] | None = None) -> Path | None:
     shutil.copy2(INSTALLED / "data" / "bsp" / "mg_10_45f.bsp", job / "baseline" / "q2mg.bsp")
     for f in ("plan.txt", "ledger.txt"):
         shutil.copy2(INSTALLED / "data" / "runs" / "mg_10_45f" / f, job / f)
-    from PIL import Image
     for lang in ("ru", "en") if not pages or "run_full" in pages else ():
+        from PIL import Image       # only the full-screen picture is laid together (a home-only retake needs none)
         subprocess.run([str(exe), "--shots-full", str(shots), str(job), lang], cwd=out, timeout=180)
         gl, ui = shots / lang / "run_full_gl.png", shots / lang / "run_full_ui.png"
         if not (gl.is_file() and ui.is_file()):

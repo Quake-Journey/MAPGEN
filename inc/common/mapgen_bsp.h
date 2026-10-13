@@ -277,6 +277,15 @@ int32_t MapGenBsp_PointContents(const mapgen_bsp_t *bsp, const float point[3]);
 uint32_t MapGenBsp_StandingWater(const mapgen_bsp_t *bsp, double *out_area);
 
 /*
+ * The same, counting only the faces whose air is air somebody could be in: air of `was` (the base a run builds on)
+ * or air inside `lo..hi` (where the edit was made). A long dig through the void round a map cuts a piece of that
+ * void off from the outside; the compiler leaves it empty, a sealed pocket, and a pool's side against it counted as
+ * water standing in the air - q2dm3 at 150 %, a tunnel of 48 % of the plan's word refused for a pool 400 away.
+ */
+uint32_t MapGenBsp_StandingWaterNear(const mapgen_bsp_t *bsp, const mapgen_bsp_t *was, const float lo[3],
+                                     const float hi[3], double *out_area);
+
+/*
  * T-junctions in the map the COMPILER produced.
  *
  * A vertex of one drawn face lying strictly inside the edge of another is the

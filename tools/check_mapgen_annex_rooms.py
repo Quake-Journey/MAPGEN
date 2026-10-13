@@ -15,7 +15,9 @@ On q2dm1 (seed 1020, ambition 80) and q3t2 (seed 45, ambition 90):
 Brief 13 W10 (the PO: «256 x 256 недостаточно мелко ... сейчас только прямоугольники, что скучно»): the annexes of
 one map wear different outlines (a box, an octagon, a cross, an L, rounded corners) - at least three different among
 four or more; each outline is in the compiled room (its far corner filled, or open for a box); and NICHES (128 x 160,
-`--annex N 128 160 128`) are dealt on q2dm1, their pickup on a dais within 96 of the mouth.
+`--annex N 128 160 128`) are dealt on q2dm1, each the room its pattern declares (no dais since the PO's 08.10) with
+its pickup inside it. Brief 17 D4: an annex the builder declines ("apply N (dig): OK, changed no") is said as
+declined - the match missed the "(dig)" and judged the unchanged donor as the room.
 RED, two, in a sandbox copy: the room's pattern taken out (`g_annex_pattern`) - the declared parts are not there; the
 outline held to the box - fewer than three outlines. Each case above goes red.
 
@@ -125,7 +127,9 @@ def matches(an: dict, got: dict) -> list[str]:
     want = {"dais": an["pickup"] == "dais", "rim": an["floor"] == "rim", "gallery": an["floor"] == "gallery",
             "pair": an["pickup"] == "columns"}
     if an.get("shape") == "a niche":
-        want = {"dais": True}
+        # brief 17 D4: a niche is its pattern as dealt - the PO took the dais out on 08.10 («квадратные комнаты с
+        # оружием по середине»), and the case that still asked for one failed on HEAD for a month
+        want = {"dais": an["pickup"] == "dais"}
     wrong = [k for k, v in want.items() if got[k] != v]
     if an["columns"] and an["pickup"] != "columns" and not got["columns"]:
         wrong.append("columns")
@@ -153,7 +157,7 @@ def run(exe: Path, work: Path, tag: str, cases: list | None = None, extra: tuple
             # row 412: an annex the builder itself declines (a sky lift it cannot lay, ...) is the transaction's to
             # refuse, not a room drawn wrong - said, and not judged by its pattern
             refused = re.search(r"^declined: (.*)$", said_out, re.M)
-            if re.search(r"^apply \d+: OK, changed no", said_out, re.M):
+            if re.search(r"^apply \d+(?: \([^)]*\))?: OK, changed no", said_out, re.M):
                 results.append((an, None, "declined: " + (refused.group(1) if refused else "?")))
                 continue
             bsp = mp.with_suffix(".bsp")
@@ -206,8 +210,9 @@ def main() -> int:
               len(shapes) >= min(3, len(rooms)), ", ".join(sorted(s or "?" for s in shapes)))
     niches = run(exe, a.work, "niche", [("q2dm1", "1020", "80")], ("--annex", "4", "128", "160", "128"))
     nr = [r for r in niches["q2dm1"] if r[1] is not None]
-    check("q2dm1: niches (128 x 160) dealt and built, each a dais with its pickup within 96 of the mouth",
-          len(nr) >= 1 and all(not matches(an, got) and got["mouth"] <= 96.0 for an, got, _ in nr),
+    check("q2dm1: niches (128 x 160) dealt and built, each the room declared with its pickup inside it (at most 160"
+          " from the mouth)",
+          len(nr) >= 1 and all(not matches(an, got) and got["mouth"] <= 160.0 for an, got, _ in nr),
           "; ".join(f"{said(an)}: mouth {got['mouth']:.0f}" + (f", missing {', '.join(matches(an, got))}"
                                                                 if matches(an, got) else "") for an, got, _ in nr)
           or "; ".join(why for _, _, why in niches["q2dm1"]))

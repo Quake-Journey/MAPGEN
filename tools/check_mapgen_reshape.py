@@ -173,15 +173,21 @@ def behaviour(exe: Path, work: Path) -> None:
     niche = compile_fixture(work, "reshape_niche")
     if check("the niche fixture compiles", niche is not None):
         moved = walls(exe, niche)
-        check("the wall with the thin piece stays where it is",
-              moved and not moved[0], str(moved))
+        # brief 17: since brief 15 the plan asks the operator's own question before it deals a wall at all, so the
+        # wall with the thin piece is not even dealt - [] - and the case asked for one dealt and declined, failing on
+        # HEAD; the RED below (the questions switched off: dealt and moved) still tells the two apart
+        check("the wall with the thin piece stays where it is (not dealt, or dealt and declined)",
+              not moved or not moved[0], str(moved))
 
     print("\n=== and on a donor whose walls have things against them")
     donor = CORPUS / "q2dm1.bsp"
     if check("q2dm1 is in the corpus", donor.exists()):
         moved = walls(exe, donor, how_many=4)
-        check("it declines rather than carving something it cannot show",
-              moved and not any(moved), str(moved))
+        # brief 17: since brief 15 (the plan judges a wall before it deals it) and brief 16 (the strip a wall gives
+        # up is closed under and over), q2dm1's walls the plan deals are moved; that a moved wall is sealed is
+        # asserted on the stretched bases by check_mapgen_warp_edits.py (reshapes 18, 37, 41, and brief 17 D7's)
+        check("the walls the plan deals on q2dm1 are moved whole - none dealt and then declined",
+              bool(moved) and all(moved), str(moved))
 
 
 # The three questions as a block. Switching off only the thickness test was

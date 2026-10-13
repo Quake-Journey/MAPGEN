@@ -420,6 +420,8 @@ int main(int argc, char **argv)
              || step.verdict == MAPGEN_TXN_REJECTED_SURFACE)
             && step.tjunctions_skin)
             printf(", %u in a skin's gap", step.tjunctions_skin);
+        if (step.tjunctions_moved)
+            printf(", %u far from the edit", step.tjunctions_moved);
         if (step.verdict == MAPGEN_TXN_REJECTED_SURFACE
             && (step.new_seam[0] || step.new_seam[1] || step.new_seam[2]))
             printf("  new seam at %.1f %.1f %.1f", (double)step.new_seam[0],

@@ -487,6 +487,24 @@ bool MapGenPmove_SweepBody(const float start[3], const float end[3],
     return !hit.startsolid && !hit.allsolid;
 }
 
+bool MapGenPmove_InSolid(const mapgen_pmove_player_t *player)
+{
+    if (!g_world.bound || !player)
+        return false;
+    /*
+     * A quarter of a unit in from every face: TOUCHING is not inside. The position test calls a box whose face lies
+     * exactly on a brush's plane «in» it, and a player at rest on a floor at a whole height stands exactly so - the
+     * first cut of this rule (the body's whole box) left q3t2's own walk with no place at all, every start «in the
+     * floor», while the warped map's floors at 198.9 hid it. The fillet's body was 0.9 inside.
+     */
+    static const vec3_t mins = { -15.75f, -15.75f, -23.75f };
+    vec3_t maxs = { 15.75f, 15.75f, 31.75f };
+    if (player->pm_flags & PMF_DUCKED)
+        maxs[2] = 3.75f;
+    const trace_t hit = world_trace(player->origin, mins, maxs, player->origin);
+    return hit.startsolid || hit.allsolid;
+}
+
 bool MapGenPmove_DropToFloor(mapgen_pmove_player_t *player)
 {
     if (!g_world.bound || !player)

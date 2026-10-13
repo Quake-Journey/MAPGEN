@@ -139,6 +139,52 @@ public static class TilePage
 
     private static readonly Dictionary<string, (DateTime when, Bitmap bmp)> Cache = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// A small copy of a picture for a tile (the PO, 12.10: the Studio took seconds to open - the home page decoded the
+    /// newest map's 7 MB cover whole, 2.9 s of a 3.8 s start). Kept on disk in temp	humbs by the picture's path, time
+    /// and width, so the next start decodes a few hundred kilobytes; the first one makes it.
+    /// </summary>
+    public static Bitmap? Thumb(string path, int width)
+    {
+        try
+        {
+            var when = File.GetLastWriteTimeUtc(path);
+            var key = $"{path}|{when.Ticks}|{width}";
+            if (Cache.TryGetValue(key, out var hit) && hit.when == when)
+                return hit.bmp;
+            var name = Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(key.ToLowerInvariant())));
+            var dir = Path.Combine(App.Settings.TempPath, "thumbs");
+            var file = Path.Combine(dir, name + ".png");
+            Bitmap bmp;
+            if (File.Exists(file))
+            {
+                using var small = File.OpenRead(file);
+                bmp = new Bitmap(small);
+            }
+            else
+            {
+                using (var big = File.OpenRead(path))
+                    bmp = Bitmap.DecodeToWidth(big, width);
+                try
+                {
+                    Directory.CreateDirectory(dir);
+                    bmp.Save(file + ".part");
+                    File.Move(file + ".part", file, true);
+                }
+                catch (Exception)
+                {
+                    // a copy that cannot be kept is made again next time
+                }
+            }
+            Cache[key] = (when, bmp);
+            return bmp;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     /// <summary>A picture decoded once at a width that stays sharp on a big tile, kept while the file is the same.</summary>
     public static Bitmap? Picture(string path, int width = 1600)
     {

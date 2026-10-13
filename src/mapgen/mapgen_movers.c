@@ -815,6 +815,7 @@ void MapGenMovers_MeasureClearance(mapgen_movers_t *m, const mapgen_bsp_t *bsp)
         mapgen_mover_t *mv = &m->movers[i];
         mv->travel_permille = 0;
         mv->rider_permille = 0;
+        mv->body_permille = 0;
         if (!mv->carries || mv->num_stops < 2)
             continue;
         const mapgen_bsp_model_t *model = MapGenBsp_Model(bsp, mv->model);
@@ -825,12 +826,15 @@ void MapGenMovers_MeasureClearance(mapgen_movers_t *m, const mapgen_bsp_t *bsp)
 
         uint32_t travel_total = 0, travel_in = 0;
         uint32_t ride_total = 0, ride_in = 0;
+        uint32_t body_total = 0, body_in = 0;
 
         /* Every stop but the resting one, and every sweep between them. */
         for (uint32_t s = 0; s < mv->num_stops; s++) {
-            if (s)
+            if (s) {
                 travel_in += clearance_body(bsp, model, mv->stop[s], deck_from,
                                             &travel_total);
+                body_in += clearance_body(bsp, model, mv->stop[s], model->mins[2], &body_total);
+            }
             ride_in += clearance_rider(bsp, model, mv->stop[s], &ride_total);
         }
         for (uint32_t s = 0; s + 1 < mv->num_stops; s++) {
@@ -847,6 +851,7 @@ void MapGenMovers_MeasureClearance(mapgen_movers_t *m, const mapgen_bsp_t *bsp)
                     at[a] = mv->stop[s][a] + d[a] * (float)k / (float)steps;
                 travel_in += clearance_body(bsp, model, at, deck_from,
                                             &travel_total);
+                body_in += clearance_body(bsp, model, at, model->mins[2], &body_total);
                 ride_in += clearance_rider(bsp, model, at, &ride_total);
             }
         }
@@ -855,6 +860,8 @@ void MapGenMovers_MeasureClearance(mapgen_movers_t *m, const mapgen_bsp_t *bsp)
             ? (uint16_t)((1000ull * travel_in) / travel_total) : 0;
         mv->rider_permille = ride_total
             ? (uint16_t)((1000ull * ride_in) / ride_total) : 0;
+        mv->body_permille = body_total
+            ? (uint16_t)((1000ull * body_in) / body_total) : 0;
 
         /*
          * A blocked rider column is a machine that does not work.

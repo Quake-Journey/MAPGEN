@@ -55,7 +55,7 @@ DEFAULT_WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260904"
 
 PIPELINE = [
     "tools/mapgen_pipeline_driver.c",
-    "src/mapgen/mapgen_pipeline.c",
+    "src/mapgen/mapgen_pipeline.c", "src/mapgen/mapgen_warp.c",
     "src/mapgen/mapgen_synthesis.c",
     "src/mapgen/mapgen_architecture.c",
     "src/mapgen/mapgen_blueprint.c",

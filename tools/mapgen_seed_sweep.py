@@ -53,7 +53,7 @@ SEEDS = [1, 7, 13, 42, 67, 75, 101, 233, 512, 777, 1024, 2026, 4096, 8191,
 
 SOURCES = [
     "tools/mapgen_pipeline_driver.c",
-    "src/mapgen/mapgen_pipeline.c",
+    "src/mapgen/mapgen_pipeline.c", "src/mapgen/mapgen_warp.c",
     "src/mapgen/mapgen_synthesis.c",
     "src/mapgen/mapgen_architecture.c",
     "src/mapgen/mapgen_blueprint.c",

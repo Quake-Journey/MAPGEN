@@ -168,7 +168,9 @@ def transact(exe: Path, bsp: Path, job: Path, name: str,
             out["divergence"] = int(m.group(3))
         if line.startswith("accepted candidate: "):
             out["candidate"] = Path(line.split(": ", 1)[1].strip())
-        m2 = re.search(r"faults (\d+)", line)
+        # brief 17: the row says the compiled map's seams («source seams 0, compiled 0 (0 liquid)») since the
+        # transaction stopped counting source faults - the old «faults N» matched no line, and this failed on HEAD
+        m2 = re.search(r"source seams \d+, compiled (\d+)", line)
         if m2 and " open-connector " in line:
             out["faults"] = int(m2.group(1))
     return out
@@ -317,14 +319,15 @@ MUTATIONS = {
         "open_solid",
     ),
     "an operator that leaves no jamb": (
-        b"""    if (o->maxs[c] - o->mins[c] < DOOR_WIDE + 2.0f * DOOR_JAMB)
+        # brief 17: the rule as it stands since a window shares it (`wide + 2 * jamb`) - the old anchor was gone
+        b"""    if (o->maxs[c] - o->mins[c] < wide + 2.0f * jamb)
         return false;""",
         b"""    if (o->maxs[c] - o->mins[c] < 0.0f)
         return false;""",
         "open_narrow",
     ),
     "an operator that leaves no lintel": (
-        b"""    if (o->maxs[2] - o->mins[2] < DOOR_TALL + DOOR_LINTEL)
+        b"""    if (o->maxs[2] - o->mins[2] < o->sill + tall + over)
         return false;""",
         b"""    if (o->maxs[2] - o->mins[2] < 0.0f)
         return false;""",

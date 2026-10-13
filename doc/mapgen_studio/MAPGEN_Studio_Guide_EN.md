@@ -24,24 +24,50 @@ Every screenshot in this guide was taken by the program itself, from the version
 
 ## First start
 
+While the Studio is loading, a loading window shows how much is done and what is being done now (the window look,
+reading the map library, the newest map's cover, finding Python and the game, loading the Studio). The share is
+weighed by how long each step took at the last start, so on a slow computer or disk the bar moves as that machine
+loads. The first start after installing takes longer than usual.
+
 ![Home](screens/en/home.png)
 
-The home page says whether the program is ready:
+On the left is the menu: **Home**, **Generate**, **Maps**, and at the bottom **Settings** and **About**. Each section
+has its coloured sign; the one under the mouse lights up, the open one stands out in its colour with a bar on the
+left. The ☰ button at the top folds the menu to its signs and opens it again.
 
-- **Game client** — the folder with the game. If none is chosen, press «Open settings» and point at the folder that
-  holds `baseq2`.
-- **Generator** — the `engine` folder beside the program. It is part of the build; if it is missing, the build is
-  damaged.
-- **The finished maps' checks** — whether Python was found. When not, «Install Python» and «Point to Python…» are
-  right there.
-- **Maps in the library** — how many maps have been made.
+On the home page:
 
-Three buttons lead to the main sections: «Make a map», «Open the library», «Open settings». The same sections are
-in the menu on the left: Home, Generate, Maps, Settings, About.
+- **Two paragraphs on the Studio and its generator** — what they do and why what comes out is always playable.
+- **The community's links** under them: **News** (the Telegram channel, https://t.me/Q2RTX), **Community group**
+  (the Telegram group, https://t.me/Q2PROX) and **Site** (https://q2pro-x.com/); they open in the browser.
+- **Three large buttons**: «New map» — to the generation, «Maps» — to the library (the button says how many maps it
+  holds), «Guide» — opens this guide.
+- **The latest map** — the newest map in the library: its cover, base, checks and «Open the map». While a run goes
+  on, what it is doing now and «Open the run» stand there instead.
+- **Readiness** — whether everything is set: the game client (the game's folder that holds `baseq2`), the generator
+  (the `engine` folder beside the program; without it the build is damaged), Python and the finished maps' checks.
+  When something is missing, the button to fix it is right there: «Open settings», «Install Python», «Point to
+  Python…».
+- **Documentation** — the guide comes with the program (the `doc` folder beside it) and opens without the internet:
+  in the browser, in Word, in Russian; «What is new» — the versions' history; the documentation folder.
+- **How to make a map** — four steps.
+
+**The run strip.** While a run goes on, a strip stands over every page but the run's own: the map's name and its
+base, what is going on now and how long is left, the difference from the base, how many edits were accepted and how
+many builds made, a bar and «Open the run» (a click on the strip does the same). Once the run is over, the strip
+stays until you look at its page.
 
 ## Generate
 
 ![Generate](screens/en/generate.png)
+
+The page is laid out in cards, two columns. At the top left — **Base map**; beside it on the right — **The new
+map** (likeness to the base, the generation's time, the variant number, the name) and **The finished map** (keep its
+source, take covers by itself). The bases' card is as tall as the two cards beside it together; when the list holds
+more maps than fit, it scrolls inside the card. Under them are the generation's options, cards by group, two in a
+row and one height: **The base's frame** and **New rooms**, **The base rebuilt** and **Water, slime, lava**,
+**Ruin** and **What may change**. At the page's foot, wherever you are on the page, the line «The map … will be made: base …,
+likeness …, up to … min» and the **«Start generating»** button.
 
 ### Base map
 
@@ -62,12 +88,32 @@ With several maps ticked, choose what to make of them:
   same map; another number, another map.
 - **Map name** — Latin letters and digits. The program suggests one: `mg_` + likeness + variant number.
 
+### The base's frame
+
+Before building anything onto it, the generator may change the base itself:
+
+- **Size** — the new map's area against the base's, 10 to 1000 %. A map made larger grows as tall, in proportion:
+  halls become taller as well as wider. The steps and ledges that could no longer be climbed get gentle ramps or
+  small flights in front of them; the gaps in gratings a player could not fall through are bridged; lifts and jump
+  pads follow the new height. When full height leaves somewhere unwalkable, the generator tries a little less height
+  until the whole map walks. A map made smaller keeps its height. Items and players' starts stay at their own
+  height over the floor. The light of a large map is computed with a step chosen for its size — a map made several
+  times larger does not come out dark.
+- **Spread** — how unequally the base's parts stretch.
+- **Shift** — how far the parts slide sideways against each other.
+- **Turn** — the whole base turned or mirrored.
+- **Ceiling height** — over the proportional height: everything above the highest place a player can stand is lifted
+  further. 100 % — in proportion to the map's size. On a very large map the ceilings may run out of room — the
+  game's coordinates are limited; they then rise as far as the game holds, and the run's log says so in a line like
+  «The ceilings rose to 134 % of the 200 % asked: the game's coordinates hold no more».
+
 ### Scope of the changes
 
-![Scope of the changes](screens/en/generate_options.png)
+![The generation's options](screens/en/generate_options.png)
 
-«Scope of the changes» opens the extra options. Each has a «Default» — then the generator decides by the likeness.
-Any other value is your direct order:
+How much of what to build is set by the cards under the base: **New rooms** (passages, annexes, halls, bridges,
+stairways), **The base rebuilt** (walls, blocks, the floor, stairs, ornaments), **Water, slime, lava** and **Ruin**.
+Each option has a «Default» — then the generator decides by the likeness. Any other value is your direct order:
 
 - **New passages** — how many new tunnels and stairs to dig through the rock between rooms.
 - **Annex rooms with pickups** and **Annex size** — how many annex rooms with a weapon or armour to add, and how big
@@ -87,6 +133,20 @@ Any other value is your direct order:
   along rooms' walls and standing free on open floor (at most half of them). A pickup of that part of the map stands
   on each, or, by a wall, the platform leads onto a ledge of the map. It finds the places on any base by itself - a level floor, room around it and above it; when the map has
   fewer places than asked, there are fewer platforms, and the map's description says so.
+- **Remodel the base** — how many times to change the base map itself rather than build onto it: a room's wall
+  moved in, a wall turned at an angle, a terrace with steps raised along a wall.
+- **Blocks in the rooms** — how many blocks to stand in the base's own rooms: a box, an L, a cross, an octagon or a
+  round one, 64 to 192 across, turned at different angles. Low ones (32-64) to climb, high ones (96-128) a cover;
+  against a wall or free, in the room's own material.
+- **Floor: daises and channels** — how many times to change the base's own floor: raise a dais stepped on every
+  side (a box or an octagon, 32-80 high) or sink a channel across the floor (32-64 deep) with a flight at both ends.
+  A channel is dug only where no other room lies under the floor; the arena first.
+- **Rebuild the base's stairs** — how many of the base's own stairs to rebuild in another shape between the same
+  two floors: the old flight becomes a landing, reached by a half-round foot of steps or by a side flight. It needs
+  open flat floor in front of the stair.
+
+  For all four «Default» lets the generator decide by the likeness (the less alike, the more changes). When a map
+  offers fewer places than asked, fewer are made, and the map's description says so.
 - **Destruction** — a slider from 0 to 100 %. At 0 the map is made as usual, with every passage check. The higher,
   the more is destroyed: cracks in walls and floors, rubble, craters, breaches in walls, broken ledge edges, fallen
   ceilings, blocked corridors; at 100 almost the whole level. The player starts always stay free and no pickup is
@@ -94,38 +154,84 @@ Any other value is your direct order:
   concrete, brick, metal, gravel and more) matched to the map's own colours; the pack goes into the game's folder
   with the map.
 
-«What may change» lists the families of changes; any can be switched off.
+The «What may change» card lists the families of changes; any can be switched off.
 
-«Keep the map source (.map)» leaves the source beside the finished map, for a map editor.
+In the «The finished map» card: «Keep the map source (.map)» leaves the source beside the finished map, for a map
+editor; «Shoot covers automatically» — after every finished map the program starts the game itself and takes a cover.
 
-«Start generating» starts the work.
+The generator cuts windows by itself, as many as the likeness allows: fixed glass, glass that drops when shot and
+comes back after a while, and glass a pressure plate on the floor opens. Windows come in different outlines -
+rectangular, round or oval, arched, with a transom and a vent - and with different glass: pale, blue, wired
+lavender and grey, amber, olive, smoke.
+
+«Start generating» starts the work. When the map's name is taken — the library has a map of that name, a past
+generation's records are there, such a generation is running, queued or interrupted — the program asks first:
+**Overwrite** (the new map replaces the old one with its records), **Correct the name** (the page scrolls to «Map name»,
+the cursor in it) or **Cancel**. A running generation cannot be overwritten — only the name corrected or
+the generation cancelled.
 
 ## A run
 
 ![A run](screens/en/run.png)
 
-The run's page shows:
+The page is in two parts: on the left what matters about the run, on the right the map's scheme the window's whole
+height.
 
-- **The stages**: Getting ready → Building the base map → Making the plan of edits → Edits → Checking it is
-  playable → Light and visibility → The map's checks → (Destruction - when asked for) → Cover → Done. The stage
-  under way shows its time; a finished one, when it ended.
-- **Edits** — how many were accepted, how many builds were spent of those allowed, how many were considered, and
-  how far the map already differs from the base.
-- **Done of the plan** — what of the plan was built: new passages, annexes, pools, windows, stairway annexes,
-  rooms from the second map. Destruction comes after the edits and the checks; its percent is named in the plan's
-  line.
-- **The map's scheme** — the plan from above or at a slant, with the accepted changes on it (stairway annexes too,
-  and, at the destruction stage, every crater, breach, fallen ceiling and debris pile as it is built) and, at the light
-  stage, how the map is lit. «Full screen» puts the scheme on the whole screen; while it is there, the program's
-  window is hidden.
-- **Load** — CPU, memory, GPU, video memory: the whole machine's and the generator's own.
+**At the top** — the map's name and the base it is made from. Under them a coloured badge with what is going on now
+and its time: blue — running, yellow — paused, green — the map is ready, red — the run failed. Beside it, how long
+the run has gone and when it began. The buttons are on the right.
+
+**On the left**, always open:
+
+- **Difference from the base** — large, how far the map already differs from the base in percent, of how many
+  asked, and a bar. Under it, what the plan promises: how far it can change the map in the builds allowed.
+- **Edits** — three numbers: how many edits were accepted (green), how many builds were made and how many edits were
+  considered. Under them the run's time bar, and below the last edit: green when accepted, red when refused. After
+  the edits the generator swaps liquids, moves items and tries rooms of other maps — that shows here too («N of M»).
+- **The plan** — a table: what is planned by kind (new passages, annex rooms, two-storey rooms, bridges, pools,
+  windows, stairway annexes, remodels of the base, rooms of the second map and others), with a bar and «done of
+  planned». A kind done turns green. Destruction comes after the edits and the checks; its percent is named under
+  the table.
+
+**On the left**, folded (a click on the header opens and closes it):
+
+- **Stages** — Getting ready → Building the base map → Making the plan of edits → Edits → Checking it is playable
+  → Light and visibility → The map's checks → (Destruction - when asked for) → Light on the finished map → Cover →
+  Done. The stage under way shows its time; a finished one, how long it took and when it ended. The stage now is
+  named in the folded header too.
+- **Computer load** — CPU, memory, GPU, video memory: the whole machine's and the generator's own. The header says
+  the share of the CPU the run has.
+
+**On the right**, two tabs:
+
+- **Scheme** — the plan from above or at a slant, with the edits on it (stairway annexes too, and, at the
+  destruction stage, every crater, breach, fallen ceiling and debris pile as it is built) and, at the light stage,
+  how the map is lit. The buttons over it: draw it or not, the view from above, the 3D view, the storeys up to which
+  height, and «Full screen» — the scheme on the whole screen, the program's window hidden. **«What the scheme
+  shows»** (folded) explains the signs in an even table: the edits (being tried, refused, accepted, base changed),
+  what is still in the plan, the map's colours (floor, water, lava, slime, lifts and doors) and the items (weapons,
+  armour, health, ammo, power-ups, spawns, teleporters). Hover a sign for the detail, e.g. «a refused edit - red,
+  fades in 10 seconds». The mouse controls are there too.
 - **Detailed log** — the lines the generator writes.
+
+**The stages on the scheme.** Each stage shows on the scheme itself:
+
+- **The base's frame changing** — the scheme shows the base itself easing into its new shape and back while the
+  generator tries the frame. Its parts are tinted apart, the orange lines are the parts' edges, the item signs move
+  with the map. The words at the top right say the size and the parts' spread.
+- **Light and visibility — the visibility.** The portals between the map's parts show: cyan not worked out yet, green
+  worked out. The wave spreads from a spawn; along its front an «eye» walks with cyan sight lines to the portals
+  checked next, the ones just reached marked by widening rings. The words say how many portals are done of how many.
+  The 3D view shows it best: from above many portals stand edge-on.
+- **Light and visibility — the light.** Each lamp of the map glows in its colour; rays spread from the lamps as the
+  direct light is worked out, and the glow pulses through the bounced light. Spotlights show where they point. The
+  words say how many lamps and how much is done.
 
 ![Full screen](screens/en/run_full.png)
 
 On the full screen, «Back to the Studio» (or Esc) closes it and brings the program's window back.
 
-The buttons under the stages:
+The buttons at the top right:
 
 - **Pause** / **Resume** — the generator stops where it is and goes on from there.
 - **Stop** — the run is interrupted; it can be resumed later from the same place on the Generate page (a card
@@ -145,13 +251,17 @@ the walls» — with the generator's exact words under it. The same goes to the 
 
 ![Maps](screens/en/library.png)
 
-«Maps» shows every finished map as a tile with its cover. The tiles are sized by the «Size» slider or by the mouse
-wheel with Ctrl held. «Add a map» brings any map from the disk into the library; «Refresh» rereads the folder;
-«Open folder» opens it in Explorer.
+«Maps» shows every finished map as a tile. Over the cover — the map's base and how far it differs from it; under the
+cover — its name, when it was made, its size and its checks: green «checks passed» or red «failed: N». «Find by name
+or base» leaves only the maps that match. The tiles are sized by the «Size» slider or by the mouse wheel with Ctrl
+held. «Add a map» (top right) brings any map from the disk into the library; «Refresh» rereads the folder; «Open
+folder» opens it in Explorer.
 
 ![A map](screens/en/map.png)
 
-A click on a tile opens the map:
+A click on a tile opens the map. At the top its name and the same marks (base, difference, checks); beside the cover
+its facts (made, size, base, difference from the base, how many checks passed) and the buttons; below, its
+description and checks in two cards:
 
 - **Description** — the base it was made from, the maps that gave rooms, likeness and variant number, what was
   built, how long the run took.
@@ -166,6 +276,9 @@ A click on a tile opens the map:
 
 ![Settings](screens/en/settings.png)
 
+The settings are laid out in cards, two columns: Look, Game client, Folders, CPU load, Memory and disk, Updates.
+Each setting is a row: on the left what it does, on the right the setting itself.
+
 - **Look**: language (Russian or English), theme, «Page at start».
 - **Folders**: finished maps, map sources, temporary files. Any can be changed or set back to «Default».
 - **Game client** — the folder with the game that holds `baseq2`.
@@ -174,8 +287,6 @@ A click on a tile opens the map:
   The generator never takes more; the rest stays yours.
 - **Memory and disk** — how much free memory the generator's working files may take (the disk is then hardly used),
   and whether to «Keep the accepted steps on the disk» — without them an interrupted run cannot be resumed.
-- **Shoot covers automatically** — after every finished map the program starts the game itself and takes a cover.
-
 - **Updates** — «Check for updates automatically» (on) and «Check for updates». When GitHub has a newer version, the
   program shows its number and all the changes (newest on top) and asks: «Yes» downloads, checks and installs it
   (your maps and settings stay; the program restarts and shows «What's new»), «Cancel» — not now, and it asks again
@@ -187,7 +298,8 @@ The settings are kept in a file beside the program; where exactly is written at 
 
 ![About](screens/en/about.png)
 
-The program's version, «Check for updates» and the version history: what changed in each, the newest on top.
+The program's version and «Check for updates» (top right), what the program is, where it and its settings file
+are; below, the versions' history as cards: what changed in each, the newest on top and marked.
 
 ## When something is wrong
 
@@ -210,7 +322,9 @@ The program's version, «Check for updates» and the version history: what chang
 ## Where the files are
 
 - Finished maps: the «Finished maps (.bsp)» folder of the settings; by default `data\bsp` beside the program.
-- Descriptions, covers and shots: `data\descriptions`, `data\covers`.
+- Descriptions, covers and shots: `data\descriptions`, `data\covers` (the game's shots are kept as JPEGs - a tenth
+  of the PNG with the same look; the shots of earlier versions the Studio recompresses itself after it starts). The
+  covers' small copies for the tiles are in `temp\thumbs`; they may be deleted, the Studio makes them again.
 - A run's working files: the «Temporary files» folder; after a finished map they are deleted, and a small report of
   the run stays in `data\runs\<map name>`.
 - Settings: `MapgenStudio.ini` beside the program.

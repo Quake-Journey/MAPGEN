@@ -296,8 +296,35 @@ def mouth_serves(m: dict, spot) -> bool:
     return m["lo"][2] < spot[2] + 72.0 and m["hi"][2] > spot[2] + 8.0
 
 
-def judge(path: Path, digs=None) -> dict:
-    """Every finding for one map, as {question: [what failed]}."""
+def dark_lamps(b: Bsp) -> dict:
+    """Brief 18: the world faces a map draws dark in a texture it draws as a light elsewhere, by (texture, plane) -
+    q3t2 draws 22 of its 27 gothlite3_1 faces dark."""
+    lit = {name for flags, name in b.texinfo if flags & 0x1 and not flags & 0x4}
+    out = defaultdict(list)
+    for fi in b.model_faces(0):
+        flags, name = b.texinfo[b.faces[fi][4]]
+        if not flags & 0x5 and name in lit:
+            n, d = b.face_plane(fi)
+            out[(name, tuple(round(v, 3) for v in n), round(d, 1))].append(b.face_verts(fi))
+    return out
+
+
+def own_dark_lamp(b: Bsp, fi: int, own: dict) -> bool:
+    """The face lies on one of the donor's own dark lamp faces - the same texture, the same plane, nine tenths of it
+    covered (a compile splits faces its own way)."""
+    if not own:
+        return False
+    name = b.texinfo[b.faces[fi][4]][1]
+    n, d = b.face_plane(fi)
+    polys = own.get((name, tuple(round(v, 3) for v in n), round(d, 1)), ())
+    pv = b.face_verts(fi)
+    area = abs(_area(_project(pv, n)))
+    return area > 0 and sum(overlap(pv, q, n) for q in polys) >= 0.9 * area
+
+
+def judge(path: Path, digs=None, own_lamps: dict | None = None) -> dict:
+    """Every finding for one map, as {question: [what failed]}. `own_lamps`: the donor's dark lamp faces
+    (`dark_lamps`) - a dig's box on a map grown ten times takes in the old map's own (brief 18, mg_b18_q3t2)."""
     b = Bsp(path)
     bad = defaultdict(list)
     counts = defaultdict(int)
@@ -476,7 +503,7 @@ def judge(path: Path, digs=None) -> dict:
             # SURF_SKY (0x4) is drawn with and without SURF_LIGHT in the same
             # map - q2dm1 has both - and a passage's bounding box takes in the
             # courtyard's sky. It is not a lamp anybody tiled on a wall.
-            if flags & 0x5 or name not in lit:
+            if flags & 0x5 or name not in lit or own_dark_lamp(b, fi, own_lamps):
                 continue
             pv = b.face_verts(fi)
             c = [sum(p[a] for p in pv) / len(pv) for a in range(3)]

@@ -8,7 +8,7 @@ namespace MapgenStudio;
 public sealed record GenerationRequest(string Name, string Donor, int Fidelity, long Seed, IReadOnlyList<string> SkipFamilies,
                                        bool SaveMapSource, bool Draft = false, int MaxAttempts = 0, bool RunGates = true,
                                        IReadOnlyList<string>? Grafts = null, bool Cover = true,
-                                       GenerationOptions? Options = null);
+                                       GenerationOptions? Options = null, int TimeMinutes = 0);
 
 /// <summary>
 /// Row 410 (the PO, 05.10: «какие еще параметры добавить в генератор ... чтобы получать больше вариаций
@@ -21,11 +21,18 @@ public sealed record GenerationRequest(string Name, string Donor, int Fidelity, 
 /// выключать или менять количество», «аналогичные параметры для заливки лавой и кислотой»): the share of the rooms the
 /// floods may take that each liquid fills, 0..100 - or -1, «По умолчанию», the generator's own say.
 /// Stairways (brief 11 D1): stairways up the rooms' walls, 0..10 - 0 «Нет», the default.
+/// Remodels (brief 15 D6, the PO: «почему вы не меняете форму стандартного уровня»): the base's own walls moved in,
+/// turned, or a terrace raised along them - -1 «По умолчанию» (the likeness decides), 0 none, 1..16.
+/// Blocks (brief 15 D6, the PO: «ящики ... другой формы, другого размера»): blocks standing in the base's rooms - a box,
+/// an L, a cross, an octagon, a round one - -1 «По умолчанию», 0 none, 1..16.
 /// Destruction (brief 11 D2): the finished map D percent in ruins, 0..100 - 0 (the default) nothing; a step after the
 /// map's checks (tools/mapgen_destroy.py), not a word of the pipeline's.
 public sealed record GenerationOptions(int Digs = 0, int Annexes = 0, int AnnexSize = 0, int Storeys = 0, int Spans = 0,
                                        int Halls = 0, string Liquids = "", int Decor = 0, int NewWater = -1,
-                                       int NewSlime = -1, int NewLava = -1, int Stairways = 0, int Destruction = 0)
+                                       int NewSlime = -1, int NewLava = -1, int Stairways = 0, int Destruction = 0,
+                                       int Remodels = -1, int Blocks = -1, int FloorShifts = -1,
+                                       int StairReshapes = -1, int WarpSize = 100, int WarpShape = 0,
+                                       int WarpTurn = 0, int WarpHeight = 100, int WarpShift = 0)
 {
     /// <summary>The engine's percent of its rule for each Decor level.</summary>
     public static readonly int[] DecorPercent = { 100, 0, 50, 150, 200 };
@@ -81,6 +88,53 @@ public sealed record GenerationOptions(int Digs = 0, int Annexes = 0, int AnnexS
         {
             yield return "--stairways";
             yield return Math.Min(Stairways, 10).ToString(CultureInfo.InvariantCulture);
+        }
+        if (Remodels >= 0)
+        {
+            yield return "--remodels";
+            yield return Math.Min(Remodels, 16).ToString(CultureInfo.InvariantCulture);
+        }
+        if (Blocks >= 0)
+        {
+            yield return "--blocks";
+            yield return Math.Min(Blocks, 16).ToString(CultureInfo.InvariantCulture);
+        }
+        if (FloorShifts >= 0)
+        {
+            yield return "--floor-shifts";
+            yield return Math.Min(FloorShifts, 12).ToString(CultureInfo.InvariantCulture);
+        }
+        if (StairReshapes >= 0)
+        {
+            yield return "--stair-reshapes";
+            yield return Math.Min(StairReshapes, 8).ToString(CultureInfo.InvariantCulture);
+        }
+        /* the PO, 10.10: «хочется именно менять донора и уже к нему пристраивать» - the base's frame, before any edit */
+        if (WarpSize > 0 && WarpSize != 100)
+        {
+            yield return "--warp-size";
+            yield return Math.Clamp(WarpSize, 10, 1000).ToString(CultureInfo.InvariantCulture);
+        }
+        if (WarpShape > 0)
+        {
+            yield return "--warp-shape";
+            yield return Math.Min(WarpShape, 100).ToString(CultureInfo.InvariantCulture);
+        }
+        /* the base turned or mirrored (0 none, 1..3 quarter turns, 4 mirrored, 8 by the seed) and its ceilings lifted */
+        if (WarpTurn is > 0 and <= 8)
+        {
+            yield return "--warp-turn";
+            yield return WarpTurn.ToString(CultureInfo.InvariantCulture);
+        }
+        if (WarpShift > 0)
+        {
+            yield return "--warp-shift";
+            yield return Math.Min(WarpShift, 100).ToString(CultureInfo.InvariantCulture);
+        }
+        if (WarpHeight > 100)
+        {
+            yield return "--warp-height";
+            yield return Math.Min(WarpHeight, 300).ToString(CultureInfo.InvariantCulture);
         }
         foreach (var (flag, value) in new[] { ("--new-water", NewWater), ("--new-slime", NewSlime), ("--new-lava", NewLava) })
             if (value >= 0)
@@ -155,6 +209,64 @@ public sealed class Generation
     /// <summary>Row 410: the plan's new building in words, from its «stage=plan» line; empty before it.</summary>
     public string PlanMade { get; private set; } = "";
     /// <summary>
+    /// Brief 16 D2 (the PO, 10.10: «оценка того, что можно изменить на карте не качественная»): the plan's word, from
+    /// its «stage=plan-value» line - the difference it can give at most with the builds left (permille), those builds,
+    /// and what was asked; the first round's word kept for the end («план давал до N %»).
+    /// </summary>
+    public int PlanCan { get; private set; } = -1;
+    public int PlanBuilds { get; private set; }
+    public int PlanFirstCan { get; private set; } = -1;
+    /// <summary>Brief 16 D0: the ladder, from the «stage=ladder» line - declined, refused before the build, tried
+    /// before, kept for the end, built, walked whole; null before it.</summary>
+    public int[]? Ladder { get; private set; }
+    /// <summary>
+    /// The base's frame changed before the first edit (the PO, 10.10: «хочется именно менять донора и уже к нему
+    /// пристраивать»): its area against the donor's (permille) and its parts' factors, from «stage=warp-done»; -1 when
+    /// the frame was not changed. `WarpKept`: asked, and no warped map walked.
+    /// </summary>
+    public int WarpArea { get; private set; } = -1;
+    /// <summary>The warped base the generator kept beside its job («stage=warp-base»): what the map's checks hold it
+    /// to; empty when the frame was not changed.</summary>
+    public string WarpBase { get; private set; } = "";
+    public string WarpParts { get; private set; } = "";
+    public bool WarpKept { get; private set; }
+    /// <summary>The smallest and largest factor of the parts in a «x=0.82,1.61 y=1.12,1.73 area=200» line.</summary>
+    public static (double Lo, double Hi) WarpSpread(string parts)
+    {
+        double lo = double.MaxValue, hi = 0;
+        foreach (var word in parts.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!(word.StartsWith("x=") || word.StartsWith("y=")))
+                continue;
+            foreach (var v in word[2..].Split(','))
+                if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var k))
+                {
+                    lo = Math.Min(lo, k);
+                    hi = Math.Max(hi, k);
+                }
+        }
+        return hi > 0 ? (lo, hi) : (1, 1);
+    }
+    private static string Times(double k) => k.ToString("0.0#", CultureInfo.CurrentCulture);
+    /// <summary>The turn, the mirror and the ceilings in a «... turn=90 mirror=1 height=150» line.</summary>
+    public static (int Turn, bool Mirror, int Height) WarpFrame(string parts)
+    {
+        int Field(string key, int fallback)
+        {
+            var m = Regex.Match(parts, key + @"=(\d+)");
+            return m.Success && int.TryParse(m.Groups[1].Value, out var v) ? v : fallback;
+        }
+        return (Field("turn", 0), Field("mirror", 0) == 1, Field("height", 100));
+    }
+    /// <summary>The parts' shift in a «... shift=40» line, percent; 0 when there was none.</summary>
+    public static int WarpShiftOf(string parts)
+    {
+        var m = Regex.Match(parts, @"shift=(\d+)");
+        return m.Success && int.TryParse(m.Groups[1].Value, out var v) ? v : 0;
+    }
+    public string PlanWord() => PlanCan < 0 ? "" : Loc.F("run.plan.value", Pct10(PlanCan), PlanBuilds, Pct10(Target));
+    private static string Pct10(int permille) => (permille / 10.0).ToString("0.#", CultureInfo.CurrentCulture);
+    /// <summary>
     /// Row 410: when each NEW build was seen (an attempt line whose build count rose, not a replayed one) - the pace
     /// the window's estimate is taken from. The PO, 05.10: the estimate stood at 16-18 minutes for a quarter of an
     /// hour - it averaged over a start that held the replay's instant builds, so it crept up as fast as time went.
@@ -162,6 +274,56 @@ public sealed class Generation
     public readonly List<(DateTime at, int divergence)> BuildsSeen = new();
     /* row 410: the edit being tried now, from its «stage=try» line, until its verdict's line - the plan of the build */
     public int TryEdit { get; private set; } = -1;
+    /* the PO, 09.10 («уже много времени показывает 0 секунд осталось»): after the budget's last build the run tries
+       its finishing edits - item swaps and spawn moves, a build of their own each (about a minute) and at most
+       FinishingMax of them (MAPGEN_PIPELINE_FINISHING) - the estimate counts them, not the spent budget */
+    public const int FinishingMax = 6;
+    public int FinishingSeen { get; private set; }
+    /* when the edit being tried now began (its «stage=try» line) */
+    public DateTime? TryStarted { get; private set; }
+    public readonly List<double> FinishingSeconds = new();
+    /* the graft pass after it: a room of another map tried in the plan's last graft edits, a build each */
+    public int GraftSeen { get; private set; }
+
+    /// <summary>
+    /// The tail of the edits the budget does not bound, from the plan's own list (plan.txt in the job folder): the
+    /// finishing edits (item swaps and spawn moves, at most <see cref="FinishingMax"/>) and the graft edits.
+    /// </summary>
+    /// <summary>The attempts line's tail: the swaps and grafts after the budget, done of planned; "" for none.</summary>
+    public string TailText()
+    {
+        var (fin, graft) = TailPlanned();
+        return fin + graft > 0 && Budget > 0 && Running
+            ? Loc.F("run.attempts.tail", Math.Min(FinishingSeen, fin) + Math.Min(GraftSeen, graft), fin + graft) : "";
+    }
+
+    public (int finishing, int graft) TailPlanned()
+    {
+        try
+        {
+            var path = Path.Combine(JobDir, "plan.txt");
+            if (!File.Exists(path))
+                return (FinishingMax, 0);
+            int swaps = 0, grafts = 0, liquids = 0;
+            foreach (var line in File.ReadLines(path))
+            {
+                var parts = line.Split(' ');
+                if (parts.Length < 2 || line.StartsWith('#'))
+                    continue;
+                if (parts[1] is "swap-item" or "move-spawn")
+                    swaps++;
+                else if (parts[1] == "reliquid")
+                    liquids++;          // brief 16 D2: the liquids are swapped in the finishing pass too
+                else if (parts[1] == "graft-bundle")
+                    grafts++;
+            }
+            return (Math.Min(FinishingMax, swaps) + Math.Min(FinishingMax, liquids), grafts);
+        }
+        catch (Exception)
+        {
+            return (FinishingMax, 0);
+        }
+    }
     /* row 411 (the PO, 05.10: «доп параметры - это как то учитывается тоже в прогрессе?»): what the plan holds of each
        kind the creative options change, and how many of them were accepted; the edit the run is at */
     public Dictionary<string, int> Planned { get; } = new();
@@ -169,6 +331,8 @@ public sealed class Generation
     public int AtEdit { get; private set; } = -1;
     /* row 411: the light compile's step - «vis» or «rad», its pass, the tenths of it done */
     public string LightStep { get; private set; } = "";
+    /* the PO, 11.10: the frame of the try under way (its «stage=warp-map» line); null before one or without a frame */
+    public WarpMap? Warp { get; private set; }
     public int LightPass { get; private set; }
     public int LightTenths { get; private set; }
     /* row 411 (the PO, 05.10: «лог похоже не изменяется уже давно ... у нас уже совсем другая стадия идет»): the
@@ -196,17 +360,45 @@ public sealed class Generation
         "window" => "windows",
         "reliquid" => "reliquids",
         "stairway" => "stairways",
+        "remodel" => "remodels",
+        "block" => "blocks",
+        "floor-shift" => "floor_shifts",
+        "stair-reshape" => "stair_reshapes",
         _ => "",
     };
+
+    /// <summary>
+    /// Brief 15, the PO 08.10: «на карте в реальном времени нужно отражать что изменяется в части архитектуры уровня (а
+    /// не только пристраивается). Отдельным цветом и надписью» - the edits that change the base's own architecture.
+    /// </summary>
+    public static bool ChangesBase(string family) => family is "remodel" or "block" or "floor-shift" or "stair-reshape" or "reshape-room" or "push-wall" or "turn-bundle"
+        or "widen-connector" or "open-connector" or "relevel" or "stairs-to-ramp" or "stairs-to-lift" or "swap-bundles"
+        or "recompose-bundles" or "recut-room" or "room-block" or "pit" or "window";
+
+    private static readonly string[] PlanKinds = { "digs", "annexes", "storeys", "spans", "floods", "windows", "reliquids", "stairways",
+                                                   "remodels", "blocks", "floor_shifts", "stair_reshapes", "rooms_from", "rooms_copy",
+                                                   "skins_from" };
 
     /// <summary>The plan's kinds as done of planned, in the plan line's order: "" when the plan held none.</summary>
     public string PlanDone()
     {
         var parts = new List<string>();
-        foreach (var k in new[] { "digs", "annexes", "storeys", "spans", "floods", "windows", "reliquids", "stairways", "rooms_from", "rooms_copy", "skins_from" })
+        foreach (var k in PlanKinds)
             if (Planned.GetValueOrDefault(k) > 0)
                 parts.Add(Loc.F($"plan.cat.{k}", Done.GetValueOrDefault(k), Planned[k], SecondName));
         return parts.Count > 0 ? Loc.F("run.plan.done", string.Join(", ", parts)) : "";
+    }
+
+    /// <summary>
+    /// The same as rows for the run page's table (the PO, 11.10: «читать там можно разве что с лупой»): each kind the
+    /// plan holds - its name, how many are done, how many planned.
+    /// </summary>
+    public List<(string key, string name, int done, int planned)> PlanRows()
+    {
+        var second = SecondName.Length > 0 ? SecondName : Request.Grafts?.FirstOrDefault() ?? "";
+        return PlanKinds.Where(k => Planned.GetValueOrDefault(k) > 0)
+                        .Select(k => (k, Loc.F($"plan.name.{k}", second), Done.GetValueOrDefault(k), Planned[k]))
+                        .ToList();
     }
 
     /* brief 9 D4: the second map - its name and what the plan dealt of it and why not more */
@@ -300,11 +492,21 @@ public sealed class Generation
             $"new_water={r.Options?.NewWater ?? -1}", $"new_slime={r.Options?.NewSlime ?? -1}",
             $"new_lava={r.Options?.NewLava ?? -1}",
             $"stairways={r.Options?.Stairways ?? 0}", $"destruction={r.Options?.Destruction ?? 0}",
+            $"remodels={r.Options?.Remodels ?? -1}", $"blocks={r.Options?.Blocks ?? -1}",
+            $"floor_shifts={r.Options?.FloorShifts ?? -1}", $"stair_reshapes={r.Options?.StairReshapes ?? -1}",
+            $"warp_size={r.Options?.WarpSize ?? 100}", $"warp_shape={r.Options?.WarpShape ?? 0}",
+            $"warp_turn={r.Options?.WarpTurn ?? 0}", $"warp_height={r.Options?.WarpHeight ?? 100}",
+            $"warp_shift={r.Options?.WarpShift ?? 0}",
             // row 411: whether the run's accepted steps reach the disk - without them it cannot be resumed
             $"checkpoints={(_s.KeepCheckpoints ? 1 : 0)}",
+            // brief 16 D6: the minutes the run may take
+            $"time_minutes={r.TimeMinutes}",
             $"began={DateTime.Now:O}",
         });
     }
+
+    /// <summary>A run's request as its request.txt has it (a run's folder, or a run's record in data\runs).</summary>
+    public static GenerationRequest? LoadRequestFrom(string runDir) => LoadRequest(runDir);
 
     private static GenerationRequest? LoadRequest(string runDir)
     {
@@ -315,6 +517,7 @@ public sealed class Generation
                      .ToDictionary(a => a[0], a => a[1]);
         int I(string k) => int.TryParse(kv.GetValueOrDefault(k), out var n) ? n : 0;
         int L(string k) => int.TryParse(kv.GetValueOrDefault(k), out var n) ? n : -1;     // row 412: -1 the default
+        int D(string k, int d) => int.TryParse(kv.GetValueOrDefault(k), out var n) ? n : d;
         return new GenerationRequest(kv.GetValueOrDefault("name", "map"), kv.GetValueOrDefault("donor", "q2dm1"),
                                      I("fidelity"), long.TryParse(kv.GetValueOrDefault("seed"), out var sd) ? sd : 0,
                                      (kv.GetValueOrDefault("skip") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries),
@@ -324,7 +527,11 @@ public sealed class Generation
                                      new GenerationOptions(I("digs"), I("annexes"), I("annex_size"), I("storeys"), I("spans"),
                                                            I("halls"), kv.GetValueOrDefault("liquids", ""), I("decor"),
                                                            L("new_water"), L("new_slime"), L("new_lava"), I("stairways"),
-                                                           I("destruction")));
+                                                           I("destruction"), L("remodels"), L("blocks"),
+                                                           L("floor_shifts"), L("stair_reshapes"),
+                                                           D("warp_size", 100), I("warp_shape"),
+                                                           I("warp_turn"), D("warp_height", 100), I("warp_shift")),
+                                     I("time_minutes"));
     }
 
     /// <summary>
@@ -392,6 +599,41 @@ public sealed class Generation
                 Thread.Sleep(250);
             }
         }
+    }
+
+    /// <summary>
+    /// The PO, 11.10 (his run mg_10_6695 of q3t2 was to write over the record of an older mg_10_6695 of q2dm3): what
+    /// already goes by this name - a map in the library, a run's record, a run going on now or queued, a run stopped
+    /// before its end - in words, one per line; "" when the name is free. <paramref name="busy"/> is true when a run
+    /// going on or queued holds it: that one cannot be written over, only the name changed.
+    /// </summary>
+    public static string NameTaken(Settings s, string name, out bool busy)
+    {
+        var said = new List<string>();
+        busy = false;
+        if (Current is { Running: true } c && c.Request.Name == name)
+        {
+            said.Add(Loc.F("gen.taken.running", name));
+            busy = true;
+        }
+        if (Queue.Any(q => q.Name == name))
+        {
+            said.Add(Loc.F("gen.taken.queued", name));
+            busy = true;
+        }
+        if (File.Exists(Path.Combine(s.BspPath, name + ".bsp")))
+            said.Add(Loc.F("gen.taken.map", name));
+        if (Directory.Exists(Path.Combine(s.RunsPath, name)))
+            said.Add(Loc.F("gen.taken.runs", name));
+        try
+        {
+            if (Unfinished(s).Any(x => x.request.Name == name && !(Current is { Running: true } r && r.RunDir == x.runDir)))
+                said.Add(Loc.F("gen.taken.unfinished", name));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+        }
+        return string.Join("\n", said);
     }
 
     /// <summary>Runs in the temp folder that stopped before their end (a crash, the Studio closed) - newest first.</summary>
@@ -566,6 +808,9 @@ public sealed class Generation
             args.Add("--final");
         if (r.MaxAttempts > 0)
             args.AddRange(new[] { "--max-attempts", r.MaxAttempts.ToString(CultureInfo.InvariantCulture) });
+        /* brief 16 D6: the minutes - the generator stops its edits when they are spent */
+        if (r.TimeMinutes > 0)
+            args.AddRange(new[] { "--time-budget", r.TimeMinutes.ToString(CultureInfo.InvariantCulture) });
         foreach (var f in r.SkipFamilies)
             args.AddRange(new[] { "--skip-family", f });
         // the other maps chosen with the base: rooms may be brought in from them (the generator's graft pass)
@@ -772,6 +1017,7 @@ public sealed class Generation
         if (stage == "try")
         {
             TryEdit = I("edit");
+            TryStarted = DateTime.Now;
             TryFamily = f.GetValueOrDefault("family", "");
             var box = f.GetValueOrDefault("box", "").Split(',');
             TryBox = box.Length == 6 && box.All(v => float.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out _))
@@ -800,13 +1046,19 @@ public sealed class Generation
                     Event(Loc.T("run.resume.restarted"));
                 break;
             case "plan":
-                foreach (var k in new[] { "digs", "annexes", "storeys", "spans", "floods", "windows", "reliquids", "stairways" })
-                    Planned[k] = I(k);
+                foreach (var k in new[] { "digs", "annexes", "storeys", "spans", "floods", "windows", "reliquids", "stairways", "remodels", "blocks", "floor_shifts", "stair_reshapes" })
+                    /* what is done already and what this round's plan adds - a later round deals again only what is
+                       still to do, and «блоков 21 из 10» counted all rounds' done against the last round's plan */
+                    Planned[k] = Done.GetValueOrDefault(k) + I(k);
                 // row 410: what the plan holds (the creative options change these)
                 PlanMade = f.ContainsKey("digs")
                     ? Loc.F("run.plan.made", I("digs"), I("annexes"), I("storeys"), I("spans"), I("floods"), I("windows"))
                       + (I("reliquids") > 0 ? Loc.F("run.plan.reliquids", I("reliquids")) : "")
                       + (I("stairways") > 0 ? Loc.F("run.plan.stairways", I("stairways")) : "")
+                      + (I("remodels") > 0 ? Loc.F("run.plan.remodels", I("remodels")) : "")
+                      + (I("blocks") > 0 ? Loc.F("run.plan.blocks", I("blocks")) : "")
+                      + (I("floor_shifts") > 0 ? Loc.F("run.plan.floor_shifts", I("floor_shifts")) : "")
+                      + (I("stair_reshapes") > 0 ? Loc.F("run.plan.stair_reshapes", I("stair_reshapes")) : "")
                       + ((Request.Options?.Destruction ?? 0) > 0 ? Loc.F("run.plan.destruction", Request.Options!.Destruction) : "")
                     : "";
                 Offered = I("offered");
@@ -815,6 +1067,15 @@ public sealed class Generation
                 break;
             case "attempt":
                 Replaying = f.GetValueOrDefault("pass", "") == "replay";
+                if (f.GetValueOrDefault("pass", "") is "finishing" or "graft")
+                {
+                    if (f.GetValueOrDefault("pass", "") == "graft")
+                        GraftSeen++;
+                    else
+                        FinishingSeen++;
+                    if (I("ms") > 0)
+                        FinishingSeconds.Add(I("ms") / 1000.0);
+                }
                 if (!Replaying && I("compiles") > Compiles)
                     BuildsSeen.Add((DateTime.Now, I("divergence")));
                 if (I("edit") == TryEdit)
@@ -872,6 +1133,66 @@ public sealed class Generation
             case "redeal":
                 AtEdit = -1;               // a new plan: its edits are still to come
                 break;
+            case "plan-value":
+                // brief 16 D2: what the plan can give, said before its first build and after each new deal
+                PlanCan = I("can");
+                PlanBuilds = I("builds");
+                if (PlanFirstCan < 0)
+                    PlanFirstCan = PlanCan;
+                Event(PlanWord());
+                break;
+            case "plan-exhausted":
+                Event(Loc.T("run.plan.exhausted"));
+                break;
+            case "warp":
+            {
+                // the base's frame: each warped map tried, built and walked once before the first edit
+                var (lo, hi) = WarpSpread(f.GetValueOrDefault("parts", ""));
+                Event(Loc.F(I("playable") == 1 ? "run.warp.ok" : "run.warp.no", Pct10(I("area")), Times(lo), Times(hi)));
+                break;
+            }
+            case "warp-base":
+                WarpBase = f.GetValueOrDefault("path", "");
+                break;
+            case "warp-map":
+                // the PO, 11.10: the frame being tried, for the scheme to draw the donor stretching into it - said
+                // before the try is built, so the frame's stage begins with it
+                Warp = WarpMap.Parse(f);
+                if (Stage != "warp" && Loc.Has("stage.warp.now"))
+                {
+                    Event(Loc.T("stage.warp.now"));
+                    StageBegan.TryAdd("warp", DateTime.Now);
+                    Stage = "warp";
+                }
+                break;
+            case "warp-done":
+                WarpArea = I("area");
+                WarpParts = f.GetValueOrDefault("parts", "");
+                {
+                    // brief 18 D2: the ceilings get what the game's coordinates have left over the proportional height
+                    var given = System.Text.RegularExpressions.Regex.Match(WarpParts, @"height=(\d+)");
+                    var asked = I("asked_height");
+                    if (given.Success && asked > 100 && int.Parse(given.Groups[1].Value) is var got && got > 100 && got < asked)
+                        Event(Loc.F("run.warp.height.cut", got, asked));
+                }
+                break;
+            case "warp-ceilings-kept":
+                Event(Loc.T("run.warp.height.kept"));
+                break;
+            case "warp-kept":
+                // asked, and not held: no warped map walked, or the warped base's rebuild did not hold to it
+                WarpKept = true;
+                WarpArea = -1;
+                Event(Loc.T("run.warp.kept"));
+                break;
+            case "ladder":
+                Ladder = new[] { I("not_applied"), I("proved"), I("tried"), I("paint"), I("builds"), I("whole") };
+                Event(Loc.F("run.ladder", Ladder[0], Ladder[1], Ladder[2], Ladder[3], Ladder[4], Ladder[5]));
+                break;
+            case "tried-before":
+                if (I("skipped") > 0)
+                    Event(Loc.F("run.tried.before", I("skipped")));
+                break;
             case "light-step":
                 var newStep = f.GetValueOrDefault("step", "") != LightStep || I("pass") != LightPass;
                 LightStep = f.GetValueOrDefault("step", "");
@@ -909,15 +1230,16 @@ public sealed class Generation
         var candidate = Path.Combine(RunDir, "candidate.bsp");
         File.Copy(Artifact, candidate, true);
         _gatesOut = Path.Combine(RunDir, "gates.txt");
-        _gatesJob = new NativeJob();
-        _sharePercent = -1;
-        ApplyShare();
         // python -c "...": first each new room's lights brought to the light round its door (row 408, Fable's brief 6:
         // the map's own light pass may light a door's surroundings otherwise than the donor the lights were valued
         // from), then the gates script, both outputs into gates.txt, inside the job
         var script = Path.Combine(repo, "tools", "mapgen_delivery_gates.py");
         var rooms = Path.Combine(repo, "tools", "mapgen_room_light.py");
         var donor = Engine.DonorPath(Request.Donor);
+        /* the base's frame: what the map is held to - its pickups, glass, water, stairways, rooms' light - is the warped
+           base it was built on, the donor's places moved (q2dm3 at 150 %: «fixed glass beyond the donor's» 91 against
+           75, a stairway «on the donor's rock»); the light's calibration stays the donor's own */
+        var checkDonor = !WarpKept && WarpBase.Length > 0 && File.Exists(WarpBase) ? WarpBase : donor;
         // row 410: a donor never calibrated gets its light fitted ONCE, here, on this first map of it - light-only
         // reruns, no generation (the PO: «каждый раз по 10 раз генерировать карту чтобы подобрать ей свет???»);
         // the fit is kept beside the donor, and this map is relit under it before its rooms are measured
@@ -935,67 +1257,91 @@ public sealed class Generation
                   // brief 11 D2: the released Studio's texture pack (engine/textures/mapgen)
                   (File.Exists(Path.Combine(Engine.Dir, "textures", "mapgen", "catalogue.json"))
                       ? $"os.environ['MAPGEN_TEXTURE_PACK']=r'{Engine.Dir}';" : "");
-        // brief 11 D2: the finished map in ruins, after its checks - then the checks a ruin still answers to, asked
-        // again of it (lit, visible, its textures, its water, its starts standing), named apart
         var destroy = Path.Combine(repo, "tools", "mapgen_destroy.py");
         var pct = Request.Options?.Destruction ?? 0;
         var game = Path.Combine(_s.ClientDir, "baseq2");
-        // the PO, 07.10: «не вижу пунктов по разрушаемости» - the ruin is a stage of its own after the checks
-        // (StartDestruction), with its time on the run's page, no longer hidden inside the checks' job
-        _destroyCode = pct > 0
-            ? env + "import subprocess,sys,os;" +
-              $"d=subprocess.run([sys.executable,r'{destroy}',r'{candidate}','--donor',r'{donor}','--destruction','{pct}'," +
+        /*
+         * The PO, 07.10: «свет точно должен строиться над уже разрушенной картой, если она включена ... проверки нужно
+         * делать до разрушения, но общий свет логично класть после проверок». Three steps, each its own stage:
+         *   1. the checks that do not ask the light (the walk, the pickups, the sky, the textures ...) on the map the
+         *      generation built;
+         *   2. the ruin, when asked, and what a ruin still answers to (it compiles, its textures, its water, its
+         *      starts, its stairways), named «after destruction»;
+         *   3. the light on the map as it will be played - fitted to the donor, each new room brought to its door, the
+         *      fit asked again - and then the light's own check.
+         * The light used to be set and judged on the map before the ruin; the ruin's cracks and breaches then changed
+         * what was lit and nobody looked (mg_1_6662's dark copied room).
+         */
+        var checks = string.Join(",", new[] { "pickups", "glass", "hall", "annex", "storeys", "stairways", "clips",
+                                              "digwalls", "sky", "eye", "stair", "finished", "water", "reach", "axes",
+                                              "static", "starts" });
+        var gatesCode = env + "import subprocess,sys;" +
+                        $"r=subprocess.run([sys.executable,r'{script}',r'{candidate}','--job',r'{JobDir}'," +
+                        $"'--donor',r'{checkDonor}'{second},'--only','{checks}'],capture_output=True,text=True);" +
+                        $"open(r'{_gatesOut}','w',encoding='utf-8').write(r.stdout+r.stderr);" +
+                        "sys.exit(r.returncode)";
+        var ruinOut = Path.Combine(RunDir, "destruction.txt");
+        var destroyCode = env + "import subprocess,sys,os;" +
+              $"d=subprocess.run([sys.executable,r'{destroy}',r'{candidate}','--donor',r'{checkDonor}','--destruction','{pct}'," +
               $"'--seed','{Request.Seed}','--game',r'{game}','--boxes',r'{Path.Combine(JobDir, "ruin.txt")}'," +
               // brief 14 F2: the generator's own stairways, annexes, storeys and spans kept whole by the ruin
               $"'--keep-from',r'{JobDir}']," +
               "capture_output=True,text=True);" +
               "os.environ['MAPGEN_GATE_PREFIX']='after destruction: ';" +
-              $"r2=subprocess.run([sys.executable,r'{script}',r'{candidate}','--job',r'{JobDir}','--donor',r'{donor}'," +
+              $"r2=subprocess.run([sys.executable,r'{script}',r'{candidate}','--job',r'{JobDir}','--donor',r'{checkDonor}'," +
               "'--only','finished,axes,water,starts,stairways'],capture_output=True,text=True);" +
-              $"open(r'{Path.Combine(RunDir, "destruction.txt")}','w',encoding='utf-8').write(" +
+              $"open(r'{ruinOut}','w',encoding='utf-8').write(" +
               "'DESTRUCTION\\n'+d.stdout+d.stderr+'\\n'+r2.stdout+r2.stderr);" +
-              "sys.exit(d.returncode or r2.returncode)"
-            : null;
-        const string after = "d=None;r2=None;";
-        var code = env + "import subprocess,sys;" +
+              "sys.exit(d.returncode or r2.returncode)";
+        var lightOut = Path.Combine(RunDir, "light.txt");
+        // a ruined map's refit is this run's own (light_override.json), the donor's calibration untouched
+        var lightCode = env + (pct > 0 ? $"os.environ['MAPGEN_LIGHT_OVERRIDE']=r'{Path.Combine(RunDir, "light_override.json")}';" : "") +
+                   "import subprocess,sys;" +
                    $"f=subprocess.run([sys.executable,r'{fit}',r'{candidate}',r'{donor}',r'{fitWork}']," +
                    "capture_output=True,text=True);" +
                    "x=['--relight-first'] if 'FITTED' in f.stdout else [];" +
                    $"l=subprocess.run([sys.executable,r'{rooms}',r'{candidate}','--job',r'{JobDir}'," +
                    $"'--donor',r'{donor}'{second}]+x,capture_output=True,text=True);" +
-                   // brief 12 L3: the fit asked again of the map as the room step left it, only when the gate reads
-                   // it out of band, the better kept
-                   $"g=subprocess.run([sys.executable,r'{fit}',r'{candidate}',r'{donor}',r'{fitWork}_after','--after-rooms']," +
+                   // brief 12 L3: the fit asked again of the map as the room step left it, the better kept
+                   $"g=subprocess.run([sys.executable,r'{fit}',r'{candidate}',r'{donor}',r'{fitWork}_after','--after-rooms'" +
+                   // a ruined map's refit relights it and keeps the donor's calibration as it was
+                   (pct > 0 ? ",'--no-store'" : "") + "]," +
                    "capture_output=True,text=True);" +
                    // a refit moves the whole map's level: the rooms brought to their doors once more under it
                    $"l2=subprocess.run([sys.executable,r'{rooms}',r'{candidate}','--job',r'{JobDir}','--donor',r'{donor}'{second}]," +
                    "capture_output=True,text=True) if 'REFITTED' in g.stdout else None;" +
                    $"r=subprocess.run([sys.executable,r'{script}',r'{candidate}','--job',r'{JobDir}'," +
-                   $"'--donor',r'{donor}'{second}],capture_output=True,text=True);" +
-                   after +
-                   $"open(r'{_gatesOut}','w',encoding='utf-8').write(r.stdout+r.stderr+'\\nLIGHT FIT\\n'+f.stdout+f.stderr+'\\nROOM LIGHT\\n'+l.stdout+l.stderr" +
-                   "+'\\nLIGHT REFIT\\n'+g.stdout+g.stderr+('\\nROOM LIGHT AGAIN\\n'+l2.stdout+l2.stderr if l2 else '')" +
-                   "+('\\nDESTRUCTION\\n'+d.stdout+d.stderr+'\\n'+r2.stdout+r2.stderr if d else ''));" +
-                   "sys.exit(r.returncode or (d.returncode if d else 0) or (r2.returncode if r2 else 0))";
-        _gatesJob.Start(python, new[] { "-c", code }, RunDir);
+                   $"'--donor',r'{donor}'{second},'--only','light'],capture_output=True,text=True);" +
+                   $"open(r'{lightOut}','w',encoding='utf-8').write('LIGHT ON THE FINISHED MAP\\n'+r.stdout+r.stderr" +
+                   "+'\\nLIGHT FIT\\n'+f.stdout+f.stderr+'\\nROOM LIGHT\\n'+l.stdout+l.stderr" +
+                   "+'\\nLIGHT REFIT\\n'+g.stdout+g.stderr+('\\nROOM LIGHT AGAIN\\n'+l2.stdout+l2.stderr if l2 else ''));" +
+                   "sys.exit(r.returncode)";
+        _steps.Clear();
+        _steps.Enqueue(("gates", gatesCode, _gatesOut));
+        if (pct > 0)
+            _steps.Enqueue(("destruction", destroyCode, ruinOut));
+        _steps.Enqueue(("relight", lightCode, lightOut));
+        _stepOut = null;
+        StartStep();
     }
 
-    private string? _destroyCode;
-    private bool _destroying;
+    /* the steps after the generation, in their order: (stage, python code, the file it writes) */
+    private readonly Queue<(string stage, string code, string? output)> _steps = new();
+    private string? _stepOut;
 
-    /// <summary>The finished map in ruins (brief 11 D2), its own stage after the checks; then what a ruin answers to,
-    /// asked again, named apart.</summary>
-    private void StartDestruction()
+    /// <summary>The next step after the generation, as a stage of its own with its time on the run's page.</summary>
+    private void StartStep()
     {
-        Stage = "destruction";
-        StageBegan["destruction"] = DateTime.Now;
-        Event(Loc.T("stage.destruction.now"));
-        _destroying = true;
+        var (stage, code, output) = _steps.Dequeue();
+        Stage = stage;
+        StageBegan[stage] = DateTime.Now;
+        if (stage != "gates")
+            Event(Loc.T($"stage.{stage}.now"));
+        _stepOut = output;
         _gatesJob = new NativeJob();
         _sharePercent = -1;
         ApplyShare();
-        _gatesJob.Start(Engine.Python!, new[] { "-c", _destroyCode! }, RunDir);
-        _destroyCode = null;
+        _gatesJob.Start(Engine.Python!, new[] { "-c", code }, RunDir);
     }
 
     private void PollGates()
@@ -1004,24 +1350,15 @@ public sealed class Generation
             return;
         _gatesJob.Dispose();
         _gatesJob = null;
-        if (_destroyCode != null && !_destroying && Engine.Python != null)
+        ReadGates(_stepOut);
+        // the gates' file keeps the whole story: each later step's account appended to it
+        if (_stepOut != null && _stepOut != _gatesOut && File.Exists(_stepOut) && _gatesOut != null && File.Exists(_gatesOut))
+            File.AppendAllText(_gatesOut, "\n" + File.ReadAllText(_stepOut));
+        if (_steps.Count > 0 && Engine.Python != null)
         {
-            ReadGates(_gatesOut);
-            StartDestruction();
+            StartStep();
             return;
         }
-        if (_destroying)
-        {
-            _destroying = false;
-            var ruin = Path.Combine(RunDir, "destruction.txt");
-            ReadGates(ruin);
-            // the gates' file keeps the whole story, as before: the ruin's part appended to it
-            if (File.Exists(ruin) && File.Exists(_gatesOut))
-                File.AppendAllText(_gatesOut, "\n" + File.ReadAllText(ruin));
-            Deliver();
-            return;
-        }
-        ReadGates(_gatesOut);
         Deliver();
     }
 
@@ -1141,6 +1478,10 @@ public sealed class Generation
         try
         {
             var to = Path.Combine(_s.RunsPath, LibraryName);
+            /* the PO, 11.10: a name written over keeps none of the old run's files beside the new run's */
+            if (Directory.Exists(to))
+                foreach (var old in Directory.GetFiles(to))
+                    File.Delete(old);
             Directory.CreateDirectory(to);
             foreach (var (from, name) in new[]
                      {
@@ -1148,6 +1489,8 @@ public sealed class Generation
                          (Path.Combine(JobDir, "progress.txt"), "progress.txt"),
                          (Path.Combine(JobDir, "progress_before_resume.txt"), "progress_before_resume.txt"),
                          (Path.Combine(JobDir, "plan.txt"), "plan.txt"),
+                         // brief 15 D3: each family asked, dealt and why not more, by round
+                         (Path.Combine(JobDir, "plan_said.txt"), "plan_said.txt"),
                          (Path.Combine(RunDir, "request.txt"), "request.txt"),
                          (Path.Combine(JobDir, "lit", "rad.log"), "rad.log"),
                          (Path.Combine(RunDir, "gates.txt"), "gates.txt"),

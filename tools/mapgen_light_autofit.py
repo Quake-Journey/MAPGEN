@@ -36,6 +36,7 @@ round is kept and the table shows how far (brief 7 decision 2: a stop-and-report
 from __future__ import annotations
 
 import argparse
+import os
 import hashlib
 import json
 import math
@@ -131,7 +132,15 @@ def after_rooms(a) -> int:
         print(f"KEPT '{flags}' - no round read better than the map as it is ({said})")
         return 0
     a.lit.write_bytes(best[1].read_bytes())
-    store(a.donor, best[2], best[3], best[0] == 0.0, best[0], table)
+    # a ruined map is relit, its calibration NOT kept as the donor's: the ruin's cracks and stones would steer every
+    # later map of this donor (the PO, 07.10: the light is set on the ruined map now - its numbers are its own)
+    if not a.no_store:
+        store(a.donor, best[2], best[3], best[0] == 0.0, best[0], table)
+    elif os.environ.get("MAPGEN_LIGHT_OVERRIDE"):
+        # this run's own: the room step after it relights under it (mapgen_light_calibrate.donor_light reads it first)
+        Path(os.environ["MAPGEN_LIGHT_OVERRIDE"]).write_text(json.dumps(
+            {"sha256": hashlib.sha256(a.donor.read_bytes()).hexdigest(), "flags": best[2], "keys": best[3]},
+            indent=1), encoding="utf-8")
     print(f"REFITTED{' IN BAND' if best[0] == 0.0 else ''} flags '{best[2]}' keys {best[3]} | gate "
           + " ".join(f"{k[:4]} {v:.2f}" for k, v in best[4].items()))
     return 0
@@ -147,6 +156,8 @@ def main() -> int:
     ap.add_argument("--after-rooms", action="store_true",
                     help="brief 12 L3: refit on the map the room-light step left, only when the gate reads it out of"
                          " the band, keeping the better")
+    ap.add_argument("--no-store", action="store_true",
+                    help="--after-rooms: relight this map, keep the donor's calibration as it was (a ruined map)")
     a = ap.parse_args()
     if a.after_rooms:
         return after_rooms(a)

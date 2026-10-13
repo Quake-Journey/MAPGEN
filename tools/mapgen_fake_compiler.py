@@ -28,6 +28,10 @@ contract section 17 or a source fact recorded in the C0 audit:
     vis_noop                   later passes leave the BSP byte-identical
     final_no_vis               final profile output with no visibility data
     final_no_light             final profile output with no lighting data
+    light_limits               the light pass refuses without -subdiv 128 or more («Exceeded MAX_PATCHES»), then
+                               without -maxdata 16 MB or more («lightdatasize N > maxdata»), as the real tool on a
+                               map as large as q3t2 at 1000 % (brief 18 D1); every call is written to
+                               MAPGEN_FAKE_CALLS when that is set
     degenerate_output          a readable BSP with no world in it
 
 Usage (argv deliberately mirrors the real tool's shape):
@@ -101,6 +105,9 @@ def parse_args(argv: list[str]) -> dict:
             i += 1
         elif a in ("-bsp", "-vis", "-rad"):
             out["stages"].append(a[1:])
+        elif a in ("-subdiv", "-maxdata") and i + 1 < len(argv):
+            i += 1
+            out[a[1:]] = int(float(argv[i]))            # the last one on the line counts, as the real tool's
         elif a == "-qbsp":
             out["qbsp"] = True
         elif a == "-fast":
@@ -196,6 +203,23 @@ def main(argv: list[str]) -> int:
 
     if behavior == "final_no_vis":
         write_output(bsp_path, args, with_visibility=False)
+        return 0
+
+    if behavior == "light_limits":
+        calls = os.environ.get("MAPGEN_FAKE_CALLS")
+        if calls:
+            with open(calls, "a", encoding="utf-8") as f:
+                f.write("+".join(args["stages"]) + f" subdiv={args.get('subdiv', 64)} "
+                        f"maxdata={args.get('maxdata', 8388608)}\n")
+        if "rad" in args["stages"]:
+            if args.get("subdiv", 64) < 128:
+                print("************ ERROR ************\nExceeded MAX_PATCHES 65535")
+                return 1
+            if args.get("maxdata", 8388608) < 16777216:
+                print("************ ERROR ************\nlightdatasize 17665602 > maxdata 8388608")
+                return 1
+        write_output(bsp_path, args)
+        print(f"{bsp_path.name} written")
         return 0
 
     if behavior == "final_no_light":

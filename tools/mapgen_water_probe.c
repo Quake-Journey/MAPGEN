@@ -205,12 +205,54 @@ static float depth_at(const mapgen_bsp_t *bsp, float x, float y, float z)
     return depth;
 }
 
+/*
+ * The base's frame: `--was BASE.bsp --boxes FILE` (FILE: one box a line, x0 y0 z0 x1 y1 z1 - the accepted edits'
+ * places) marks a face «pocket» when its air was solid in BASE and lies in no box - a piece of the void round the map a
+ * long dig cut off from the outside, which the compiler leaves empty and nobody can get into (the transaction's own
+ * rule, MapGenBsp_StandingWaterNear).
+ */
+static float (*g_boxes)[6];
+static uint32_t g_num_boxes;
+
+static bool in_a_box(const float p[3])
+{
+    for (uint32_t i = 0; i < g_num_boxes; i++)
+        if (p[0] >= g_boxes[i][0] && p[0] <= g_boxes[i][3] && p[1] >= g_boxes[i][1] && p[1] <= g_boxes[i][4]
+            && p[2] >= g_boxes[i][2] && p[2] <= g_boxes[i][5])
+            return true;
+    return false;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s <map.bsp> [baseline.bsp]\n", argv[0]);
+        fprintf(stderr, "usage: %s <map.bsp> [baseline.bsp] [--was BASE.bsp --boxes FILE]\n", argv[0]);
         return 2;
     }
+    mapgen_bsp_t *was = NULL;
+    for (int a = 2; a + 1 < argc; a++) {
+        if (!strcmp(argv[a], "--was")) {
+            was = load(argv[a + 1]);
+            if (!was) {
+                fprintf(stderr, "cannot read %s\n", argv[a + 1]);
+                return 2;
+            }
+        } else if (!strcmp(argv[a], "--boxes")) {
+            FILE *bf = fopen(argv[a + 1], "r");
+            float box[6];
+            while (bf && fscanf(bf, "%f %f %f %f %f %f", &box[0], &box[1], &box[2], &box[3], &box[4], &box[5]) == 6) {
+                float (*grown)[6] = realloc(g_boxes, (g_num_boxes + 1u) * sizeof(*g_boxes));
+                if (!grown)
+                    break;
+                g_boxes = grown;
+                memcpy(g_boxes[g_num_boxes++], box, sizeof(box));
+            }
+            if (bf)
+                fclose(bf);
+        }
+    }
+    if (argc > 2 && !strncmp(argv[2], "--", 2))
+        argc = 2;                               /* no baseline: only the flags */
     mapgen_bsp_t *bsp = load(argv[1]);
     if (!bsp) {
         fprintf(stderr, "cannot read %s\n", argv[1]);
@@ -265,9 +307,11 @@ int main(int argc, char **argv)
                 if (p[i][k] < lo[k]) lo[k] = p[i][k];
                 if (p[i][k] > hi[k]) hi[k] = p[i][k];
             }
-        printf("face %8.0f %-22s %6.0f %6.0f %6.0f .. %6.0f %6.0f %6.0f\n",
+        const float *air = (cf & LIQUID) ? back : front;
+        const bool pocket = was && (MapGenBsp_PointContents(was, air) & CONTENTS_SOLID) && !in_a_box(air);
+        printf("face %8.0f %-22s %6.0f %6.0f %6.0f .. %6.0f %6.0f %6.0f%s\n",
                polygon_area(p, n), tex ? tex->texture : "(none)",
-               lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+               lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], pocket ? " pocket" : "");
     }
     printf("vertical liquid faces %u area %.0f\n", exposed, area);
 

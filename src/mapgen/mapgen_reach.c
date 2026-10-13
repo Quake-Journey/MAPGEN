@@ -81,6 +81,21 @@ typedef struct {
     uint32_t to;
 } edge_t;
 
+/* Brief 16 D5: one collision brush of a compiled map, as a trace sees it - its contents and every side's plane and
+   surface flags, hashed - and the box its axial sides bound. */
+typedef struct {
+    uint64_t hash;
+    float    lo[3], hi[3];
+    uint8_t  held;                  /* PRINT_* : whose tree holds it */
+    uint16_t mover;                 /* PRINT_MACHINE: the machine's index */
+} brush_print_t;
+
+#define PRINT_UNTRACED  0u          /* a trigger's: the walk never traces it */
+#define PRINT_WORLD     1u
+#define PRINT_MACHINE   2u
+
+struct kept_s;
+
 struct mapgen_reach_s {
     mapgen_reach_state_t *states;
     uint32_t              num_states;
@@ -92,6 +107,15 @@ struct mapgen_reach_s {
     /* Why each pickup ordinary movement missed is still reachable: one per
        special traversal the search witnessed, in the order it found them. */
     mapgen_certificate_set_t certificates;
+    /*
+     * Brief 16 D5: kept when the walk was asked to keep - what it simulated, the map's collision brushes sorted by
+     * hash, and a digest of its machines as the walk read them - so a walk of a map made from this one can take
+     * every place this edit could not have touched.
+     */
+    struct kept_s        *sims;
+    brush_print_t        *prints;
+    uint32_t              num_prints;
+    mapgen_movers_t      *movers;
 };
 
 /* ---- the state set --------------------------------------------------------- */
@@ -362,8 +386,40 @@ static uint32_t collect_items(const mapgen_bsp_t *bsp, float (*out)[3],
  * nudges are small - a unit each way, two up - because the question is which
  * representative of this spot to keep, not whether some other spot nearby is
  * reachable.
+ *
+ * Brief 18 D2: and stand means NOT IN A SOLID. A nudge beside a diagonal wall puts the body into it, and the engine
+ * calls a body placed in a solid «on the ground» (a trace that starts solid has a ground entity) - so the nudge
+ * «settled», in the wall, in mid air. q3t2 at 1000 % and x3.11 tall: a player falling past the slanted fillet of
+ * its middle platform (the void under him) was kept as a place at 701 -1882 -59, 0.9 inside the fillet with nothing
+ * under his feet - the one place «with no way back» that refused the map its proportional height twice.
  */
+static bool g_reach_solid_places = false;      /* RED: a body settled inside a solid is a place, as before */
+static bool g_reach_spawn_lift = true;         /* RED: a start is settled at its origin alone (q3t2: no place at all) */
+static bool g_reach_push_flight = true;        /* RED: a push's flight is followed for 180 frames and no longer */
+
+void MapGenReach_SetPushFlight(bool whole)
+{
+    g_reach_push_flight = whole;
+}
+
+void MapGenReach_SetSpawnLift(bool lift)
+{
+    g_reach_spawn_lift = lift;
+}
+
+void MapGenReach_SetSolidPlaces(bool places)
+{
+    g_reach_solid_places = places;
+}
+
+static bool settle_as(mapgen_pmove_player_t *player, const float origin[3], bool in_solid_too);
+
 static bool settle_at(mapgen_pmove_player_t *player, const float origin[3])
+{
+    return settle_as(player, origin, g_reach_solid_places);
+}
+
+static bool settle_as(mapgen_pmove_player_t *player, const float origin[3], bool in_solid_too)
 {
     static const float NUDGE[][3] = {
         {  0,  0,  0 },
@@ -379,7 +435,7 @@ static bool settle_at(mapgen_pmove_player_t *player, const float origin[3])
                               origin[1] + NUDGE[n][1],
                               origin[2] + NUDGE[n][2] };
         MapGenPmove_Spawn(player, at);
-        if (MapGenPmove_DropToFloor(player))
+        if (MapGenPmove_DropToFloor(player) && (in_solid_too || !MapGenPmove_InSolid(player)))
             return true;
     }
     return false;
@@ -863,7 +919,20 @@ static mapgen_reach_result_t take_pushes(explore_t *x, uint32_t from,
             fly.yaw = d * (360.0f / DIRECTIONS);
             fly.forward = 400;
 
-            for (uint32_t f = 0; f < SETTLE_FRAMES * 2; f++) {
+            /*
+             * As long as the throw lasts. Brief 18 D2: 180 frames are 2.9 seconds, and q3t2's middle pad on the map
+             * grown x3.11 (its speed grown with the heights, 1620 up) sets a player down on the floor 1218 over it
+             * after 3.05 - «still in the air: not a place», and the walk said the pad throws nobody, while its two
+             * neighbours (1550 up, 2.8 seconds) worked. Up and down again takes 2 v / g; a tenth over, and the
+             * settling's own frames for what lies lower than the pad.
+             */
+            uint32_t frames = SETTLE_FRAMES * 2;
+            if (g_reach_push_flight && push->velocity[2] > 0.0f) {
+                const uint32_t whole = (uint32_t)(2.2f * push->velocity[2] / 800.0f / 0.016f) + SETTLE_FRAMES;
+                if (whole > frames)
+                    frames = whole < 2000u ? whole : 2000u;
+            }
+            for (uint32_t f = 0; f < frames; f++) {
                 if (!MapGenPmove_Step(&player, &fly))
                     break;
                 if (player.on_ground)
@@ -1234,13 +1303,15 @@ typedef struct {
     uint64_t opened;
     float    lo[3], hi[3];
     bool     any;
+    bool     hazard;               /* brief 16 D5: a lethal place simulates nothing, in this map */
     uint32_t first, count;
     uint32_t next;
 } kept_place_t;
 
-typedef struct {
+typedef struct kept_s {
     bool            off;
-    const mapgen_movers_t *movers;
+    /* the count, not the movers: a kept walk outlives the movers it was read with (brief 16 D5) */
+    uint32_t        num_movers;
     float         (*mover_lo)[3];
     float         (*mover_hi)[3];
     uint32_t       *heads;
@@ -1281,7 +1352,7 @@ static void kept_init(kept_t *k, const mapgen_bsp_t *bsp,
     if (off || !movers)
         return;
     const uint32_t n = movers->num_movers ? movers->num_movers : 1u;
-    k->movers = movers;
+    k->num_movers = movers->num_movers;
     k->mover_lo = calloc(n, sizeof(*k->mover_lo));
     k->mover_hi = calloc(n, sizeof(*k->mover_hi));
     k->heads = malloc(KEPT_HASH * sizeof(*k->heads));
@@ -1330,31 +1401,39 @@ static uint32_t kept_find(const kept_t *k, const float origin[3],
 {
     if (k->off)
         return UINT32_MAX;
+    /* brief 16 D5: one entry per origin AND round's machines - a child's first round finds the parent's first */
+    for (uint32_t at = k->heads[kept_hash(origin)]; at != UINT32_MAX;
+         at = k->place[at].next)
+        if (!memcmp(k->place[at].origin, origin, sizeof(k->place[at].origin)) && k->place[at].opened == opened)
+            return at;
     for (uint32_t at = k->heads[kept_hash(origin)]; at != UINT32_MAX;
          at = k->place[at].next) {
         const kept_place_t *p = &k->place[at];
         if (memcmp(p->origin, origin, sizeof(p->origin)))
             continue;
         const uint64_t changed = p->opened ^ opened;
-        for (uint32_t i = 0; i < k->movers->num_movers; i++) {
+        bool touched = false;
+        for (uint32_t i = 0; i < k->num_movers; i++) {
             if (!((changed >> (i & 63u)) & 1u))
                 continue;
-            if (p->any && kept_meets(p->lo, p->hi, KEPT_TRACE_GROW,
-                                     k->mover_lo[i], k->mover_hi[i]))
-                return UINT32_MAX;
-            if (kept_meets(origin, origin, KEPT_STAND_GROW, k->mover_lo[i],
-                           k->mover_hi[i]))
-                return UINT32_MAX;
+            if ((p->any && kept_meets(p->lo, p->hi, KEPT_TRACE_GROW,
+                                      k->mover_lo[i], k->mover_hi[i]))
+                || kept_meets(origin, origin, KEPT_STAND_GROW, k->mover_lo[i],
+                              k->mover_hi[i])) {
+                touched = true;
+                break;
+            }
         }
-        return at;
+        if (!touched)
+            return at;
     }
     return UINT32_MAX;
 }
 
-/* Keep one place's simulation, replacing what was kept for the same origin. */
+/* Keep one place's simulation, replacing what was kept for the same origin under the same machines. */
 static bool kept_store(kept_t *k, const float origin[3], uint64_t opened,
                        bool any, const float lo[3], const float hi[3],
-                       const arrivals_t *a)
+                       bool hazard, const arrivals_t *a)
 {
     if (k->off)
         return true;
@@ -1372,7 +1451,7 @@ static bool kept_store(kept_t *k, const float origin[3], uint64_t opened,
     const uint32_t h = kept_hash(origin);
     for (uint32_t i = k->heads[h]; i != UINT32_MAX && at == UINT32_MAX;
          i = k->place[i].next)
-        if (!memcmp(k->place[i].origin, origin, sizeof(k->place[i].origin)))
+        if (!memcmp(k->place[i].origin, origin, sizeof(k->place[i].origin)) && k->place[i].opened == opened)
             at = i;
     if (at == UINT32_MAX) {
         if (k->num_place == k->cap_place) {
@@ -1391,6 +1470,7 @@ static bool kept_store(kept_t *k, const float origin[3], uint64_t opened,
     kept_place_t *p = &k->place[at];
     p->opened = opened;
     p->any = any;
+    p->hazard = hazard;
     memcpy(p->lo, lo, sizeof(p->lo));
     memcpy(p->hi, hi, sizeof(p->hi));
     p->first = (uint32_t)k->num_arrival;
@@ -1418,6 +1498,271 @@ static bool kept_replay(const kept_t *k, uint32_t at, uint32_t from,
         if (!arrivals_push(out, from, &settled))
             return false;
     }
+    return true;
+}
+
+/*
+ * Brief 16 D5: the parent's walk, as this one may take from it.
+ *
+ * `changed` holds the box of every collision brush one compiled map has and the other has not - the two maps'
+ * brushes compared as multisets of their hashes (`world_prints`). A place is taken from the parent when the parent
+ * simulated its exact origin, it is as lethal or as safe here as there, no machine whose state differs between that
+ * simulation's round and this one could have touched it (`kept_find`'s own rule: the machines are the same, which is
+ * the condition for using the parent at all), and no changed brush meets the box its simulation swept, grown as the
+ * round reuse grows it. Every query a simulation makes - each trace's swept hull, each contents point - lies inside
+ * that box (`MapGenPmove_RecordBegin`), so the same brushes there give the same answers.
+ */
+typedef struct {
+    const kept_t *kept;            /* NULL: nothing to take */
+    float       (*changed)[6];
+    uint32_t      num_changed;
+} inherit_t;
+
+static uint32_t inherit_find(const inherit_t *in, const float origin[3], uint64_t opened, bool hazard)
+{
+    if (!in || !in->kept)
+        return UINT32_MAX;
+    const uint32_t at = kept_find(in->kept, origin, opened);
+    if (at == UINT32_MAX)
+        return UINT32_MAX;
+    const kept_place_t *p = &in->kept->place[at];
+    if (p->hazard != hazard)
+        return UINT32_MAX;
+    if (p->any)
+        for (uint32_t c = 0; c < in->num_changed; c++)
+            if (kept_meets(p->lo, p->hi, KEPT_TRACE_GROW, in->changed[c], in->changed[c] + 3))
+                return UINT32_MAX;
+    return at;
+}
+
+static uint64_t print_mix(uint64_t h, const void *data, size_t n)
+{
+    const uint8_t *b = data;
+    for (size_t i = 0; i < n; i++)
+        h = (h ^ b[i]) * 1099511628211ull;
+    return h;
+}
+
+static int print_order(const void *a, const void *b)
+{
+    const brush_print_t *x = a, *y = b;
+    return x->hash < y->hash ? -1 : x->hash > y->hash ? 1 : 0;
+}
+
+/*
+ * Every collision brush of a compiled map, as a trace meets it: its contents, and each side's plane and surface
+ * flags, by value - plane NUMBERS differ between two compiles of nearly the same map, the planes do not - hashed;
+ * with the box its axial sides bound (the compiler gives every brush its six; one without them is unbounded) and
+ * whether the world's own tree holds it. Sorted by hash. False on no memory.
+ */
+static void print_tree(const mapgen_bsp_t *bsp, int32_t headnode, uint8_t held, uint16_t mover, brush_print_t *p,
+                       uint32_t n, int32_t *stack, uint32_t cap)
+{
+    uint32_t top = 0;
+    stack[top++] = headnode;
+    while (top) {
+        const int32_t num = stack[--top];
+        if (num < 0) {
+            const mapgen_bsp_leaf_t *leaf = MapGenBsp_Leaf(bsp, (uint32_t)(-1 - num));
+            for (uint32_t i = 0; leaf && i < leaf->numleafbrushes; i++) {
+                const uint32_t b = MapGenBsp_LeafBrush(bsp, leaf->firstleafbrush + i);
+                if (b < n && p[b].held < held) {
+                    p[b].held = held;
+                    p[b].mover = mover;
+                }
+            }
+            continue;
+        }
+        const mapgen_bsp_node_t *node = MapGenBsp_Node(bsp, (uint32_t)num);
+        if (!node || top + 2u > cap)
+            continue;
+        stack[top++] = node->children[0];
+        stack[top++] = node->children[1];
+    }
+}
+
+static bool world_prints(const mapgen_bsp_t *bsp, const mapgen_movers_t *movers, brush_print_t **out,
+                         uint32_t *count)
+{
+    *out = NULL;
+    *count = 0;
+    const uint32_t n = MapGenBsp_NumBrushes(bsp);
+    brush_print_t *p = calloc(n ? n : 1u, sizeof(*p));
+    const uint32_t nodes = MapGenBsp_NumNodes(bsp);
+    int32_t *stack = calloc(nodes + 2u, sizeof(*stack));
+    if (!p || !stack) {
+        free(p);
+        free(stack);
+        return false;
+    }
+    const mapgen_bsp_model_t *world = MapGenBsp_Model(bsp, 0);
+    if (world)
+        print_tree(bsp, world->headnode, PRINT_WORLD, 0, p, n, stack, nodes + 2u);
+    for (uint32_t m = 0; movers && m < movers->num_movers; m++) {
+        const mapgen_bsp_model_t *model = MapGenBsp_Model(bsp, movers->movers[m].model);
+        if (model)
+            print_tree(bsp, model->headnode, PRINT_MACHINE, (uint16_t)m, p, n, stack, nodes + 2u);
+    }
+    free(stack);
+    for (uint32_t b = 0; b < n; b++) {
+        const mapgen_bsp_brush_t *brush = MapGenBsp_Brush(bsp, b);
+        uint64_t h = 1469598103934665603ull;
+        bool bound[6] = { false, false, false, false, false, false };
+        for (int a = 0; a < 3; a++) {
+            p[b].lo[a] = -1e30f;
+            p[b].hi[a] = 1e30f;
+        }
+        if (brush) {
+            h = print_mix(h, &brush->contents, sizeof(brush->contents));
+            for (int32_t s = 0; s < brush->numsides; s++) {
+                const mapgen_bsp_brushside_t *side = MapGenBsp_BrushSide(bsp, (uint32_t)(brush->firstside + s));
+                const mapgen_bsp_plane_t *plane = side ? MapGenBsp_Plane(bsp, side->planenum) : NULL;
+                if (!plane)
+                    continue;
+                const mapgen_bsp_texinfo_t *ti = side->texinfo >= 0
+                                               ? MapGenBsp_TexInfo(bsp, (uint32_t)side->texinfo) : NULL;
+                const int32_t flags = ti ? ti->flags : -1;
+                h = print_mix(h, plane->normal, sizeof(plane->normal));
+                h = print_mix(h, &plane->dist, sizeof(plane->dist));
+                h = print_mix(h, &flags, sizeof(flags));
+                for (int a = 0; a < 3; a++) {
+                    if (plane->normal[a] == 1.0f && plane->normal[(a + 1) % 3] == 0.0f
+                        && plane->normal[(a + 2) % 3] == 0.0f) {
+                        p[b].hi[a] = bound[3 + a] ? fminf(p[b].hi[a], plane->dist) : plane->dist;
+                        bound[3 + a] = true;
+                    } else if (plane->normal[a] == -1.0f && plane->normal[(a + 1) % 3] == 0.0f
+                               && plane->normal[(a + 2) % 3] == 0.0f) {
+                        p[b].lo[a] = bound[a] ? fmaxf(p[b].lo[a], -plane->dist) : -plane->dist;
+                        bound[a] = true;
+                    }
+                }
+            }
+        }
+        p[b].hash = h;
+    }
+    qsort(p, n, sizeof(*p), print_order);
+    *out = p;
+    *count = n;
+    return true;
+}
+
+/*
+ * The brushes two compiled maps do not share, as boxes: walked in hash order, an entry of either map with no equal
+ * entry left in the other is a change. False when the parent's walk cannot be used here at all - a machine's own
+ * brush changed (it moves, so its box at rest says nothing about where it was met), or so much changed that
+ * checking every place against it would cost more than it saves.
+ */
+#define INHERIT_MAX_CHANGED 4096u
+
+/* Is this the same machine, as the walk uses one: what it is, where it is drawn and stops, who works it, what it
+   fires and answers to, and whether anything can. Its clearance numbers are the transaction's, not the walk's. */
+static bool mover_same(const mapgen_mover_t *a, const mapgen_mover_t *b)
+{
+    return a->kind == b->kind && a->model == b->model && !memcmp(a->mins, b->mins, sizeof(a->mins))
+        && !memcmp(a->maxs, b->maxs, sizeof(a->maxs)) && a->num_stops == b->num_stops
+        && !memcmp(a->stop, b->stop, sizeof(a->stop[0]) * (a->num_stops < MAPGEN_MOVER_STOPS
+                                                             ? a->num_stops : MAPGEN_MOVER_STOPS))
+        && a->player_operated == b->player_operated && a->carries == b->carries && a->inoperable == b->inoperable
+        && !strcmp(a->classname, b->classname) && !strcmp(a->targetname, b->targetname)
+        && !strcmp(a->target, b->target);
+}
+
+/* A machine's box over every stop, grown by a player standing near it - what a place it could matter to touches. */
+static void mover_reach_box(const mapgen_mover_t *mv, float out[6])
+{
+    const uint32_t stops = mv->num_stops ? mv->num_stops : 1u;
+    for (uint32_t s = 0; s < stops; s++) {
+        static const float none[3] = { 0, 0, 0 };
+        const float *d = mv->num_stops ? mv->stop[s] : none;
+        for (int a = 0; a < 3; a++) {
+            const float lo = mv->mins[a] + d[a] - KEPT_STAND_GROW, hi = mv->maxs[a] + d[a] + KEPT_STAND_GROW;
+            if (!s || lo < out[a])
+                out[a] = lo;
+            if (!s || hi > out[3 + a])
+                out[3 + a] = hi;
+        }
+    }
+}
+
+/*
+ * The machines of two maps, as the walk uses them. The parent's walk can be used only when every one of its machines
+ * is still the same machine at the same index - the round masks are per index - though a machine may have changed in
+ * place or been added at the end (a dig's lift): those are marked, and their boxes (grown by a standing player) join
+ * the changed brushes'. Teleporters, pads, kill volumes, buttons and relays must be the same.
+ */
+static bool movers_compare(const mapgen_movers_t *was, const mapgen_movers_t *now, uint8_t changed[MAPGEN_MOVER_MAX],
+                           float (*boxes)[6], uint32_t *num_boxes)
+{
+    *num_boxes = 0;
+    memset(changed, 0, MAPGEN_MOVER_MAX);
+    if (!was || !now || now->num_movers < was->num_movers || was->overflowed || now->overflowed)
+        return false;
+    if (was->num_operators != now->num_operators || was->num_portals != now->num_portals
+        || was->num_relays != now->num_relays || was->num_pushes != now->num_pushes
+        || was->num_hurts != now->num_hurts
+        || memcmp(was->operators, now->operators, sizeof(was->operators[0]) * was->num_operators)
+        || memcmp(was->portals, now->portals, sizeof(was->portals[0]) * was->num_portals)
+        || memcmp(was->relays, now->relays, sizeof(was->relays[0]) * was->num_relays)
+        || memcmp(was->pushes, now->pushes, sizeof(was->pushes[0]) * was->num_pushes)
+        || memcmp(was->hurts, now->hurts, sizeof(was->hurts[0]) * was->num_hurts))
+        return false;
+    for (uint32_t m = 0; m < now->num_movers && m < MAPGEN_MOVER_MAX; m++) {
+        if (m < was->num_movers && mover_same(&was->movers[m], &now->movers[m]))
+            continue;
+        if (m < was->num_movers && was->movers[m].model != now->movers[m].model)
+            return false;
+        changed[m] = 1;
+        mover_reach_box(&now->movers[m], boxes[(*num_boxes)++]);
+        if (m < was->num_movers)
+            mover_reach_box(&was->movers[m], boxes[(*num_boxes)++]);
+    }
+    return true;
+}
+
+static bool changed_boxes(const brush_print_t *a, uint32_t na, const brush_print_t *b, uint32_t nb,
+                          const uint8_t mover_changed[MAPGEN_MOVER_MAX], const float (*extra)[6], uint32_t num_extra,
+                          float (**out)[6], uint32_t *count, uint32_t *why)
+{
+    *out = NULL;
+    *count = 0;
+    float (*boxes)[6] = calloc(INHERIT_MAX_CHANGED + 2u * MAPGEN_MOVER_MAX, sizeof(*boxes));
+    if (!boxes)
+        return false;
+    uint32_t i = 0, j = 0, n = 0;
+    bool ok = true;
+    for (uint32_t e = 0; e < num_extra; e++)
+        memcpy(boxes[n++], extra[e], sizeof(boxes[0]));
+    while ((i < na || j < nb) && ok) {
+        const brush_print_t *one = NULL;
+        if (i < na && j < nb && a[i].hash == b[j].hash) {
+            i++;
+            j++;
+            continue;
+        }
+        if (j >= nb || (i < na && a[i].hash < b[j].hash))
+            one = &a[i++];
+        else
+            one = &b[j++];
+        if (one->held == PRINT_UNTRACED)
+            continue;
+        /* a changed machine's own brush is inside that machine's box, already counted */
+        if (one->held == PRINT_MACHINE && one->mover < MAPGEN_MOVER_MAX && mover_changed[one->mover])
+            continue;
+        if (one->held == PRINT_MACHINE || n >= INHERIT_MAX_CHANGED) {
+            *why = one->held == PRINT_MACHINE ? 3u : 4u;
+            ok = false;
+            break;
+        }
+        memcpy(boxes[n], one->lo, sizeof(one->lo));
+        memcpy(boxes[n] + 3, one->hi, sizeof(one->hi));
+        n++;
+    }
+    if (!ok) {
+        free(boxes);
+        return false;
+    }
+    *out = boxes;
+    *count = n;
     return true;
 }
 
@@ -1565,7 +1910,7 @@ static mapgen_reach_result_t walk_level(explore_t *x, const uint32_t *frontier,
                                         uint32_t count, uint64_t opened,
                                         int workers,
                                         const mapgen_reach_cancel_t *cancel,
-                                        kept_t *kept)
+                                        kept_t *kept, const inherit_t *inherit)
 {
     mapgen_reach_result_t rc = MAPGEN_REACH_OK;
 
@@ -1574,23 +1919,40 @@ static mapgen_reach_result_t walk_level(explore_t *x, const uint32_t *frontier,
     float (*box_lo)[3] = walk_calloc(count ? count : 1, sizeof(*box_lo));
     float (*box_hi)[3] = walk_calloc(count ? count : 1, sizeof(*box_hi));
     uint8_t *box_any = walk_calloc(count ? count : 1, 1);
-    if (!out || !todo || !box_lo || !box_hi || !box_any) {
+    /* brief 16 D5: the frontier places taken from the parent's walk, and where it kept each */
+    uint32_t *took = walk_calloc(count ? count : 1, sizeof(*took));
+    uint32_t *took_at = walk_calloc(count ? count : 1, sizeof(*took_at));
+    if (!out || !todo || !box_lo || !box_hi || !box_any || !took || !took_at) {
         free(out);
         free(todo);
         free(box_lo);
         free(box_hi);
         free(box_any);
+        free(took);
+        free(took_at);
         return MAPGEN_REACH_ERR_MEMORY;
     }
 
     /* Row 331: a place an earlier round simulated from the same exact origin,
        where nothing that has changed since can have touched it, is taken as it
-       was; the rest are simulated. */
-    uint32_t misses = 0;
+       was; the rest are simulated. Brief 16 D5: and so is a place the parent's
+       walk simulated, where nothing this edit changed can have touched it. */
+    uint32_t misses = 0, taken = 0;
     for (uint32_t i = 0; i < count; i++) {
         const uint32_t k = kept_find(kept, x->r->states[frontier[i]].origin,
                                      opened);
         if (k == UINT32_MAX) {
+            const uint32_t p = inherit_find(inherit, x->r->states[frontier[i]].origin, opened,
+                                            x->r->states[frontier[i]].hazard);
+            if (p != UINT32_MAX) {
+                if (!kept_replay(inherit->kept, p, frontier[i], &out[i])) {
+                    rc = MAPGEN_REACH_ERR_MEMORY;
+                    break;
+                }
+                took[taken] = i;
+                took_at[taken++] = p;
+                continue;
+            }
             todo[misses++] = i;
             continue;
         }
@@ -1600,6 +1962,7 @@ static mapgen_reach_result_t walk_level(explore_t *x, const uint32_t *frontier,
         }
     }
     x->r->report.reused += count - misses;
+    x->r->report.inherited += taken;
     x->r->report.simulated += misses;
 
     if (workers < 1)
@@ -1618,6 +1981,8 @@ static mapgen_reach_result_t walk_level(explore_t *x, const uint32_t *frontier,
         free(box_lo);
         free(box_hi);
         free(box_any);
+        free(took);
+        free(took_at);
         return rc != MAPGEN_REACH_OK ? rc : MAPGEN_REACH_ERR_MEMORY;
     }
 
@@ -1637,6 +2002,8 @@ static mapgen_reach_result_t walk_level(explore_t *x, const uint32_t *frontier,
         if (!threads) {
             free(shares);
             free(out);
+            free(took);
+            free(took_at);
             return MAPGEN_REACH_ERR_MEMORY;
         }
         int started = 0;
@@ -1692,7 +2059,15 @@ static mapgen_reach_result_t walk_level(explore_t *x, const uint32_t *frontier,
     for (uint32_t m = 0; m < misses && rc == MAPGEN_REACH_OK; m++) {
         const uint32_t i = todo[m];
         if (!kept_store(kept, x->r->states[frontier[i]].origin, opened,
-                        box_any[i] != 0, box_lo[i], box_hi[i], &out[i]))
+                        box_any[i] != 0, box_lo[i], box_hi[i],
+                        x->r->states[frontier[i]].hazard, &out[i]))
+            rc = MAPGEN_REACH_ERR_MEMORY;
+    }
+    /* brief 16 D5: and what was taken from the parent, as the parent kept it - so this walk's own store is whole
+       when it is the parent of the next */
+    for (uint32_t m = 0; m < taken && rc == MAPGEN_REACH_OK; m++) {
+        const kept_place_t *p = &inherit->kept->place[took_at[m]];
+        if (!kept_store(kept, p->origin, p->opened, p->any, p->lo, p->hi, p->hazard, &out[took[m]]))
             rc = MAPGEN_REACH_ERR_MEMORY;
     }
 
@@ -1704,7 +2079,202 @@ static mapgen_reach_result_t walk_level(explore_t *x, const uint32_t *frontier,
     free(box_lo);
     free(box_hi);
     free(box_any);
+    free(took);
+    free(took_at);
     return rc;
+}
+
+/*
+ * Brief 16 D5: the pickups' analysis on every core.
+ *
+ * After the walk each pickup is asked whether a place in the starts' component touches it, and each one that none
+ * does is put to a rocket jump from every such place within reach - on q2dm3 six and a half seconds on one thread,
+ * a third of a walk taken from its parent's. Each pickup's answer depends on the states and the map alone, so the
+ * pickups are shared out, each thread on a world of its own (as a level of the walk is), and the answers are read
+ * back in pickup order: the same counts, the same first unreachable pickup, the same certificates in the same order.
+ */
+typedef struct {
+    const mapgen_reach_t *r;
+    const uint8_t        *forward, *backward;
+    const float         (*items)[3];
+    const char          (*names)[MAPGEN_CERT_NAME];
+    uint32_t              num_items;
+    const mapgen_bsp_t   *bsp;
+    const mapgen_movers_t *movers;
+    uint64_t              opened;
+    int                   phase;            /* 1: touched by walking; 2: a rocket jump's witness */
+    bool                  can_rocket;       /* phase 2: a launcher and rockets are in reach */
+    uint8_t              *reached, *ordinary_short;
+    /* phase 2 is shared out by pickup AND block of places - on q2dm3 seven unreachable pickups were seven threads'
+       work while the rest waited: each block's first witnessing place and its certificate, read back in order */
+    uint32_t              blocks;
+    uint32_t             *found;
+    mapgen_certificate_t *certs;
+    const mapgen_reach_cancel_t *cancel;
+#ifdef _WIN32
+    volatile LONG         next;
+    volatile LONG         stopped;
+#else
+    uint32_t              next;
+    int                   stopped;
+#endif
+} items_job_t;
+
+static bool item_touched(const items_job_t *j, uint32_t i)
+{
+    const mapgen_reach_t *r = j->r;
+    for (uint32_t s = 0; s < r->num_states; s++) {
+        if (!j->forward[s] || !j->backward[s])
+            continue;
+        const float *o = r->states[s].origin;
+        if (fabsf(o[0] - j->items[i][0]) > 160.0f || fabsf(o[1] - j->items[i][1]) > 160.0f
+            || fabsf(o[2] - j->items[i][2]) > 96.0f)
+            continue;
+        /* He walks at it and we see how close his body gets (see the analysis below). */
+        const float aim[3] = { j->items[i][0], j->items[i][1], o[2] };
+        float got[3];
+        if (!MapGenPmove_SweepBody(o, aim, got))
+            continue;
+        if (fabsf(got[0] - j->items[i][0]) <= 31.0f && fabsf(got[1] - j->items[i][1]) <= 31.0f
+            && got[2] - 24.0f <= j->items[i][2] + 15.0f && got[2] + 32.0f >= j->items[i][2] - 15.0f)
+            return true;
+    }
+    return false;
+}
+
+#define ITEM_BLOCK 128u
+
+/* The first place of `first` .. `first + ITEM_BLOCK` a rocket jump to pickup `i` is witnessed from, or UINT32_MAX. */
+static uint32_t item_witnessed(const items_job_t *j, uint32_t i, uint32_t first, mapgen_certificate_t *cert)
+{
+    const mapgen_reach_t *r = j->r;
+    const float *item = j->items[i];
+    memset(cert, 0, sizeof(*cert));
+    cert->kind = MAPGEN_TRAVERSAL_ROCKET_JUMP;
+    cert->entity_index = i;
+    snprintf(cert->classname, sizeof(cert->classname), "%s", j->names[i]);
+    memcpy(cert->entity_origin, item, sizeof(cert->entity_origin));
+    memcpy(cert->touch, item, sizeof(cert->touch));
+    cert->needed_launcher = true;
+    cert->needed_rockets = true;
+    cert->damage_taken = rocket_knockback() >= 0.0f ? ROCKET_RADIUS_DAMAGE * SELF_DAMAGE_SHARE : 0.0f;
+    if (!j->can_rocket)
+        return UINT32_MAX;
+    for (uint32_t s = first; s < r->num_states && s < first + ITEM_BLOCK; s++) {
+        if (!j->forward[s] || !j->backward[s])
+            continue;
+        const float *o = r->states[s].origin;
+        const float dx = item[0] - o[0], dy = item[1] - o[1];
+        if (dx * dx + dy * dy > 640.0f * 640.0f)
+            continue;
+        if (item[2] - o[2] > 320.0f || item[2] - o[2] < -64.0f)
+            continue;
+        float landing[3];
+        if (!rocket_jump_touches(o, item, landing))
+            continue;
+        memcpy(cert->launch, o, sizeof(cert->launch));
+        memcpy(cert->landing, landing, sizeof(cert->landing));
+        cert->height_gained = item[2] - o[2];
+        /* He has to come down somewhere a player already stands (see the analysis below). */
+        float back_at[3];
+        const bool stepped = walks_off_to(landing, back_at);
+        for (uint32_t k = 0; k < r->num_states; k++) {
+            if (!j->forward[k] || !j->backward[k])
+                continue;
+            const float *back = r->states[k].origin;
+            if (stepped && fabsf(back[0] - back_at[0]) <= 64.0f && fabsf(back[1] - back_at[1]) <= 64.0f
+                && fabsf(back[2] - back_at[2]) <= 40.0f)
+                return s;
+            if (fabsf(back[0] - landing[0]) <= 64.0f && fabsf(back[1] - landing[1]) <= 64.0f
+                && fabsf(back[2] - landing[2]) <= 40.0f)
+                return s;
+        }
+    }
+    return UINT32_MAX;
+}
+
+static void items_work(items_job_t *j)
+{
+    const bool mine = !MapGenPmove_Bound();
+    if (mine) {
+        if (MapGenPmove_BindWorld(j->bsp, j->movers) != MAPGEN_PMOVE_OK) {
+#ifdef _WIN32
+            InterlockedExchange(&j->stopped, 2);
+#else
+            j->stopped = 2;
+#endif
+            return;
+        }
+        MapGenPmove_SetOpened(j->opened);
+    }
+    MapGenPmove_OverrideStop(-1, 0);
+    const uint32_t units = j->phase == 1 ? j->num_items : j->num_items * j->blocks;
+    for (;;) {
+#ifdef _WIN32
+        const uint32_t u = (uint32_t)(InterlockedIncrement(&j->next) - 1);
+#else
+        const uint32_t u = j->next++;
+#endif
+        if (u >= units || j->stopped)
+            break;
+        const uint32_t i = j->phase == 1 ? u : u / j->blocks;
+        if (asked_to_stop(j->cancel)) {
+#ifdef _WIN32
+            InterlockedCompareExchange(&j->stopped, 1, 0);
+#else
+            j->stopped = 1;
+#endif
+            break;
+        }
+        if (j->phase == 1) {
+            if (item_touched(j, i))
+                j->reached[i] = 1;
+            else
+                j->ordinary_short[i] = 1;
+        } else if (j->ordinary_short[i]) {
+            j->found[u] = item_witnessed(j, i, (u % j->blocks) * ITEM_BLOCK, &j->certs[u]);
+        }
+    }
+    if (mine)
+        MapGenPmove_Release();
+}
+
+#if defined(_WIN32) && !defined(MAPGEN_REACH_TEST_THREAD_FAILURE)
+static unsigned __stdcall items_thread(void *arg)
+{
+    items_work((items_job_t *)arg);
+    return 0;
+}
+#endif
+
+/* One phase over every pickup, on `workers` threads, this one among them. */
+static mapgen_reach_result_t items_phase(items_job_t *j, int phase, int workers)
+{
+    j->phase = phase;
+    j->next = 0;
+    j->stopped = 0;
+#if defined(_WIN32) && !defined(MAPGEN_REACH_TEST_THREAD_FAILURE)
+    const uint32_t units = phase == 1 ? j->num_items : j->num_items * j->blocks;
+    if ((uint32_t)workers > units)
+        workers = (int)units;
+    HANDLE threads[64];
+    int started = 0;
+    for (int w = 1; w < workers && w < 64; w++) {
+        threads[started] = (HANDLE)_beginthreadex(NULL, 8u * 1024u * 1024u, items_thread, j, 0, NULL);
+        if (threads[started])
+            started++;
+    }
+    items_work(j);
+    for (int i = 0; i < started; i++) {
+        WaitForSingleObject(threads[i], INFINITE);
+        CloseHandle(threads[i]);
+    }
+#else
+    (void)workers;
+    items_work(j);
+#endif
+    return j->stopped == 2 ? MAPGEN_REACH_ERR_MEMORY
+         : j->stopped == 1 ? MAPGEN_REACH_CANCELLED : MAPGEN_REACH_OK;
 }
 
 mapgen_reach_result_t MapGenReach_Explore(const mapgen_bsp_t *bsp,
@@ -1833,7 +2403,38 @@ MapGenReach_ExploreWith(const mapgen_bsp_t *bsp, uint32_t budget,
     mapgen_reach_result_t rc = MAPGEN_REACH_OK;
     uint64_t opened = always_open(movers);
     kept_t kept;
-    kept_init(&kept, bsp, movers, options && options->no_round_reuse);
+    /* brief 16 D5: a walk that keeps for the next one keeps every place, whatever the round reuse is told */
+    kept_init(&kept, bsp, movers, options && options->no_round_reuse && !options->keep);
+
+    /*
+     * Brief 16 D5: what the parent's walk can give this one. Its machines must be these machines, read and measured
+     * the same - the round reuse's mover rule is then sound across the two maps - and the brushes the two maps do
+     * not share are the boxes nothing taken may have touched.
+     */
+    brush_print_t *prints = NULL;
+    uint32_t num_prints = 0;
+    inherit_t inherit = { NULL, NULL, 0 };
+    const bool want_prints = options && (options->keep || options->parent);
+    if (want_prints && !world_prints(bsp, movers, &prints, &num_prints)) {
+        prints = NULL;
+        num_prints = 0;
+    }
+    r->report.brushes_changed = UINT32_MAX;
+    uint8_t mover_changed[MAPGEN_MOVER_MAX];
+    float mover_boxes[2u * MAPGEN_MOVER_MAX][6];
+    uint32_t num_mover_boxes = 0;
+    if (options && options->parent) {
+        if (!options->parent->sims || !options->parent->prints || !prints || kept.off || options->parent->sims->off)
+            r->report.parent_refused = 1u;
+        else if (!movers_compare(options->parent->movers, movers, mover_changed, mover_boxes, &num_mover_boxes))
+            r->report.parent_refused = 2u;
+        else if (changed_boxes(options->parent->prints, options->parent->num_prints, prints, num_prints, mover_changed,
+                               (const float (*)[6])mover_boxes, num_mover_boxes, &inherit.changed,
+                               &inherit.num_changed, &r->report.parent_refused)) {
+            inherit.kept = options->parent->sims;
+            r->report.brushes_changed = inherit.num_changed;
+        }
+    }
 
     /*
      * Rounds, because pressing a button changes the map.
@@ -1860,7 +2461,17 @@ MapGenReach_ExploreWith(const mapgen_bsp_t *bsp, uint32_t budget,
 
         for (uint32_t s = 0; s < num_spawns; s++) {
             mapgen_pmove_player_t player;
-            if (!settle_at(&player, spawns[s]))
+            /*
+             * A start is put down as the game puts a player down: nine over its origin, to fall to the floor
+             * (PutClientInServer). q3t2's starts stand 15 over their floors, a body there is 9 inside the floor -
+             * and «settled» there by the rule this file had before 13.10 (a body in a solid is «on the ground»),
+             * walking out only because the engine's step-up tries 18 higher. Lifted, it stands on the floor. A
+             * start that does not settle clear even so is taken as it was.
+             */
+            const float lifted[3] = { spawns[s][0], spawns[s][1], spawns[s][2] + 9.0f };
+            if (!(g_reach_solid_places || !g_reach_spawn_lift
+                      ? settle_at(&player, spawns[s])
+                      : settle_at(&player, lifted) || settle_as(&player, spawns[s], true)))
                 continue;
             uint32_t id = find_state(r, &index, player.origin);
             if (id == UINT32_MAX) {
@@ -1910,7 +2521,7 @@ MapGenReach_ExploreWith(const mapgen_bsp_t *bsp, uint32_t budget,
                 break;
             }
             rc = walk_level(&x, queue + level_start, width, opened, workers,
-                            cancel, &kept);
+                            cancel, &kept, &inherit);
             level_start = level_end;
         }
         if (rc != MAPGEN_REACH_OK)
@@ -1940,7 +2551,19 @@ MapGenReach_ExploreWith(const mapgen_bsp_t *bsp, uint32_t budget,
 
 done:
     free(spawns);
-    kept_free(&kept);
+    free(inherit.changed);
+    /* brief 16 D5: kept with the walk for a child's, when asked and whole */
+    if (options && options->keep && rc == MAPGEN_REACH_OK && !kept.off && prints
+        && (r->sims = malloc(sizeof(*r->sims))) != NULL) {
+        *r->sims = kept;
+        r->prints = prints;
+        r->num_prints = num_prints;
+        prints = NULL;
+        r->movers = movers;            /* kept with the walk; freed by MapGenReach_Free */
+    } else {
+        kept_free(&kept);
+    }
+    free(prints);
 
     r->report.states = r->num_states;
     r->report.edges = r->num_edges;
@@ -2038,53 +2661,40 @@ done:
                 rc = MAPGEN_REACH_ERR_MEMORY;
                 goto after_analysis;
             }
-            for (uint32_t i = 0; i < num_items; i++) {
-                /* The analysis after the walk is not free either: eighty-odd
-                   pickups against six thousand places, each asked with a
-                   trace. A cancel that arrived here used to wait for all of
-                   it and then report OK. */
-                if (asked_to_stop(cancel)) {
-                    free(reached);
-                    free(ordinary_short);
-                    rc = MAPGEN_REACH_CANCELLED;
-                    goto after_analysis;
-                }
-                bool touched = false;
-                for (uint32_t s = 0; s < r->num_states && !touched; s++) {
-                    if (!forward[s] || !backward[s])
-                        continue;
-                    const float *o = r->states[s].origin;
-                    if (fabsf(o[0] - items[i][0]) > 160.0f ||
-                        fabsf(o[1] - items[i][1]) > 160.0f ||
-                        fabsf(o[2] - items[i][2]) > 96.0f)
-                        continue;
-                    /*
-                     * He walks at it and we see how close his body gets.
-                     *
-                     * The states are where bursts came to REST, which is a
-                     * sample of the floor and not a cover of it: the nearest
-                     * one to a rocket box in the corner of a ledge can easily
-                     * be forty units away, and a test that wanted a resting
-                     * place within arm's reach called things unreachable that
-                     * people pick up every match. Sliding the body at it and
-                     * asking whether it overlaps is what the game does, and a
-                     * wall between them stops the slide.
-                     */
-                    const float aim[3] = { items[i][0], items[i][1], o[2] };
-                    float got[3];
-                    if (!MapGenPmove_SweepBody(o, aim, got))
-                        continue;
-                    touched = fabsf(got[0] - items[i][0]) <= 31.0f
-                           && fabsf(got[1] - items[i][1]) <= 31.0f
-                           && got[2] - 24.0f <= items[i][2] + 15.0f
-                           && got[2] + 32.0f >= items[i][2] - 15.0f;
-                }
-                if (touched) {
-                    reached[i] = 1;
-                    continue;
-                }
-                ordinary_short[i] = 1;
+            /* The analysis after the walk is not free either: eighty-odd pickups against six thousand places, each
+               asked with a trace. A cancel that arrives here stops it and is said (brief 16 D5: on every core). */
+            const uint32_t blocks = (r->num_states + ITEM_BLOCK - 1u) / ITEM_BLOCK + 1u;
+            uint32_t *found = calloc((size_t)(num_items ? num_items : 1) * blocks, sizeof(*found));
+            mapgen_certificate_t *certs = calloc((size_t)(num_items ? num_items : 1) * blocks, sizeof(*certs));
+            if (!found || !certs) {
+                free(found);
+                free(certs);
+                free(reached);
+                free(ordinary_short);
+                rc = MAPGEN_REACH_ERR_MEMORY;
+                goto after_analysis;
             }
+            items_job_t job;
+            memset(&job, 0, sizeof(job));
+            job.r = r;
+            job.forward = forward;
+            job.backward = backward;
+            job.items = (const float (*)[3])items;
+            job.names = (const char (*)[MAPGEN_CERT_NAME])item_name;
+            job.num_items = num_items;
+            job.bsp = bsp;
+            job.movers = movers;
+            job.opened = MapGenPmove_Opened();
+            job.reached = reached;
+            job.ordinary_short = ordinary_short;
+            job.blocks = blocks;
+            job.found = found;
+            job.certs = certs;
+            for (size_t u = 0; u < (size_t)num_items * blocks; u++)
+                found[u] = UINT32_MAX;
+            job.cancel = cancel;
+            const int item_workers = want_workers > 0 ? want_workers : Q2PROX_Cpu_PerformanceCount();
+            mapgen_reach_result_t irc = items_phase(&job, 1, item_workers);
 
             /*
              * And what ordinary locomotion could not reach, an accepted
@@ -2103,95 +2713,30 @@ done:
                 has_launcher = has_launcher || item_kind[i] == ITEM_LAUNCHER;
                 has_rockets = has_rockets || item_kind[i] == ITEM_ROCKETS;
             }
-
+            /* No launcher he can get to, or nothing to fire from it, and there is no rocket jump on this map at all. */
+            job.can_rocket = has_launcher && has_rockets;
+            if (irc == MAPGEN_REACH_OK)
+                irc = items_phase(&job, 2, item_workers);
+            if (irc != MAPGEN_REACH_OK) {
+                free(found);
+                free(certs);
+                free(reached);
+                free(ordinary_short);
+                rc = irc;
+                goto after_analysis;
+            }
+            /* read back in pickup order: the same counts, the same first unreachable one, the same certificates */
             for (uint32_t i = 0; i < num_items; i++) {
                 if (!ordinary_short[i])
                     continue;
-
-                bool witnessed = false;
-                /* What the witness did, kept as it happens: by the time the
-                   counter goes up, the states are gone. */
-                mapgen_certificate_t cert;
-                memset(&cert, 0, sizeof(cert));
-                cert.kind = MAPGEN_TRAVERSAL_ROCKET_JUMP;
-                cert.entity_index = i;
-                snprintf(cert.classname, sizeof(cert.classname), "%s",
-                         item_name[i]);
-                memcpy(cert.entity_origin, items[i],
-                       sizeof(cert.entity_origin));
-                memcpy(cert.touch, items[i], sizeof(cert.touch));
-                cert.needed_launcher = true;
-                cert.needed_rockets = true;
-                cert.damage_taken = rocket_knockback() >= 0.0f
-                                  ? ROCKET_RADIUS_DAMAGE * SELF_DAMAGE_SHARE
-                                  : 0.0f;
-                /* No launcher he can get to, or nothing to fire from it, and
-                   there is no rocket jump on this map at all. */
-                if (has_launcher && has_rockets)
-                    for (uint32_t s = 0; s < r->num_states && !witnessed; s++) {
-                        if (!forward[s] || !backward[s])
-                            continue;
-                        const float *o = r->states[s].origin;
-                        const float dx = items[i][0] - o[0];
-                        const float dy = items[i][1] - o[1];
-                        if (dx * dx + dy * dy > 640.0f * 640.0f)
-                            continue;
-                        if (items[i][2] - o[2] > 320.0f
-                            || items[i][2] - o[2] < -64.0f)
-                            continue;
-
-                        float landing[3];
-                        if (!rocket_jump_touches(o, items[i], landing))
-                            continue;
-                        memcpy(cert.launch, o, sizeof(cert.launch));
-                        memcpy(cert.landing, landing, sizeof(cert.landing));
-                        cert.height_gained = items[i][2] - o[2];
-
-                        /*
-                         * And he has to come down somewhere a player already
-                         * stands. A jump that ends in a pit he cannot leave is
-                         * not a route to anything, whatever it touched on the
-                         * way.
-                         */
-                        /*
-                         * Where he can get to from where he came down. The
-                         * landing itself is usually the ledge, which ordinary
-                         * locomotion never reached and which is therefore not
-                         * in the safe component - testing the landing for
-                         * membership was asking whether he had gone nowhere.
-                         */
-                        float back_at[3];
-                        const bool stepped = walks_off_to(landing, back_at);
-                        for (uint32_t k = 0; k < r->num_states && !witnessed;
-                             k++) {
-                            if (!forward[k] || !backward[k])
-                                continue;
-                            const float *back = r->states[k].origin;
-                            if (stepped
-                                && fabsf(back[0] - back_at[0]) <= 64.0f
-                                && fabsf(back[1] - back_at[1]) <= 64.0f
-                                && fabsf(back[2] - back_at[2]) <= 40.0f) {
-                                witnessed = true;
-                                break;
-                            }
-                            /*
-                             * Near enough to be the same standing spot. The
-                             * states are where bursts came to rest, which
-                             * samples a floor rather than covering it, and a
-                             * player's own body is thirty-two wide and
-                             * fifty-six tall.
-                             */
-                            if (fabsf(back[0] - landing[0]) <= 64.0f
-                                && fabsf(back[1] - landing[1]) <= 64.0f
-                                && fabsf(back[2] - landing[2]) <= 40.0f)
-                                witnessed = true;
-                        }
-                    }
-
-                if (witnessed) {
+                uint32_t first = UINT32_MAX;
+                for (uint32_t b = 0; b < blocks && first == UINT32_MAX; b++)
+                    if (found[(size_t)i * blocks + b] != UINT32_MAX)
+                        first = i * blocks + b;
+                if (first != UINT32_MAX) {
                     r->report.items_special++;
                     if (r->certificates.count < MAPGEN_CERT_MAX)
-                        r->certificates.entries[r->certificates.count++] = cert;
+                        r->certificates.entries[r->certificates.count++] = certs[first];
                     else
                         r->certificates.overflowed = true;
                     continue;
@@ -2201,6 +2746,16 @@ done:
                            sizeof(r->report.worst_item));
                 r->report.items_unreachable++;
             }
+            /* which pickups a player gets - by walking, or by a special traversal the map was replayed for - for the
+               landmarks below */
+            uint8_t *item_got = calloc(num_items ? num_items : 1, 1);
+            for (uint32_t i = 0; item_got && i < num_items; i++) {
+                item_got[i] = reached[i];
+                for (uint32_t b = 0; b < blocks && !item_got[i] && ordinary_short[i]; b++)
+                    item_got[i] = found[(size_t)i * blocks + b] != UINT32_MAX;
+            }
+            free(found);
+            free(certs);
             free(reached);
             free(ordinary_short);
 
@@ -2229,8 +2784,7 @@ done:
                 if (is_landmark && reached_room) {
                     for (uint32_t i = 0; i < num_rooms; i++) {
                         const mapgen_room_t *room = MapGenRooms_Room(rooms, i);
-                        if (room->spawns || room->items)
-                            is_landmark[i] = 1;
+                        is_landmark[i] = (uint8_t)((room->spawns ? 1u : 0u) | (room->items ? 2u : 0u));
                     }
                     /* And wherever a machine would set a player down. */
                     for (uint32_t m = 0; m < movers->num_movers; m++) {
@@ -2242,7 +2796,7 @@ done:
                             deck_point(mv, s, deck);
                             const uint32_t which = MapGenRooms_At(rooms, deck);
                             if (which < num_rooms)
-                                is_landmark[which] = 1;
+                                is_landmark[which] |= 4u;
                         }
                     }
 
@@ -2254,6 +2808,29 @@ done:
                         if (which < num_rooms)
                             reached_room[which] = 1;
                     }
+                    /*
+                     * And a room whose pickup a player gets. A pickup is touched, not stood on, and a high one is got
+                     * by a jump or a rocket jump whose landing is no place of the walk: the room then held no place,
+                     * and whether its cells did hung on how the rooms fell - q2dm3 at 150 %: the room of a pickup at
+                     * 432 was in reach after one edit and out of it after a window across the map, its pickup got
+                     * both times (10.10, 6 edits of 25 refused «3 landmarks against the donor's 2»).
+                     */
+                    for (uint32_t i = 0; item_got && i < num_items; i++) {
+                        if (!item_got[i])
+                            continue;
+                        const uint32_t which = MapGenRooms_At(rooms, items[i]);
+                        if (which < num_rooms)
+                            reached_room[which] = 1;
+                    }
+                    /*
+                     * And a room that is a landmark only for its pickups, none of which a player gets, is none: those
+                     * pickups are counted out of reach above, and counting their room again asked only how the rooms
+                     * fell round them - the same pickup at 432, out of reach on the donor and on every map since,
+                     * was a landmark in reach on one map and out of it on the next (q2dm3 at 150 %, 10.10).
+                     */
+                    for (uint32_t i = 0; item_got && i < num_rooms; i++)
+                        if (is_landmark[i] == 2u && !reached_room[i])
+                            is_landmark[i] = 0;
 
                     for (uint32_t i = 0; i < num_rooms; i++) {
                         if (!is_landmark[i])
@@ -2265,6 +2842,11 @@ done:
                             memcpy(r->report.worst_landmark,
                                    MapGenRooms_Room(rooms, i)->centre,
                                    sizeof(r->report.worst_landmark));
+                        }
+                        if (r->report.landmarks_unreachable < MAPGEN_REACH_LANDMARKS_SAID) {
+                            memcpy(r->report.landmark_out[r->report.landmarks_unreachable],
+                                   MapGenRooms_Room(rooms, i)->centre, sizeof(r->report.landmark_out[0]));
+                            r->report.landmark_holds[r->report.landmarks_unreachable] = is_landmark[i];
                         }
                         r->report.landmarks_unreachable++;
                     }
@@ -2278,6 +2860,7 @@ done:
                 r->report.landmarks = 1;
                 r->report.landmarks_unreachable = 1;
             }
+            free(item_got);
 
             for (uint32_t i = 0; i < r->num_states; i++) {
                 if (r->states[i].from_spawn && !(forward[i] && backward[i]))
@@ -2344,7 +2927,8 @@ after_analysis:
 
     /* Only now: settling an item's position needs the world still bound. */
     MapGenPmove_Release();
-    free(movers);
+    if (r->movers != movers)         /* brief 16 D5: a kept walk keeps its machines */
+        free(movers);
     free(items);
     /* Freed on every early error path and, until this line, on none of the
        successful ones. */
@@ -2425,6 +3009,12 @@ void MapGenReach_Free(mapgen_reach_t *r)
        the map again. */
     if (cache_release(r))
         return;
+    if (r->sims) {
+        kept_free(r->sims);
+        free(r->sims);
+    }
+    free(r->prints);
+    free(r->movers);
     free(r->states);
     free(r->edges);
     free(r);
@@ -2544,8 +3134,30 @@ bool MapGenReach_NoWorseThanWhy(const mapgen_reach_report_t *report, const mapge
         return false;
     }
     if (report->landmarks_unreachable > donor->landmarks_unreachable) {
-        SAY("%u landmarks out of reach against the donor's %u", report->landmarks_unreachable,
-            donor->landmarks_unreachable);
+        /* the base's frame: which one - the first of this map's not within 96 of any the donor has out of reach */
+        int lost = -1;
+        const uint32_t said = report->landmarks_unreachable < MAPGEN_REACH_LANDMARKS_SAID
+                            ? report->landmarks_unreachable : MAPGEN_REACH_LANDMARKS_SAID;
+        const uint32_t said_d = donor->landmarks_unreachable < MAPGEN_REACH_LANDMARKS_SAID
+                              ? donor->landmarks_unreachable : MAPGEN_REACH_LANDMARKS_SAID;
+        for (uint32_t i = 0; i < said && lost < 0; i++) {
+            bool known = false;
+            for (uint32_t j = 0; j < said_d && !known; j++)
+                known = fabsf(report->landmark_out[i][0] - donor->landmark_out[j][0]) <= 96.0f
+                     && fabsf(report->landmark_out[i][1] - donor->landmark_out[j][1]) <= 96.0f
+                     && fabsf(report->landmark_out[i][2] - donor->landmark_out[j][2]) <= 96.0f;
+            if (!known)
+                lost = (int)i;
+        }
+        if (lost >= 0)
+            SAY("%u landmarks out of reach against the donor's %u: the room at %.0f %.0f %.0f (%s%s%s)",
+                report->landmarks_unreachable, donor->landmarks_unreachable, (double)report->landmark_out[lost][0],
+                (double)report->landmark_out[lost][1], (double)report->landmark_out[lost][2],
+                report->landmark_holds[lost] & 1u ? "start " : "", report->landmark_holds[lost] & 2u ? "pickup " : "",
+                report->landmark_holds[lost] & 4u ? "deck" : "");
+        else
+            SAY("%u landmarks out of reach against the donor's %u", report->landmarks_unreachable,
+                donor->landmarks_unreachable);
         return false;
     }
     if (report->movers_inoperable > donor->movers_inoperable) {

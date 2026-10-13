@@ -451,6 +451,9 @@ typedef struct {
     /* Row 369: and those inside a skinned dig's gap - faces that face into a
        sealed gap, seen by no player; counted, not refused. */
     uint32_t tjunctions_skin;
+    /* Brief 17: and those far from every brush the edit changed - the compile cut the map differently and failed to
+       weld a vertex of geometry nobody touched; counted, not refused. */
+    uint32_t tjunctions_moved;
     /* And where the first seam the donor does not have was found, when that
        is why the candidate was refused. A count would not say. */
     float    new_seam[3];
@@ -533,6 +536,26 @@ typedef struct {
              walk_rounds, walk_movers;
     /* row 331: places the walk simulated, and places a later round reused */
     uint32_t walk_simulated, walk_reused;
+    /* brief 16 D5: of the reused, the places taken from the parent's walk; and the collision brushes the two
+       compiled maps differ by (UINT32_MAX: the parent's walk could not be used) */
+    uint32_t walk_inherited, walk_changed;
+    uint32_t walk_refused;              /* why the parent's walk was not used (mapgen_reach_report_t.parent_refused) */
+    /*
+     * Brief 16 D1: the proof before the build - true when it refused the edit (no compile, no walk: the verdict is
+     * the one the compiled gate would give, said with «proved before the build»); the brushes the edit changed, the
+     * climb places near them it asked, and its milliseconds.
+     */
+    bool     proved_refusal;
+    uint32_t proof_brushes, proof_places, proof_ms;
+    /* brief 16: the dry replay's observer - the proof's own verdict on a replayed row, and its reason */
+    bool     observed;
+    int      observed_verdict;
+    char     observed_why[160];
+    uint32_t observed_value;            /* the edit's estimated worth, tenths of a permille */
+    uint32_t observed_cells;            /* ... in cells of the divergence lattice */
+    bool     judged;                    /* a dry replay's accepted row judged as a run would */
+    uint32_t observed_true[5];          /* an accepted row's compile against its parent: changed, solid, surface,
+                                           vertical, motif cells */
     /*
      * D21: how much of the PARENT's walk an edit of this size can touch - its
      * states, and those within 512 and within 1024 units of the edit's box.
@@ -598,6 +621,8 @@ MapGenTransaction_Begin(const char *donor_bsp, const char *job_root,
 /* Row 412: why the last base was refused (MAPGEN_TXN_ERR_BASELINE) - the copy against the original, axis by axis;
    false when none was. */
 bool MapGenTransaction_LastBaselineWhy(mapgen_equiv_report_t *out);
+/* Why the last baseline's copy did not compile, "" when it did (the compiler's own last words). */
+const char *MapGenTransaction_LastBaselineCompileWhy(void);
 
 mapgen_transaction_result_t
 MapGenTransaction_BeginWithDonors(const char *donor_bsp, const char *job_root,
@@ -695,6 +720,71 @@ mapgen_transaction_result_t MapGenTransaction_Redeal(mapgen_transaction_t *txn,
  * The caller sets it, because the fidelity is the caller's.
  */
 void MapGenTransaction_SetAmbition(mapgen_transaction_t *txn, int32_t ambition);
+
+/*
+ * Brief 16 D5: every walk the judge takes is kept, and a candidate's walk takes from its parent's every place the edit
+ * could not have touched. True walks every candidate whole, as before - the A/B, and nothing else.
+ */
+void MapGenTransaction_SetWholeWalks(bool whole);
+
+/* Brief 16 D1: every applied edit is proved on its geometry before its build (default on); off - the A/B. */
+void MapGenTransaction_SetProof(bool on);
+
+/*
+ * Brief 16: the dry replay of a finished run's ledger (its checkpoints gone) - every accepted row compiled again from
+ * its edit and accepted without a gate or a walk, every row's edit proved as an observer (`step->observed_*`).
+ * A measurement on the PO's records, not a generation.
+ */
+void MapGenTransaction_SetReplayDry(bool dry);
+/* ... and its first `rows` accepted rows JUDGED as a run judges them (built, walked, every gate), timed */
+void MapGenTransaction_SetReplayJudge(uint32_t rows);
+
+/*
+ * Brief 16 D2: the plan's VALUE, before the first build. Every edit of the plan as dealt is applied to a clone of the
+ * accepted map and proved (D1); a proved one is worth the cells of the divergence lattice it changes, estimated from
+ * its brushes (`value` in tenths of a permille, per edit). The caller sums them, ranks the edits by them, and says
+ * what the plan can give against what was asked.
+ */
+typedef enum {
+    MAPGEN_PLAN_EDIT_UNASKED = 0,
+    MAPGEN_PLAN_EDIT_DECLINED,          /* the operator does not apply it to this map */
+    MAPGEN_PLAN_EDIT_REFUSED,           /* applied, and its proof refuses it */
+    MAPGEN_PLAN_EDIT_PROVED
+} mapgen_plan_edit_state_t;
+
+typedef struct {
+    uint32_t  edits, proved, declined, refused, ms;
+    uint32_t *value;                    /* per edit, tenths of a permille */
+    uint8_t  *state;                    /* per edit, mapgen_plan_edit_state_t */
+    /* per edit, the lattice cells it changes and, of them, the cells new to the metric's count (a room built where
+       there was nothing); and the metric's own counts on the map as it stands - so the caller says the difference a
+       set of edits gives as the metric would: (changed + theirs) / (cells + their new ones) */
+    uint32_t *cells, *added;
+    uint32_t  base_changed, base_cells;
+    /* brief 17 D5: per edit, the cells themselves (`keys[key_first[i] .. + key_count[i]]`, a cell's lattice place,
+       bit 63 set when it is new to the metric's count) - a set of edits changes the UNION of their cells, and two
+       digs under one sky lift change most of the same ones */
+    uint64_t *keys;
+    uint32_t *key_first, *key_count;
+    uint32_t  num_keys;
+} mapgen_plan_value_t;
+
+/* A geometry written as a .map into `dir` (a folder, or the run's sections in memory) and compiled there, as the
+   baseline is: the warped base's build. `out_path` gets the BSP. */
+bool MapGenTransaction_CompileGeometry(const mapgen_geometry_t *geometry, const char *dir, const char *map_name,
+                                       const char *moddir, const mapcompile_adapter_t *adapter,
+                                       char out_path[MAPCOMPILE_MAX_PATH]);
+bool MapGenTransaction_ProvePlan(mapgen_transaction_t *txn, mapgen_plan_value_t *out);
+/* The estimate checked: plan edit `index` applied to the map as it stands and compiled (no walk, nothing accepted) -
+   its estimated cells beside the cells the metric says it changed. A measurement, not a generation. */
+bool MapGenTransaction_PlanCheck(mapgen_transaction_t *txn, uint32_t index, uint32_t *cells, uint32_t *added,
+                                 uint32_t *true_cells, uint32_t *true_added);
+void MapGenTransaction_PlanValueFree(mapgen_plan_value_t *v);
+/* Brief 17 D5: plan edit `index` built dry on the map as it stands - applied, compiled, and asked what a compile alone
+   answers (a dig's hole high into the old map); nothing walked, nothing accepted. False with the reason when the run
+   would refuse it on that compile. */
+bool MapGenTransaction_PlanDryBuild(mapgen_transaction_t *txn, uint32_t index, char *why, size_t why_size,
+                                   uint32_t *true_cells);
 
 /* The plan the transaction offers, in the order it means to spend it. */
 const mapgen_geometry_edit_plan_t *
@@ -814,6 +904,14 @@ bool MapGenTransaction_ReplayDone(mapgen_transaction_t *txn);
 
 /* Row 410: a replay's .map may differ from the one built in its point lights alone (the guards' replays of jobs
    older than row 408's room lights); never set by a real resume. */
+/* Brief 18, the RED seam: false - an edit the plan's trial build refused is built again at its turn (the 12.10 code). */
+void MapGenTransaction_SetDryRefusals(bool keep);
+/* Brief 18 RED: true - a trial build that failed to build refuses its edit whatever was accepted since (as 12.10's
+   first table did); false, the rule - it is built again at its turn once the map has changed. */
+void MapGenTransaction_SetDryFailedStands(bool stands);
+/* Brief 18: edit `index` of the plan in hand is one whose trial build FAILED to build - of that map alone, so it is
+   built again at its turn once the map has changed. The plan gives it no word and keeps its turn by its value. */
+bool MapGenTransaction_DryFailedAgain(const mapgen_transaction_t *txn, uint32_t index);
 void MapGenTransaction_SetReplayAnyLights(bool any);
 
 /* Row 411 (Fable's brief 8): with the job root in memory ("mem:..."), each accepted try's .map and .bsp

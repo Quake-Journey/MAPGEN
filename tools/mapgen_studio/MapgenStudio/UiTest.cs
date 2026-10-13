@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.LogicalTree;
 using Avalonia.VisualTree;
 
 namespace MapgenStudio;
@@ -117,8 +118,12 @@ public sealed partial class MainWindow
             await Task.Delay(250);
         }
         Check("left and come back to while it runs, the window lives", true);
-        Check("the run page says what the plan holds", g.PlanMade.Length > 0
-              && w.GetVisualDescendants().OfType<TextBlock>().Any(t => (t.Text ?? "") == g.PlanMade), g.PlanMade);
+        Check("the run page shows what the plan holds, a row a kind", g.PlanMade.Length > 0
+              && await Until(() => g.PlanRows().Count > 0
+                                   && g.PlanRows().All(r => w.GetVisualDescendants().OfType<TextBlock>().Any(t => (t.Text ?? "") == r.name))
+                                   && w.GetVisualDescendants().OfType<TextBlock>()
+                                       .Any(t => (t.Text ?? "") == Loc.F("plan.of", g.PlanRows()[0].done, g.PlanRows()[0].planned)), 10),
+              string.Join(", ", g.PlanRows().Select(r => $"{r.name} {r.done}/{r.planned}")));
         Check("the run page names its base and the rooms' source",
               w.GetVisualDescendants().OfType<TextBlock>().Any(t => (t.Text ?? "").Contains("q2dm1") && (t.Text ?? "").Contains("koldduel1")));
         Check("the plan has a map to draw", await Until(() => w._runView?.Scheme.Model.Current != null, 10));
@@ -195,9 +200,13 @@ public sealed partial class MainWindow
         Check("resumed, it replays and goes on", await Until(() => r.Accepted > 0 || !r.Running, 20), r.Stage);
         // row 411 (the PO, 05.10): what of each planned kind is done, the plan's edits on the plan, the light's steps
         Check("the run page says how much of each kind in the plan is done",
-              await Until(() => r.PlanDone().Length > 0
-                                && w.GetVisualDescendants().OfType<TextBlock>().Any(t => (t.Text ?? "") == r.PlanDone()), 20),
-              r.PlanDone());
+              await Until(() => r.PlanRows().Count > 0
+                                && r.PlanRows().All(x => w.GetVisualDescendants().OfType<TextBlock>().Any(t => (t.Text ?? "") == x.name))
+                                && r.PlanRows().Any(x => x.done > 0)
+                                && w.GetVisualDescendants().OfType<TextBlock>()
+                                    .Any(t => (t.Text ?? "") == Loc.F("plan.of", r.PlanRows().First(x => x.done > 0).done,
+                                                                      r.PlanRows().First(x => x.done > 0).planned)), 20),
+              string.Join(", ", r.PlanRows().Select(x => $"{x.name} {x.done}/{x.planned}")));
         Check("the plan view holds the plan's edits, still to come drawn faint",
               w._runView?.Scheme.Model.Plan.Count == 10, $"{w._runView?.Scheme.Model.Plan.Count}");
         Check("the light compile's step and share show on its stage",
@@ -221,6 +230,11 @@ public sealed partial class MainWindow
               && events.Contains(Loc.F("scheme.light", Loc.T("light.step.rad0"))), string.Join(" | ", events));
         Check("without an error", r.Error.Length == 0, r.Error);
         Check("into the library", File.Exists(Path.Combine(s.BspPath, "ui_test_map.bsp")));
+        // the PO, 11.10: a name already taken is asked about before a run starts
+        var taken = Generation.NameTaken(s, "ui_test_map", out var takenBusy);
+        Check("the name of a map just made is said to be taken - its map and its records",
+              taken.Contains(Loc.F("gen.taken.map", "ui_test_map")) && taken.Contains(Loc.F("gen.taken.runs", "ui_test_map"))
+              && !takenBusy && Generation.NameTaken(s, "ui_test_free_name", out _).Length == 0, taken);
         var desc = Path.Combine(s.DescriptionsPath, "ui_test_map.ru.txt");
         var text = File.Exists(desc) ? File.ReadAllText(desc) : "";
         Check("its description holds no key in brackets", text.Length > 0 && !KeyInBrackets.IsMatch(text),
@@ -235,8 +249,8 @@ public sealed partial class MainWindow
         // the PO 05.10: the load card shows the graphics card too - its load and its memory, from Windows' counters
         Check("the load card shows the graphics card's load and its memory",
               GpuStats.Percent >= 0 && GpuStats.VramTotal > 0 && GpuStats.VramUsed > 0
-              && w.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == Loc.T("load.gpu"))
-              && w.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == Loc.T("load.vram")),
+              && w._runView?.Meter.GetLogicalDescendants().OfType<TextBlock>().Any(t => t.Text == Loc.T("load.gpu")) == true
+              && w._runView?.Meter.GetLogicalDescendants().OfType<TextBlock>().Any(t => t.Text == Loc.T("load.vram")) == true,
               $"{GpuStats.Name}: {GpuStats.Percent:0.0}%, {GpuStats.VramUsed >> 20} of {GpuStats.VramTotal >> 20} MB");
         w.Go("settings");
         await Task.Delay(300);

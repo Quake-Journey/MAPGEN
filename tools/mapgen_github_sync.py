@@ -298,7 +298,17 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("what", choices=["prepare", "push"])
     ap.add_argument("--export", type=Path, default=EXPORT)
+    ap.add_argument("--po-accepted", default="",
+                    help="push only: the Studio version the PO tested and accepted (it must be the current one)")
     a = ap.parse_args()
+    # the PO, 07.10: nothing goes to GitHub before he accepts the version - a hard stop
+    if a.what == "push":
+        import re as _re
+        current = _re.search(r'new\("([\d.]+)", "',
+                             (TOOLS / "mapgen_studio" / "MapgenStudio" / "Versions.cs").read_text(encoding="utf-8"))
+        if not current or a.po_accepted != current.group(1):
+            raise SystemExit("push refused: the current Studio version is not accepted by the PO"
+                             " (--po-accepted <version> only after he says so)")
     if a.what == "prepare":
         prepare(a.export)
     else:

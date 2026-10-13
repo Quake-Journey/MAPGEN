@@ -30,6 +30,10 @@
 #include "common/mapgen_pipeline.h"
 #include "common/mapgen_transaction.h"
 #include "common/mapgen_geometry_edit.h"
+#include "common/mapgen_warp.h"
+#include "common/mapgen_reach.h"
+#include "common/mapgen_rooms.h"
+#include "common/mapgen_equivalence.h"
 #include "common/q2prox_cpu_topology.h"
 
 /*
@@ -231,10 +235,13 @@ static mapcompile_result_t run_stage(void *ctx,
     const int threads = stage == MAPCOMPILE_STAGE_BSP ? MAPCOMPILE_PINNED_THREADS : request->threads;
     const int n = real->python
         ? snprintf(command, sizeof(command),
-                   "\"\"%s\" \"%s\" --behavior %s %s -threads %d"
+                   "\"\"%s\" \"%s\" --behavior %s %s%s%s -threads %d"
                    " -moddir \"%s\" -basedir \"%s\" \"%s/%s.map\"\" 2>&1",
                    real->python, real->compiler, real->behavior,
-                   stage_flags(stage), request->threads, request->moddir,
+                   stage_flags(stage),
+                   /* brief 18 D1: the light pass's own flags to the fake too - its `light_limits` reads them */
+                   stage == MAPCOMPILE_STAGE_RAD && request->rad_flags[0] ? " " : "",
+                   stage == MAPCOMPILE_STAGE_RAD ? request->rad_flags : "", request->threads, request->moddir,
                    request->basedir, request->job_dir, request->map_name)
         : snprintf(command, sizeof(command),
                    "\"\"%s\" %s%s%s -threads %d -moddir \"%s\""
@@ -275,10 +282,18 @@ static mapcompile_result_t run_stage(void *ctx,
             at = 0;
         } else if (at + 1 < sizeof(line))
             line[at++] = (char)c;
+        /*
+         * The PO, 11.10 («Свет и видимость уже висит много минут на 100%»): a bar's digit d is printed when d tenths
+         * are DONE - «0» as the pass begins, «9» at ninety percent - and the bar ends with «(n)». d + 1 said 100 % for
+         * the whole last tenth, the longest of a visibility pass on a large map. Now d is d tenths, and ten only
+         * when the bar has ended.
+         */
         if (c == '.' && prev1 == '.' && prev2 >= '0' && prev2 <= '9' && stage_now[0])
-            MapCompile_Tick(stage_now, pass, prev2 - '0' + 1);
-        if (c == '(' && prev1 == ' ' && prev2 == '.' && stage_now[0])
+            MapCompile_Tick(stage_now, pass, prev2 - '0');
+        if (c == '(' && prev1 == ' ' && prev2 == '.' && stage_now[0]) {
+            MapCompile_Tick(stage_now, pass, 10);
             pass++;                     /* a bar's «(n)»: the pass is over */
+        }
         prev2 = prev1;
         prev1 = c;
     }
@@ -319,6 +334,20 @@ int main(int argc, char **argv)
      * next to a minute of compiler per attempt - the cost is not measurable.
      */
     setvbuf(stdout, NULL, _IONBF, 0);
+    if (argc == 3 && !strcmp(argv[1], "--light-plan")) {
+        /* brief 18 D1: the light plan of a compiled map, said and nothing else - a guard's question */
+        int subdiv = 0;
+        unsigned long long maxdata = 0, lightmap = 0;
+        uint32_t patches[4] = { 0, 0, 0, 0 };
+        if (!MapGenPipeline_LightPlan(argv[2], &subdiv, &maxdata, patches, &lightmap)) {
+            fprintf(stderr, "cannot read %s\n", argv[2]);
+            return 2;
+        }
+        printf("light-plan subdiv=%d maxdata=%llu patches64=%u patches128=%u patches256=%u patches512=%u "
+               "lightmap=%llu\n", subdiv, maxdata, (unsigned)patches[0], (unsigned)patches[1], (unsigned)patches[2],
+               (unsigned)patches[3], lightmap);
+        return 0;
+    }
     if (argc < 5) {
         fprintf(stderr, "usage: %s <compiler.exe> <donor.bsp> <job dir>"
                         " <map name> [fidelity] [seed] [--diagnostic]"
@@ -341,7 +370,10 @@ int main(int argc, char **argv)
     request.stage_timeout_ms = 1800000;
     request.max_log_bytes = 262144;
     request.disk_budget_bytes = 512ull * 1024ull * 1024ull;
-    request.reach_budget = 40000;
+    /* The walk's one budget (13.10). It was a 40000 of its own here, the generator's went to 60000 for the PO's
+       q3t2 frame, and the last measure - which takes its routes from the run's walks only when they were walked at
+       the route axis's budget - walked both maps again at the end of every run: 202 s on q2dm3, 331 s on q3t2. */
+    request.reach_budget = MAPGEN_REACH_BUDGET;
 
     for (int a = 5; a < argc; a++) {
         if (!strcmp(argv[a], "--diagnostic"))
@@ -371,6 +403,19 @@ int main(int argc, char **argv)
             request.profile = MAPCOMPILE_PROFILE_FINAL;
         else if (!strcmp(argv[a], "--fake") && a + 2 < argc)
             a += 2;                 /* read above, into the adapter */
+        /* brief 16 D6: the run's minutes */
+        else if (!strcmp(argv[a], "--warp-size") && a + 1 < argc)
+            request.warp_size = (uint32_t)strtoul(argv[++a], NULL, 10);     /* the base's area, percent */
+        else if (!strcmp(argv[a], "--warp-turn") && a + 1 < argc)
+            request.warp_turn = (int32_t)strtol(argv[++a], NULL, 10);       /* the base turned or mirrored */
+        else if (!strcmp(argv[a], "--warp-shift") && a + 1 < argc)
+            request.warp_shift = (uint32_t)strtoul(argv[++a], NULL, 10);    /* the parts slid sideways */
+        else if (!strcmp(argv[a], "--warp-height") && a + 1 < argc)
+            request.warp_height = (uint32_t)strtoul(argv[++a], NULL, 10);   /* its ceilings, percent */
+        else if (!strcmp(argv[a], "--warp-shape") && a + 1 < argc)
+            request.warp_shape = (uint32_t)strtoul(argv[++a], NULL, 10);    /* how unequally its parts stretch */
+        else if (!strcmp(argv[a], "--time-budget") && a + 1 < argc)
+            request.time_budget_s = (uint32_t)strtoul(argv[++a], NULL, 10) * 60u;
         else if (!strcmp(argv[a], "--max-attempts") && a + 1 < argc)
             request.max_attempts = (uint32_t)strtoul(argv[a + 1], NULL, 10);
         /* row 392: the crash record's test seam - fault at the Nth candidate */
@@ -395,6 +440,56 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[a], "--checkpoints") && a + 1 < argc)
             request.no_checkpoints = strtol(argv[++a], NULL, 10) == 0;
         /* row 410: the donors guard's replays of jobs older than row 408 - the point lights may differ */
+        else if (!strcmp(argv[a], "--whole-walks"))
+            MapGenTransaction_SetWholeWalks(true);      /* brief 16 D5: every candidate walked whole, as before */
+        else if (!strcmp(argv[a], "--no-proof"))
+            MapGenTransaction_SetProof(false);          /* brief 16 D1: every applied edit built, as before */
+        else if (!strcmp(argv[a], "--no-dry-refusals"))
+            MapGenTransaction_SetDryRefusals(false);    /* brief 18 RED: what a trial build refused is built again */
+        else if (!strcmp(argv[a], "--no-light-plan"))
+            MapGenPipeline_SetLightPlan(false);         /* brief 18 D1 RED: the first light pass at the defaults */
+        else if (!strcmp(argv[a], "--no-light-again"))
+            MapGenPipeline_SetLightAgain(false);        /* brief 18 D1 RED: one light pass, whatever it said */
+        else if (!strcmp(argv[a], "--dry-failed-stands"))
+            MapGenTransaction_SetDryFailedStands(true); /* brief 18 RED: a failed trial build is never tried again */
+        else if (!strcmp(argv[a], "--plan-check") && a + 1 < argc) {
+            request.plan_only = true;                   /* brief 16 D2: the estimate checked edit by edit */
+            request.plan_check = (uint32_t)strtoul(argv[++a], NULL, 10);
+        }
+        else if (!strcmp(argv[a], "--plan-only"))
+            request.plan_only = true;                   /* brief 16 D2: the plan's word, nothing built */
+        else if (!strcmp(argv[a], "--mapping-raw"))
+            MapGenEquivalence_SetMappingOnPlane(false); /* brief 18 D2 RED: mappings by their raw numbers */
+        else if (!strcmp(argv[a], "--keep-flat-brushes"))
+            MapGenGeometry_SetDropFlat(false);          /* brief 18 D2 RED: a flat brush read back as a brush */
+        else if (!strcmp(argv[a], "--rooms-cap-old"))
+            MapGenRooms_SetMaxCells(8388608u);          /* brief 18 D2 RED: a map over 8.4 M cells has no rooms */
+        else if (!strcmp(argv[a], "--walk-budget-old"))
+            request.reach_budget = 40000;               /* RED: the request's own budget - the last measure walks again */
+        else if (!strcmp(argv[a], "--measure-cap-old"))
+            MapGenDivergence_SetMaxCells(8388608u);     /* brief 18 D2 RED: ... and cannot be measured */
+        else if (!strcmp(argv[a], "--ramps-by-leaf"))
+            MapGenWarp_SetRampExact(false);             /* brief 18 D2 RED: a tread under a clip-marked leaf is closed */
+        else if (!strcmp(argv[a], "--warp-starts-grow"))
+            MapGenWarp_SetKeepStarts(false);            /* brief 18 D2 RED: starts grow away from their floors */
+        else if (!strcmp(argv[a], "--warp-drops-grow"))
+            MapGenWarp_SetKeepDrops(false);             /* brief 18 D2 RED: pickups grow away from their floors */
+        else if (!strcmp(argv[a], "--short-flight"))
+            MapGenReach_SetPushFlight(false);           /* brief 18 D2 RED: a push followed for 180 frames only */
+        else if (!strcmp(argv[a], "--solid-places"))
+            MapGenReach_SetSolidPlaces(true);           /* brief 18 D2 RED: a body settled in a solid is a place */
+        else if (!strcmp(argv[a], "--warp-tries") && a + 1 < argc)
+            request.warp_tries = (uint32_t)strtoul(argv[++a], NULL, 10);    /* the frame's tries, at most */
+        else if (!strcmp(argv[a], "--warp-only"))
+            request.warp_only = true;                   /* brief 18 D2: the base's frame, and stop */
+        else if (!strcmp(argv[a], "--replay-judge") && a + 1 < argc)
+            MapGenTransaction_SetReplayJudge((uint32_t)strtoul(argv[++a], NULL, 10));    /* brief 16: timed */
+        else if (!strcmp(argv[a], "--replay-dry")) {
+            /* brief 16: a finished run's ledger, replayed dry and measured - the run stops at its end */
+            request.resume = true;
+            request.replay_dry = true;
+            MapGenTransaction_SetReplayDry(true);
+        }
         else if (!strcmp(argv[a], "--replay-any-lights")) {
             MapGenTransaction_SetReplayAnyLights(true);
             fprintf(stderr, "replay: a .map that differs from the one built in its point lights alone is the same\n");
@@ -427,6 +522,25 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[a], "--spans") && a + 1 < argc) {
             plan_option(&request, argv[a], argv[a + 1]);
             MapGenGeometryEdit_DigSpans((uint32_t)strtoul(argv[++a], NULL, 10));
+        }
+        /* brief 15 D6: the donor's own rooms changed - walls moved and turned, terraces; absent: by the likeness */
+        else if (!strcmp(argv[a], "--remodels") && a + 1 < argc) {
+            plan_option(&request, argv[a], argv[a + 1]);
+            MapGenGeometryEdit_DigRemodels((int32_t)strtol(argv[++a], NULL, 10));
+        }
+        /* brief 15 D6: blocks standing in the donor's rooms; absent: by the likeness */
+        else if (!strcmp(argv[a], "--blocks") && a + 1 < argc) {
+            plan_option(&request, argv[a], argv[a + 1]);
+            MapGenGeometryEdit_DigBlocks((int32_t)strtol(argv[++a], NULL, 10));
+        }
+        /* brief 15 D6: floors raised and sunk, and the base's stairs rebuilt; absent: by the likeness */
+        else if (!strcmp(argv[a], "--floor-shifts") && a + 1 < argc) {
+            plan_option(&request, argv[a], argv[a + 1]);
+            MapGenGeometryEdit_DigFloorShifts((int32_t)strtol(argv[++a], NULL, 10));
+        }
+        else if (!strcmp(argv[a], "--stair-reshapes") && a + 1 < argc) {
+            plan_option(&request, argv[a], argv[a + 1]);
+            MapGenGeometryEdit_DigStairReshapes((int32_t)strtol(argv[++a], NULL, 10));
         }
         /* brief 11 D1: stairways up the rooms' walls, 0..10 */
         else if (!strcmp(argv[a], "--stairways") && a + 1 < argc) {

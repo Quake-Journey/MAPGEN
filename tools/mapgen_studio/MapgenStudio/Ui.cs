@@ -41,19 +41,10 @@ public static class Ui
 
     public static FAIconSource Icon(FASymbol symbol) => new FASymbolIconSource { Symbol = symbol };
 
-    public static FASettingsExpander Setting(string headerKey, string descKey, FASymbol symbol, Control footer,
-                                              string tipKey)
+    public static Control Setting(string headerKey, string descKey, FASymbol symbol, Control footer, string tipKey)
     {
         footer.Tip(tipKey);
-        var e = new FASettingsExpander
-        {
-            Header = Loc.T(headerKey),
-            Description = Loc.T(descKey),
-            IconSource = Icon(symbol),
-            Footer = footer,
-            Margin = new Thickness(0, 0, 0, 4),
-        };
-        return e.Tip(tipKey);
+        return Look.Row(Loc.T(headerKey), Loc.T(descKey), footer, Loc.T(tipKey));
     }
 
     public static Button Button(string textKey, string tipKey, FASymbol? symbol = null, bool accent = false)
@@ -94,10 +85,10 @@ public static class Ui
     /// A page whose content fills the window's height instead of scrolling (row 410: the run's page, its log down to
     /// the window's bottom and following its size).
     /// </summary>
-    public static Border FillPage(Control content) => new()
+    public static Border FillPage(Control content, double maxWidth = 1100) => new()
     {
         Padding = new Thickness(36, 28, 36, 28),
-        MaxWidth = 1100,
+        MaxWidth = maxWidth,
         HorizontalAlignment = HorizontalAlignment.Stretch,
         VerticalAlignment = VerticalAlignment.Stretch,
         Child = content,

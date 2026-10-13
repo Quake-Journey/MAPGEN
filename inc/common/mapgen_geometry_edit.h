@@ -375,6 +375,18 @@ typedef enum {
      * run asks for it (`MapGenGeometryEdit_DigStairways`), 0 by default.
      */
     MAPGEN_EDIT_STAIRWAY,
+    /*
+     * A REMODEL (brief 15 D6, the PO 08.10: «я заказывал изменяемость ... когда мы работаем над донором», his
+     * quake226-229 - «стенку по-другому оформить, повёрнутой немного, немного другой высоты», «пол опускать или
+     * приподнимать», «один скелет»): the donor's OWN architecture changed - a wall moved into its room (a slab from
+     * the floor to its top flush on the old face), a wall turned (a wedge, deep at one end and shallow at the other),
+     * a terrace along a wall (the floor raised 32..64 with a flight along its edge). Built in the room's air only,
+     * so it cannot leak; judged like every edit (the walk kept, the pickups reached).
+     */
+    MAPGEN_EDIT_REMODEL,
+    MAPGEN_EDIT_BLOCK,                  /* brief 15 D6: a block of the annexes' outlines standing in a room */
+    MAPGEN_EDIT_FLOOR_SHIFT,            /* brief 15 D6: a raised dais with steps, or a dry channel with flights */
+    MAPGEN_EDIT_STAIR_RESHAPE,          /* brief 15 D6: a stair of the base rebuilt - a half-round foot, a side flight */
     MAPGEN_EDIT_KINDS
 } mapgen_edit_kind_t;
 
@@ -882,6 +894,7 @@ const char *MapGenGeometryEdit_WhyDeclined(void);
    the passages' flood lines were reached (assignment 22 S0, ledger row 266);
    the plan is heap-allocated and 160 bytes a line */
 #define MAPGEN_EDIT_REFUSALS 1024u
+#define MAPGEN_PRIOR_BOXES 512u     /* brief 18: the earlier rounds' accepted edits a later round keeps clear of */
 uint32_t MapGenGeometryEdit_NumRefusals(const mapgen_geometry_edit_plan_t *p);
 uint32_t MapGenGeometryEdit_RefusalsSeen(const mapgen_geometry_edit_plan_t *p);
 const char *MapGenGeometryEdit_Refusal(const mapgen_geometry_edit_plan_t *p,
@@ -1025,6 +1038,8 @@ uint32_t MapGenGeometryEdit_SkyLiftSkyBrushes(void);
 void MapGenGeometryEdit_SetSkyLift(bool on);
 /* The last lift planned, in words: its lid, F, top, the brushes it laid. */
 const char *MapGenGeometryEdit_SkyLiftSaid(void);
+/* brief 17: the outlines and the glass of the windows built so far (the driver says it) */
+const char *MapGenGeometryEdit_WindowLooksSaid(void);
 
 /*
  * TEST SEAM: whether the dig planner ROUTES pairs no straight shape can lay -
@@ -1080,6 +1095,31 @@ void MapGenGeometryEdit_DigSpans(uint32_t count);
 /* Brief 11 D1: how many STAIRWAYS a plan wants, 0..10 - the Studio's «Пристройки-лестницы»; 0 (the default)
    deals none and draws nothing from any stream. Fewer sites, fewer stairways - said in the plan. */
 void MapGenGeometryEdit_DigStairways(uint32_t count);
+/* Brief 15 D6: how many remodels of the donor's own rooms (walls moved, turned, terraces); -1 by the likeness. */
+void MapGenGeometryEdit_DigRemodels(int32_t count);
+/* Brief 15 D6: how many blocks stand in the donor's rooms (a box, an L, a cross, an octagon, a round one); -1 by the
+   likeness. */
+void MapGenGeometryEdit_DigBlocks(int32_t count);
+/* Brief 15 D6: how many floors changed (a dais raised, a channel sunk with its flights); -1 by the likeness. */
+void MapGenGeometryEdit_DigFloorShifts(int32_t count);
+/* Brief 15 D6: how many of the base's own stairs rebuilt in another shape; -1 by the likeness. */
+void MapGenGeometryEdit_DigStairReshapes(int32_t count);
+/* Brief 15, the PO's mg_5_6675: an edit of the plan the transaction ACCEPTED - the next round's plan deals of each
+   kind only what its order still lacks (21 blocks were accepted of 10 asked: every round dealt ten more). */
+void MapGenGeometryEdit_NoteAccepted(mapgen_geometry_edit_plan_t *plan, uint32_t index);
+/* Brief 18, a test seam: boxes every plan dealt with no previous plan starts from as an earlier round's accepted
+   edits (the recut driver's --prior) - a later round's map without the run that made it. */
+void MapGenGeometryEdit_SeedPrior(const float lo[3], const float hi[3], mapgen_edit_kind_t kind);
+/* Brief 18, the RED seam: false - the reshaping families forget the earlier rounds' edits (the 12.10 code). */
+void MapGenGeometryEdit_KeepPrior(bool keep);
+/* Brief 18: where a move-spawn edit puts its start; false for any other edit. */
+bool MapGenGeometryEdit_SpawnMoveOf(const mapgen_geometry_edit_plan_t *plan, uint32_t index, float to[3]);
+/* Brief 18 RED seam: false - a moved start stands where the floor scan stopped (4..12 over the floor), as before. */
+void MapGenGeometryEdit_SpawnOnFloor(bool exact);
+/* Brief 18, a diagnostic: the plan says («window why: ...») what each window question of a wall in this box came to. */
+void MapGenGeometryEdit_WindowWhy(const float lo[3], const float hi[3]);
+/* Brief 18 RED seam: false - a window wall's side must be IN a room's own cell, as before (MapGenRooms_At). */
+void MapGenGeometryEdit_WindowRoomNear(bool near);
 
 /*
  * Brief 11 D2: DESTRUCTION of a finished map, D percent 1..100 (0 does nothing): cracks (its own textures cracked),
@@ -1136,6 +1176,9 @@ void MapGenGeometryEdit_SetGameDir(const char *dir);
  * cor). Set by the pipeline from its --light-flags; empty is a scale of 1.
  */
 void MapGenGeometryEdit_SetLightFlags(const char *flags);
+/* The base's frame: how much longer a tunnel may run on a base warped larger - the plan's mean factor (1..4; 1 for a
+   base as it was). Set before the plan is dealt. */
+void MapGenGeometryEdit_SetSpanScale(float scale);
 
 /*
  * The waypoints a player walks through one dig, as x,y,z triples, and how many

@@ -204,7 +204,7 @@ WORKER_PARTS = [
     "src/mapgen_worker/host.c",
     "src/mapgen_worker/generate.c",
     "src/mapgen/mapgen_ipc.c",
-    "src/mapgen/mapgen_pipeline.c",
+    "src/mapgen/mapgen_pipeline.c", "src/mapgen/mapgen_warp.c",
     # The pipeline calls the fidelity-zero chain, so anything
     # that links the pipeline links what it invents maps with.
     "src/mapgen/mapgen_synthesis.c",

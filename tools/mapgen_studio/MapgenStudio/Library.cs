@@ -9,6 +9,16 @@ public sealed record MapEntry(string Name, string BspPath, DateTime Made, long B
 
     /// <summary>The base the checks report names, for a map made outside the program (S-5).</summary>
     public string? Base { get; init; }
+
+    /// <summary>The PO, 11.10 (the library's tiles): the base its run was made from, from the run's record.</summary>
+    public string? Donor { get; init; }
+
+    /// <summary>How far its run took it from the base and what was asked, tenths of a percent; -1 unknown.</summary>
+    public int Difference { get; init; } = -1;
+    public int Target { get; init; } = -1;
+
+    /// <summary>The checks passed, of those run.</summary>
+    public int GatesPassed => Gates.Count(g => g.pass);
 }
 
 public static class Library
@@ -23,14 +33,51 @@ public static class Library
         {
             var name = Path.GetFileNameWithoutExtension(bsp);
             var info = new FileInfo(bsp);
+            var (donor, difference, target) = RunFacts(s, name);
             list.Add(new MapEntry(name, bsp, Made(s, name) ?? info.LastWriteTime, info.Length, Cover(s, name),
                                   Description(s, name), Gates(s, name))
             {
                 Shots = Shots(s, name),
                 Base = BaseOf(s, name),
+                Donor = donor,
+                Difference = difference,
+                Target = target,
             });
         }
         return list.OrderByDescending(m => m.Made).ToList();
+    }
+
+    /// <summary>
+    /// The map's run, from its record in data\runs: the base (request.txt) and the difference it reached of the one
+    /// asked (the ledger's last «divergence N of target M»). Nothing known for a map made elsewhere.
+    /// </summary>
+    private static (string? donor, int difference, int target) RunFacts(Settings s, string name)
+    {
+        var dir = Path.Combine(s.RunsPath, name);
+        string? donor = null;
+        int difference = -1, target = -1;
+        try
+        {
+            var request = Path.Combine(dir, "request.txt");
+            if (File.Exists(request))
+                foreach (var line in File.ReadLines(request))
+                    if (line.StartsWith("donor="))
+                        donor = line[6..].Trim();
+            var ledger = Path.Combine(dir, "ledger.txt");
+            if (File.Exists(ledger))
+            {
+                var m = System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(ledger), @"divergence (\d+) of target (\d+)");
+                if (m.Count > 0)
+                {
+                    difference = int.Parse(m[^1].Groups[1].Value);
+                    target = int.Parse(m[^1].Groups[2].Value);
+                }
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or FormatException)
+        {
+        }
+        return (donor, difference, target);
     }
 
     /// <summary>Every picture of the map, in name order.</summary>
@@ -58,6 +105,50 @@ public static class Library
                 return hit;
         }
         return shots.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// A picture of the game kept as a JPEG of quality 90 beside where its PNG was, the PNG gone, the cover's choice
+    /// following it (the PO, 12.10: «с какого хуя нужно грузить 1.1 гб?» - the client's PNG screenshots are 6-7 MB
+    /// each, four a map; a JPEG looks the same at a tenth). False when the picture could not be read.
+    /// </summary>
+    public static bool ToJpeg(string png)
+    {
+        try
+        {
+            var jpg = Path.ChangeExtension(png, ".jpg");
+            using (var bmp = SkiaSharp.SKBitmap.Decode(png))
+            {
+                if (bmp == null)
+                    return false;
+                using var data = bmp.Encode(SkiaSharp.SKEncodedImageFormat.Jpeg, 90);
+                using (var f = File.Create(jpg + ".part"))
+                    data.SaveTo(f);
+            }
+            File.Move(jpg + ".part", jpg, true);
+            var chosen = Path.Combine(Path.GetDirectoryName(png)!, "cover.txt");
+            if (File.Exists(chosen) && string.Equals(File.ReadAllText(chosen).Trim(), Path.GetFileName(png),
+                                                     StringComparison.OrdinalIgnoreCase))
+                File.WriteAllText(chosen, Path.GetFileName(jpg));
+            File.Delete(png);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Every map's PNG pictures made JPEGs (ToJpeg) - once, on a background thread after the Studio opens.</summary>
+    public static int CompactCovers(Settings s)
+    {
+        var n = 0;
+        if (!Directory.Exists(s.CoversPath))
+            return 0;
+        foreach (var dir in Directory.GetDirectories(s.CoversPath))
+            foreach (var png in Directory.GetFiles(dir, "*.png"))
+                n += ToJpeg(png) ? 1 : 0;
+        return n;
     }
 
     /// <summary>Make a shot of the map its cover; no file is renamed.</summary>

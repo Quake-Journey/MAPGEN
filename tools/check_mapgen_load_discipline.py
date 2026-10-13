@@ -139,14 +139,14 @@ def offenders(path: Path) -> list[str]:
 
 
 def share_ok() -> bool:
-    """Rows 329 and 347: at every hour of the day the wrapper's CPUs are at most his share of that hour - 60 per
-    cent from 09:00 to 23:00, 30 otherwise."""
+    """Rows 329 and 347: at every hour of the day the wrapper's CPUs are at most his share of that hour - 40 per
+    cent from 09:00 to 23:00 (the PO, 11.10: «не более 40%»; was 60), 30 otherwise."""
     from datetime import datetime
     n = load_guard.logical_cpus()
     for h in range(24):
         for m in (0, 59):
             at = datetime(2026, 10, 1, h, m)
-            cap = 0.60 if 9 <= h < 23 else 0.30
+            cap = 0.40 if 9 <= h < 23 else 0.30
             if load_guard.allowed_cpus(at) > cap * n or load_guard.share_now(at) > cap + 1e-9:
                 return False
     return True

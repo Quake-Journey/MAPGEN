@@ -46,7 +46,7 @@ from datetime import datetime
 # What fraction of the machine we may occupy, and his numbers: 30 at night (row 329,
 # was 70), 60 from 09:00 to 23:00 his local time (row 347).
 SHARE = 0.30
-DAY_SHARE = 0.60
+DAY_SHARE = 0.40   # the PO, 11.10 evening: «поменьше процесса юзай, не более 40%»
 DAY_HOURS = (9, 23)
 
 # The binaries this rule is about. A launch of any of them outside this module is
@@ -318,8 +318,21 @@ def pin_self() -> bool:
     return _SELF_PINNED
 
 
+def refuse_disk_generation(argv) -> None:
+    """
+    The PO, 07.10 (a guard ran the generator with its files on the disk and froze his VS Code, Codex and another
+    session: «это убийство SSD ... это вообще диверсия»): the generator runs with its working files in memory, as the
+    Studio runs it, or not at all - a hard stop here, for every tool that launches it through the load guard.
+    """
+    words = [str(a) for a in argv]
+    if words and os.path.basename(words[0]).lower() == "pipeline.exe" and "--memory" not in words:
+        raise SystemExit("load guard: pipeline.exe without --memory refused - the generator's work stays in RAM "
+                         "(the PO's rule); generations to measure come from the PO's own Studio runs")
+
+
 def popen(argv, *, creationflags: int = 0, **kw) -> subprocess.Popen:
     """`subprocess.Popen`, below normal, pinned, with the caller's own flags kept."""
+    refuse_disk_generation(argv)
     before = pin_self()
     flags = creationflags | BELOW_NORMAL
     p = subprocess.Popen([str(a) for a in argv], creationflags=flags, **kw)

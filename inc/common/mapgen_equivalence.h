@@ -267,6 +267,13 @@ typedef struct {
     uint32_t groups_added;
     double   groups_missing_area;
     double   groups_added_area;
+    /* Faces of see-through glass the donor draws and the baseline does not while it still draws that glass
+       elsewhere: an older compiler kept the faces between two touching panes, the frozen one keeps one layer
+       (the donor survey of 09.10: q2duel5, q2rdm6, ztn2dm1, lbrdm1 refused for it). Counted, not failed. */
+    uint32_t glass_layers_dropped;
+    /* Point entities the donor buries in its rock, absent from the baseline by design (the copy leaves them out). */
+    uint32_t entities_buried;
+    double   glass_layers_area;
     char     worst_group[MAPGEN_BSP_TEXNAME + 1];
     uint32_t mapping_mismatch;
     /* Walls carrying more distinct mappings than the comparison holds:
@@ -371,5 +378,9 @@ uint32_t MapGenEquivalence_GroupDeltas(mapgen_equiv_surface_diff_t *out,
    the full text would need, like snprintf. */
 size_t MapGenEquivalence_ReportText(const mapgen_equiv_report_t *report,
                                     char *out, size_t capacity);
+
+/* Brief 18 D2 RED: false - texture mappings compared by their raw numbers (an axis leaning out of a slanted wall's
+   plane is «another mapping» though it draws the same); true, the rule - as they sit on the wall. */
+void MapGenEquivalence_SetMappingOnPlane(bool on_plane);
 
 #endif /* MAPGEN_EQUIVALENCE_H */

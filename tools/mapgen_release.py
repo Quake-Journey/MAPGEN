@@ -186,7 +186,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("what", choices=["build", "publish"])
     ap.add_argument("--out", type=Path, default=OUT)
+    ap.add_argument("--po-accepted", default="",
+                    help="publish only: the version the PO tested and accepted, in his words (it must be this one)")
     a = ap.parse_args()
+    # the PO, 07.10: «в GITHUB ты качаешь обновление только когда я принимаю текущую версию» - a hard stop
+    if a.what == "publish" and a.po_accepted != version():
+        raise SystemExit(f"publish refused: version {version()} is not accepted by the PO (--po-accepted {version()}"
+                         " only after he says so); install it locally with --apply-update")
     a.out.mkdir(parents=True, exist_ok=True)
     build(a.out) if a.what == "build" else publish(a.out)
     return 0
