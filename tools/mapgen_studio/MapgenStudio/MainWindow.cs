@@ -582,6 +582,11 @@ public sealed partial class MainWindow : Window
 
     private void Go(string page)
     {
+        if (OpenHook != null)
+        {
+            OpenHook("page:" + page);
+            return;
+        }
         if (page != "generate")
             _formName = null;
         _page = page;
@@ -704,9 +709,22 @@ public sealed partial class MainWindow : Window
     private static string GuidePath(string ext, string? lang = null) =>
         Path.Combine(Settings.ProgramDir, "doc", $"MAPGEN_Studio_Guide_{((lang ?? Loc.Language) == "en" ? "EN" : "RU")}.{ext}");
 
+    /// <summary>The self-test's ear: where a link of the home page leads, instead of opening it.</summary>
+    internal static Action<string>? OpenHook;
+
+    private static bool IsAddress(string path) => path.StartsWith("https://") || path.StartsWith("http://");
+
+    /// <summary>An address as the home page writes it under its link: no scheme, no last slash.</summary>
+    private static string AddressText(string url) => url.Replace("https://", "").Replace("http://", "").TrimEnd('/');
+
     private void OpenDoc(string path)
     {
-        if (!path.StartsWith("https://") && !File.Exists(path) && !Directory.Exists(path))
+        if (OpenHook != null)
+        {
+            OpenHook(path);
+            return;
+        }
+        if (!IsAddress(path) && !File.Exists(path) && !Directory.Exists(path))
         {
             Notice(Loc.F("home.docs.missing", path), FAInfoBarSeverity.Warning);
             return;
@@ -808,6 +826,7 @@ public sealed partial class MainWindow : Window
     {
         var b = new Button
         {
+            Tag = "homelink",
             HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(8, 8, 8, 8),
             CornerRadius = new CornerRadius(8),
@@ -844,12 +863,14 @@ public sealed partial class MainWindow : Window
                                () => OpenInExplorer(Path.Combine(Settings.ProgramDir, "doc"))));
     }
 
-    /// <summary>The PO, 12.10: the project's news channel, its community group and its site, opened in the browser.</summary>
+    /// <summary>The PO, 12.10: the project's news channel, its community group and its site, opened in the browser.
+    /// 13.10: the site is MAPGEN's page there, <c>http://q2pro-x.com/mapgen</c> - «пока не существующий путь ... сайт
+    /// будем делать чуть позже».</summary>
     public static readonly (string key, string url, FASymbol symbol)[] Community =
     {
         ("home.link.news", "https://t.me/Q2RTX", FASymbol.Message),
         ("home.link.group", "https://t.me/Q2PROX", FASymbol.People),
-        ("home.link.site", "https://q2pro-x.com/", FASymbol.Globe),
+        ("home.link.site", "http://q2pro-x.com/mapgen", FASymbol.Globe),
     };
 
     /// <summary>A row under the two paragraphs, seen at once: each link its sign, its name and its address.</summary>
@@ -858,7 +879,7 @@ public sealed partial class MainWindow : Window
         var row = new WrapPanel { Margin = new Thickness(-8, 4, 0, 0) };
         foreach (var c in Community)
         {
-            var link = HomeLink(c.symbol, Loc.T(c.key), c.url.Replace("https://", "").TrimEnd('/'), () => OpenDoc(c.url));
+            var link = HomeLink(c.symbol, Loc.T(c.key), AddressText(c.url), () => OpenDoc(c.url));
             ToolTip.SetTip(link, Loc.T(c.key + ".desc"));
             link.MinWidth = 200;
             link.Margin = new Thickness(0, 0, 18, 0);
@@ -2159,9 +2180,36 @@ reshaping families dropped at the plan (their own rules refuse them on this map)
             home.Measure(new Size(1180, 780));
             home.Arrange(new Rect(0, 0, 1180, 780));
             var texts = home.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text ?? "").ToList();
-            var lost = Community.Where(c => !texts.Any(t => t.Contains(c.url.Replace("https://", "").TrimEnd('/')))).Select(c => c.url).ToList();
+            var lost = Community.Where(c => !texts.Any(t => t.Contains(AddressText(c.url)))).Select(c => c.url).ToList();
             b.AppendLine(lost.Count == 0 ? "PASS the home page links the news, the community group and the site"
                                          : $"FAIL the home page links the news, the community group and the site -- missing {string.Join(", ", lost)}");
+            // ... and each of them, pressed (the PO, 13.10: «на главной странице все ссылки / документация кликаются и
+            // открываются»): the button's own handler, its target heard here instead of a browser opened. An address
+            // must be an address, a document must lie beside the program (a development build has no doc folder: said)
+            var heard = new List<string>();
+            OpenHook = heard.Add;
+            try
+            {
+                foreach (var link in home.GetVisualDescendants().OfType<Button>().Where(x => Equals(x.Tag, "homelink")).ToList())
+                    link.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            }
+            finally
+            {
+                OpenHook = null;
+            }
+            var addresses = heard.Where(IsAddress).ToList();
+            var pages = heard.Where(h => h.StartsWith("page:")).ToList();
+            var documents = heard.Where(h => !IsAddress(h) && !h.StartsWith("page:")).ToList();
+            var docDir = Path.Combine(Settings.ProgramDir, "doc");
+            var shipped = Directory.Exists(docDir);
+            var absent = shipped ? documents.Where(d => !File.Exists(d) && !Directory.Exists(d)).ToList() : new List<string>();
+            var unlinked = Community.Where(c => !addresses.Contains(c.url)).Select(c => c.url).ToList();
+            b.AppendLine(heard.Count == 8 && unlinked.Count == 0 && pages.Count == 1 && documents.Count == 4 && absent.Count == 0
+                         ? $"PASS every link of the home page opens when pressed: {addresses.Count} addresses ({string.Join(", ", addresses)}), "
+                           + (shipped ? $"{documents.Count} documents beside the program" : "no doc folder beside this build (a development build)")
+                           + ", the versions' history"
+                         : $"FAIL every link of the home page opens when pressed -- pressed {heard.Count} of 8 ({string.Join(", ", heard)}); "
+                           + $"addresses not heard: {string.Join(", ", unlinked)}; documents not found: {string.Join(", ", absent)}");
             var dir = Path.Combine(App.Settings.TempPath, $"selftest_jpeg_{Environment.ProcessId}");
             Directory.CreateDirectory(dir);
             var png = Path.Combine(dir, "cover_00.png");
@@ -2378,6 +2426,11 @@ reshaping families dropped at the plan (their own rules refuse them on this map)
 
     private static void OpenInExplorer(string dir)
     {
+        if (OpenHook != null)
+        {
+            OpenHook(dir);
+            return;
+        }
         try
         {
             Directory.CreateDirectory(dir);

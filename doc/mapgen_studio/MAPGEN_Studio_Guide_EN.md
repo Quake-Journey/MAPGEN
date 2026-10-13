@@ -39,7 +39,7 @@ On the home page:
 
 - **Two paragraphs on the Studio and its generator** — what they do and why what comes out is always playable.
 - **The community's links** under them: **News** (the Telegram channel, https://t.me/Q2RTX), **Community group**
-  (the Telegram group, https://t.me/Q2PROX) and **Site** (https://q2pro-x.com/); they open in the browser.
+  (the Telegram group, https://t.me/Q2PROX) and **Site** (http://q2pro-x.com/mapgen); they open in the browser.
 - **Three large buttons**: «New map» — to the generation, «Maps» — to the library (the button says how many maps it
   holds), «Guide» — opens this guide.
 - **The latest map** — the newest map in the library: its cover, base, checks and «Open the map». While a run goes

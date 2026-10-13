@@ -11,6 +11,15 @@ public static class Versions
 
     public static readonly Entry[] All =
     {
+        new("3.34", "13.10.2026",
+            new[]
+            {
+                "Ссылка «Сайт» на главной странице ведёт на страницу MAPGEN: q2pro-x.com/mapgen",
+            },
+            new[]
+            {
+                "The «Site» link on the home page leads to MAPGEN's page: q2pro-x.com/mapgen",
+            }),
         new("3.33", "13.10.2026",
             new[]
             {

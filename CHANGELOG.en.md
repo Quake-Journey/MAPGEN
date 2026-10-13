@@ -1,5 +1,9 @@
 # MAPGEN Studio by ly — change log
 
+## 3.34 — 13.10.2026
+
+- The «Site» link on the home page leads to MAPGEN's page: q2pro-x.com/mapgen
+
 ## 3.33 — 13.10.2026
 
 - A generation ends 3–5 minutes sooner again: the final measure of difference takes the walks of the map the run already made instead of walking it twice more (a fault of 3.32)
