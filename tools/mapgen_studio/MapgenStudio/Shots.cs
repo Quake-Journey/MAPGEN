@@ -16,13 +16,21 @@ namespace MapgenStudio;
 /// </summary>
 public sealed partial class MainWindow
 {
-    public static readonly string[] ShotPages = { "home", "generate", "generate_options", "library", "map", "settings", "about" };
+    // brief 20 D1: the Generate page in its third mode and the card of a map made from scratch (mg_new_duel)
+    // brief 30 (3.57): the new map's form for an open space (generate_scratch) and for a tower (generate_scratch_tower)
+    public static readonly string[] ShotPages = { "home", "generate", "generate_options", "generate_scratch", "generate_scratch_tower",
+                                                  "library", "map", "map_scratch", "settings", "about" };
 
     public static Window Shots(string dir)
     {
+        // MAPGEN_SHOT_SIZE «1920x1400»: a page looked at on a wider and taller window than the guide's (the PO's screen)
+        var (sw, sh) = (1600.0, 900.0);
+        if (Environment.GetEnvironmentVariable("MAPGEN_SHOT_SIZE") is { } ss && ss.Split('x') is [var a, var b2]
+            && double.TryParse(a, out var aw) && double.TryParse(b2, out var ah))
+            (sw, sh) = (aw, ah);
         var w = new MainWindow
         {
-            ShowActivated = false, ShowInTaskbar = false, Width = 1600, Height = 900,
+            ShowActivated = false, ShowInTaskbar = false, Width = sw, Height = sh,
             WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-4000, -4000),
         };
         SelfTesting = true;        // the pages it builds never write the settings
@@ -40,6 +48,14 @@ public sealed partial class MainWindow
                 await Task.Delay(400);
                 var keepLang = Loc.Language;
                 var keepTheme = App.Settings.Theme;
+                var keepScratch = App.Settings.ScratchMode;
+                var keepScratchParams = App.Settings.Scratch;
+                static ScratchParams WithShape(ScratchParams p, string shape)
+                {
+                    var c = ScratchParams.Load(p.Save());
+                    c.Shape = shape;
+                    return c;
+                }
                 App.ApplyTheme("light");
                 var donors = Engine.Donors();
                 foreach (var lang in new[] { "ru", "en" })
@@ -58,15 +74,30 @@ public sealed partial class MainWindow
                         if (donors.Count > 0)
                             w._chosen.Add(donors[0]);
                         w._graftMode = false;
-                        w._page = page == "map" ? "library" : page.StartsWith("generate") ? "generate" : page;
-                        w._openMap = page == "map" ? maps.FirstOrDefault() : null;
-                        if (page == "map" && w._openMap == null)
+                        App.Settings.ScratchMode = page.StartsWith("generate_scratch");
+                        App.Settings.Scratch = page == "generate_scratch" ? WithShape(keepScratchParams, "space")
+                                             : page == "generate_scratch_tower" ? WithShape(keepScratchParams, "tower") : keepScratchParams;
+                        w._formName = null;          // each page its own way's name, as the switch gives it
+                        w._page = page.StartsWith("map") ? "library" : page.StartsWith("generate") ? "generate" : page;
+                        if (page.StartsWith("generate_scratch"))
+                            w._formName = null;
+                        w._openMap = page == "map" ? maps.FirstOrDefault(m => m.Scratch == null) ?? maps.FirstOrDefault()
+                                   : page == "map_scratch" ? maps.FirstOrDefault(m => m.Scratch != null) : null;
+                        if (page.StartsWith("map") && w._openMap == null)
                         {
                             report.AppendLine($"SKIP {lang} {page}: no map in the library");
                             continue;
                         }
                         w.Rebuild();
                         await Task.Delay(250);
+                        // each page from its top: the window keeps a page's scroll (3.46), and the options' page before the
+                        // new map's form left it scrolled past the form's head (brief 30, 07.11)
+                        if (page != "generate_options")
+                        {
+                            foreach (var sv in w.GetVisualDescendants().OfType<ScrollViewer>())
+                                sv.Offset = default;
+                            await Task.Delay(150);
+                        }
                         if (page == "generate_options")
                         {
                             // the page scrolled to the options' cards: the frame and the new rooms at the top
@@ -78,11 +109,22 @@ public sealed partial class MainWindow
                         await Task.Delay(350);
                         var file = Path.Combine(into, page + ".png");
                         Shot(w, file);
+                        // MAPGEN_SHOT_FULLPAGE: the page's whole length besides (a page looked at end to end, not for the guide)
+                        if (Environment.GetEnvironmentVariable("MAPGEN_SHOT_FULLPAGE") is { Length: > 0 }
+                            && w.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault() is { Content: Control whole }
+                            && whole.Bounds.Height > 0)
+                        {
+                            using var all = new RenderTargetBitmap(new PixelSize((int)whole.Bounds.Width, (int)whole.Bounds.Height));
+                            all.Render(whole);
+                            all.Save(Path.Combine(into, page + "_whole.png"));
+                        }
                         report.AppendLine($"{(File.Exists(file) ? "PASS" : "FAIL")} {lang} {page} {file}");
                     }
                 }
                 Loc.Language = keepLang;
                 App.ApplyTheme(keepTheme);
+                App.Settings.ScratchMode = keepScratch;
+                App.Settings.Scratch = keepScratchParams;
                 if (Environment.GetEnvironmentVariable("MAPGEN_SHOT_PAGES") is not { Length: > 0 })
                     File.WriteAllText(Path.Combine(dir, "build.txt"), Versions.Current + "\n");
             }
@@ -109,9 +151,14 @@ public sealed partial class MainWindow
         SelfTesting = true;
         var model = new SchemeModel();
         model.RefreshNow(job);
+        // brief 30: the guide's size when MAPGEN_SHOT_SIZE gives one
+        var (fw, fh) = (1600.0, 900.0);
+        if (Environment.GetEnvironmentVariable("MAPGEN_SHOT_SIZE") is { } fs && fs.Split('x') is [var fa, var fb]
+            && double.TryParse(fa, out var faw) && double.TryParse(fb, out var fah))
+            (fw, fh) = (faw, fah);
         var full = new SchemeFullScreen(model, () => null)
         {
-            WindowState = WindowState.Normal, Width = 1600, Height = 900, ShowInTaskbar = false, ShowActivated = false,
+            WindowState = WindowState.Normal, Width = fw, Height = fh, ShowInTaskbar = false, ShowActivated = false,
             WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-4000, -4000),
         };
         var into = Path.Combine(dir, lang);

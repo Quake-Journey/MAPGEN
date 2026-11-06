@@ -74,7 +74,7 @@ public static class Ui
         Content = new Border
         {
             Padding = new Thickness(36, 28, 36, 36),
-            MaxWidth = 1100,
+            MaxWidth = 2600,             // brief 28: as wide as the window lets it (1100 held a map's page on every screen)
             HorizontalAlignment = HorizontalAlignment.Stretch,
             Child = content,
         },

@@ -163,7 +163,10 @@ def main() -> int:
         return after_rooms(a)
     sha = hashlib.sha256(a.donor.read_bytes()).hexdigest()
     flags, keys = donor_light(a.donor)
-    if not a.force and (flags or keys):
+    # brief 29 D2: a base from scratch whose style left the compiler's defaults has an empty calibration - still its own
+    own = fit_path(a.donor)
+    stored = own.is_file() and json.loads(own.read_text(encoding="utf-8")).get("sha256") == sha
+    if not a.force and (flags or keys or stored):
         print(f"KNOWN '{flags}' {keys}")
         return 0
     guard.pin_self()

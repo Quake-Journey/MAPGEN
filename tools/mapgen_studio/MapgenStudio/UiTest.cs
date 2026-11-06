@@ -419,5 +419,122 @@ public sealed partial class MainWindow
         Check("the bases ticked are there after a restart, the first still the base",
               again._chosen.SequenceEqual(new[] { "koldduel1", "q2dm1" }) && again._graftMode,
               string.Join(",", again._chosen));
+
+        /* brief 29 D1 (Fable's review of 3.54): the window's place as a SHOWN window writes it - after a move, and after a
+           close. The self-test's row reads what a new window takes; this is the other half. RED first: the 3.54 way (the
+           place saved in `Closed`, after Avalonia dropped the platform window) writes 0,0 */
+        var keepPlace = (s.WindowW, s.WindowH, s.WindowX, s.WindowY, s.WindowMax);
+        var Trail = "";
+        /* a place ON a screen: Windows puts a window shown wholly off every screen at 0,0 (SetWindowPlacement - the test's
+           own window at -4000,-4000 is in fact at 0,0), so an off-screen place would prove nothing; the window is shown
+           without taking the focus for the two seconds the test needs */
+        var work = w.Screens.Primary is { } primary ? primary.WorkingArea : new PixelRect(0, 0, 1920, 1080);
+        var (x0, y0, x1, y1) = (work.X + 40, work.Y + 40, work.X + 80, work.Y + 60);
+        async Task<(Settings moved, Settings closed, PixelPoint opened)> Placed(bool onClosed)
+        {
+            MainWindow.PlaceSavedOnClosed = onClosed;
+            (s.WindowW, s.WindowH, s.WindowX, s.WindowY, s.WindowMax) = (1000, 700, x0, y0, false);
+            s.Save();
+            var pw = new MainWindow { ShowActivated = false, ShowInTaskbar = false };
+            pw.KeepPlace();
+            var shown = false;
+            var trail = $"set {pw.Position} {pw.WindowStartupLocation}";
+            pw.Opened += (_, _) =>
+            {
+                shown = true;
+                trail += $", at Opened {pw.Position}";
+            };
+            pw.Show();
+            trail += $", after Show {pw.Position}";
+            await Until(() => shown, 10);
+            await Task.Delay(300);
+            var opened = pw.Position;
+            trail += $", 300 ms later {opened}; the test's own window {w.Position}";
+            Trail = trail;
+            pw.Position = new PixelPoint(x1, y1);
+            await Task.Delay(1800);                 // the save a second after the last move
+            var moved = Settings.Load();
+            pw.Close();
+            await Task.Delay(400);
+            MainWindow.PlaceSavedOnClosed = false;
+            return (moved, Settings.Load(), opened);
+        }
+        try
+        {
+            var (redMoved, redClosed, _) = await Placed(onClosed: true);
+            Check("RED: the window's place saved the 3.54 way (on «Closed») is the corner 0,0 after a close",
+                  redMoved.WindowX == x1 && redClosed.WindowX == 0 && redClosed.WindowY == 0,
+                  $"after the move {redMoved.WindowX},{redMoved.WindowY}; after the close {redClosed.WindowX},{redClosed.WindowY}");
+            var (moved, closed, opened) = await Placed(onClosed: false);
+            Check("a shown window opens where it was closed, and keeps its place after a move and after a close",
+                  opened == new PixelPoint(x0, y0)
+                  && moved.WindowX == x1 && moved.WindowY == y1 && moved.WindowW == 1000 && moved.WindowH == 700
+                  && closed.WindowX == x1 && closed.WindowY == y1 && closed.WindowW == 1000 && closed.WindowH == 700
+                  && !closed.WindowMax,
+                  $"saved {x0},{y0}, opened at {opened}; moved to {x1},{y1}: after the move {moved.WindowX},{moved.WindowY} {moved.WindowW}x{moved.WindowH}; "
+                  + $"after the close {closed.WindowX},{closed.WindowY} {closed.WindowW}x{closed.WindowH} max {closed.WindowMax}; {Trail}");
+        }
+        finally
+        {
+            MainWindow.PlaceSavedOnClosed = false;
+            (s.WindowW, s.WindowH, s.WindowX, s.WindowY, s.WindowMax) = keepPlace;
+            s.Save();
+        }
+
+        /* the PO 06.11 («кнопка запуска генерации срабатывает только со второго-третьего нажатия»; his ui_clicks.txt: a first
+           press «released» with no «pressed», four runs of four): a shown window on the generate page, its start button at
+           the working area's foot, the pointer on the button's middle; a popup of a tooltip's size placed by the
+           tooltips' own placement (TipPlace.Place, the same positioner). RED: the 3.55 placement (Avalonia's own for a
+           pointer: flipped above, its +20 kept) lies over the pointer; now - above it */
+        var tw = new MainWindow { _page = "generate", ShowActivated = false, ShowInTaskbar = false, Width = 1180, Height = 780 };
+        tw.Rebuild();
+        var twShown = false;
+        tw.Opened += (_, _) => twShown = true;
+        tw.Show();
+        await Until(() => twShown, 10);
+        await Task.Delay(300);
+        Button? startButton = tw.GetVisualDescendants().OfType<Button>()
+            .FirstOrDefault(b => b.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == Loc.T("gen.start")));
+        if (startButton == null)
+            Check("the start button is on the generate page", false);
+        else
+        {
+            Check("the start button's tooltip is placed by TipPlace", ToolTip.GetPlacement(startButton) == PlacementMode.Custom,
+                  ToolTip.GetPlacement(startButton).ToString());
+            // the window's foot on the working area's foot
+            var foot = startButton.PointToScreen(new Point(0, startButton.Bounds.Height));
+            tw.Position = new PixelPoint(work.X + 40, tw.Position.Y + (work.Bottom - 12 - foot.Y));
+            await Task.Delay(400);
+            var mid = startButton.PointToScreen(new Point(startButton.Bounds.Width / 2, startButton.Bounds.Height / 2));
+            async Task<(bool covers, string rect)> Probe(bool old)
+            {
+                TipPlace.Old = old;
+                TipPlace.LastScreen = mid;
+                var child = new Border { Width = 320, Height = 40, Background = Avalonia.Media.Brushes.Gray };
+                var probe = new Avalonia.Controls.Primitives.Popup
+                {
+                    PlacementTarget = startButton, Placement = PlacementMode.Custom,
+                    CustomPopupPlacementCallback = TipPlace.Place, Child = child,
+                };
+                var host = startButton.GetVisualAncestors().OfType<Panel>().First();
+                host.Children.Add(probe);
+                probe.IsOpen = true;
+                await Task.Delay(400);
+                var a = child.PointToScreen(new Point(0, 0));
+                var z = child.PointToScreen(new Point(child.Bounds.Width, child.Bounds.Height));
+                probe.IsOpen = false;
+                host.Children.Remove(probe);
+                TipPlace.Old = false;
+                var covers = mid.X >= a.X && mid.X <= z.X && mid.Y >= a.Y && mid.Y <= z.Y;
+                return (covers, $"{a.X},{a.Y}..{z.X},{z.Y}");
+            }
+            var (oldCovers, oldRect) = await Probe(old: true);
+            var (nowCovers, nowRect) = await Probe(old: false);
+            Check("RED: at the screen's foot the 3.55 tooltip placement lies over the pointer on the start button",
+                  oldCovers, $"pointer {mid.X},{mid.Y}, the tooltip {oldRect}, the working area's foot {work.Bottom}");
+            Check("a tooltip at the screen's foot stands above the pointer, not over it - the press goes to the button",
+                  !nowCovers, $"pointer {mid.X},{mid.Y}, the tooltip {nowRect}");
+        }
+        tw.Close();
     }
 }

@@ -1,12 +1,15 @@
 # MAPGEN Studio by ly — user guide
 
-MAPGEN Studio turns an existing Quake II map into a new one: it digs passages through the rock, carries rooms over
-from another map, floods low ground with water, lava or slime, changes the finish, moves items — and checks that the
-new map can be walked, that it is lit and that nothing in it is broken. The base map stays as it is; the new map is
-put beside it.
+MAPGEN Studio makes new Quake II maps in two ways.
 
-Today the program makes new maps out of existing ones. Building a new map from scratch, with no base map, will come
-in a future version; it is not offered yet.
+- **From an existing map** — it remakes it: digs passages through the rock, carries rooms over from another map,
+  floods low ground with water, lava or slime, changes the finish, moves items. The base map stays as it is; the new
+  map is put beside it.
+- **From scratch** — it builds a new map by the parameters: how many players it is for, how many levels, lifts, jump
+  pads and how much water it has, which weapons, which ways of play and in which style. See «A new map from scratch»
+  below.
+
+Either way the Studio checks that the new map can be walked, that it is lit and that nothing in it is broken.
 
 Every screenshot in this guide was taken by the program itself, from the version the guide ships with.
 
@@ -61,13 +64,17 @@ stays until you look at its page.
 
 ![Generate](screens/en/generate.png)
 
-The page is laid out in cards, two columns. At the top left — **Base map**; beside it on the right — **The new
-map** (likeness to the base, the generation's time, the variant number, the name) and **The finished map** (keep its
-source, take covers by itself). The bases' card is as tall as the two cards beside it together; when the list holds
-more maps than fit, it scrolls inside the card. Under them are the generation's options, cards by group, two in a
-row and one height: **The base's frame** and **New rooms**, **The base rebuilt** and **Water, slime, lava**,
-**Ruin** and **What may change**. At the page's foot, wherever you are on the page, the line «The map … will be made: base …,
-likeness …, up to … min» and the **«Start generating»** button.
+The page is laid out in cards, in as many columns as the window's width holds: one on a narrow window, three on a
+wide monitor; the cards are dealt so the columns end about even. At the top — **Base map**, **The new map** (likeness
+to the base, the generation's time, the variant number, the name) and **The finished map** (keep its source, take
+covers by itself). Under them the generation's options, cards by group: **The base's frame**, **New rooms**, **The
+base rebuilt**, **Water, slime, lava**, **Ruin** and **What may change**. At the page's foot, wherever you are on the
+page, the line «The map … will be made: base …, likeness …, up to … min» and the **«Start generating»** button.
+
+**Presets.** Right of the page's title — the preset set now and the buttons **«Load»**, **«Create»**, **«Change»**,
+**«Delete»**. A preset is a saved set of the page's parameters. «Load» opens a menu by category: the factory presets
+(they cannot be changed or deleted) and your own. «Create» saves the parameters now under a name and a category of
+your own. A map from a base and a new map from scratch have sets of their own.
 
 ### Base map
 
@@ -170,6 +177,96 @@ generation's records are there, such a generation is running, queued or interrup
 the cursor in it) or **Cancel**. A running generation cannot be overwritten — only the name corrected or
 the generation cancelled.
 
+## A new map from scratch
+
+![A new map from scratch: open space](screens/en/generate_scratch.png)
+
+At the top of the Generate page the card **Where the map comes from** has two buttons: «From existing maps» (all that
+is described above) and «A new map from scratch». From scratch the generator takes nobody's map: it lays out a
+skeleton itself — rooms, levels, the ways between them, the places of weapons, armour and spawns — by the rules seen
+on the maps people make, builds a real map from the skeleton, dresses it with its edits and checks it.
+
+The easiest start is a preset: «Load» → a category (duels, free for all, big maps, team games, worlds, water and lava,
+weapons, ways, mechanics, look, open space, tower — 184 factory presets in all) → a preset; then «Start generating».
+Any parameter of a preset can be changed before the start.
+
+The parameters are laid out in cards. Each list starts with «Default» — the value the generator chooses itself from
+the player count; which one is said in brackets.
+
+- **Who for** — how many players (2 — a duel, three to eight — free for all, more — a big map), the mode (duel, free
+  for all, team against team — for teams the stack is repeated in both halves), how many spawns.
+- **Size and shape** — the map's size (the floor area in percent of the usual for this player count), height levels,
+  the vertical span, the share of corridors and open places, the sky overhead, long sight lines, the **layout** and
+  **round shapes** (rounded corners, half-round hall ends, podiums — as on medusa_b1). The layouts:
+  - **two halves** — each with a value of its own (the stack in one, the railgun in the other);
+  - **one arena** — everything round a big hall;
+  - **a ring** — rooms round a circle;
+  - **open space** — islands hang in the void with no walls, jump pads, bridges and teleporters between them; a step
+    off the edge is death;
+  - **a tower** — whole storeys over each other round an atrium under the sky: up by jump pads and shafts, down by
+    jumping, ledges over the top storey only a jump pad reaches.
+- **Open space** and **A tower** — these layouts have a card of their own beside «Size and shape». Open space: how
+  many islands, how many only a jump pad reaches, open or railed edges, the height spread, the pads' reach, bridges.
+  A tower: how many storeys, the storey's height, how many shafts, how many ledges at the top. What they never have,
+  the form does not show for them: an open space has no liquids, pits, round shapes, stairs, lifts, doors, windows or
+  wall decorations — of the ways only teleporters; a tower has no liquids, pits, round shapes, stairs, lifts, doors
+  or windows. When an older preset asks for them, the generator does not build them and says so in the description.
+- **The new map** and **The finished map** — the generation's time, the variant number and the name; keep the source
+  and take covers or not. **«Random variant»** (on by default) — each run takes a new number itself, and each time
+  another map comes out; the number is in the map's name. To repeat a map, turn it off and enter the number: the same
+  parameters and number give the same map.
+- **Liquids** — the floor's shares under water, lava and slime, and deadly pits. Water lies only in hollows, each with
+  steps up. «Let water stand above the floor» (off) lets rooms be flooded over the floor when more water is asked
+  than the pits hold; without it the shortfall is said in the description.
+- **Ways** — stairs, ramps, lifts, jump pads, teleporters, ladders, drops, doors and windows between rooms. Jump pads
+  and teleporters look as on people's maps: a lit disc on a plinth for a jump up, a slanted plate with arrows for a
+  flight away, arrows running over it the way one flies; a teleporter stands in a frame of two posts with a
+  shimmering portal.
+- **Mechanics** — ways of play taken from people's maps: a stack on the clock, two halves, a gun on a ledge, route
+  asymmetry, many small health spots, spawn pressure, a dead-end stack, three approaches, a teleporter to the mirror
+  stack, a jump pad over a pit, a lift as a weak spot, a ladder under an item. The check looks for each one turned on.
+- **Weapons and items** — how many of each weapon, the armour and the stack (sets or your own), shards, ammo and
+  health per player, the share of major items up high. **How hard the powerups are to get**: easy — on a pedestal
+  under its own light; medium — in a nook in a wall, every other one raised (jump in); hard — in a nook behind a door
+  a button on the wall opens; mixed. **«Armour and mega taking turns in one nook»** — the red armour and the mega
+  appear by turns in one place, as on q2dm8.
+- **Style** — **textures**: «Like people's maps» (the default: the generator takes one of q2dm, q2duel, ztn2dm,
+  koldduel1, omf, ptrip, match1, kaktus and dresses the map in its wall, floor and ceiling textures, its trims, lamps
+  and tinted light), «The chosen maps» (a button with every map of the game, a search and ticks; only their dressing
+  is taken, none of their walls or rooms), «Mixed» or «Made by the Studio» — the Studio draws a texture set itself in
+  the theme chosen (tech, gothic, factory, bunker, snow and ice, forest, city, another planet, fantasy, desert, hell),
+  with its colour, wear, detail size and relief. Then wall decorations, the sun, the light's colour, **«Ships in the
+  sky»** (up to three ships of the single-player game fly over the map) and the dressing edits — how far the generator
+  changes the map built from the skeleton with its edits.
+- **Ruin** — as for a map from a base.
+
+![A new map from scratch: a tower](screens/en/generate_scratch_tower.png)
+
+While the run goes, its first stage on its page is **The map's skeleton**: of many variants the best by people's
+measures is chosen, and its picture — the places, the levels (the lighter, the higher), the ways, weapons and items —
+appears before the first wall. Over it all — **Progress**: the percent of the whole build, how long is left and when
+it will end, which stage is on («Stage 5 of 11: Edits»).
+
+A big map from scratch — an 8-player open space of a large area, say — stands in the middle of Quake II's world, not
+in one half of it, so it is built however much room its islands take.
+
+The finished map goes through the same checks as a map from a base, and two more:
+
+- **From scratch** — it is measured as people's maps are (size, levels, the ways' width, visibility, ways out of item
+  places, light, the textures' colour and brightness, for an open space the islands and the pads' flights), and it has
+  all its parameters and mechanics asked for. It has no place one can get into and not out of; lifts ride only through
+  air; spawns stand away from teleporters and jump pads; water does not stand above a floor. It is checked as the
+  library gets it — after the ruin and the light. The light it was built with stays to the end.
+- **Not a copy** — it holds no rooms, pieces of route or item placings carried over from the maps the generator
+  knows.
+
+![A map from scratch in the library](screens/en/map_scratch.png)
+
+A map from scratch's description starts with «Made from scratch: 4 players, free for all, dressed as people's map
+q2dm1» and a table «Asked → made, on the finished map» for every parameter; then the mechanics, and everything that
+did not come out named in words with its reason. Its tile and card say «from scratch» (and the style, when taken from
+maps).
+
 ## A run
 
 ![A run](screens/en/run.png)
@@ -183,7 +280,9 @@ the run has gone and when it began. The buttons are on the right.
 
 **On the left**, always open:
 
-- **Difference from the base** — large, how far the map already differs from the base in percent, of how many
+- **Progress** (a map from scratch) — the percent of the whole build, how long is left and when it will end, which
+  stage is on.
+- **Difference from the base** (a map from a base) — large, how far the map already differs from the base in percent, of how many
   asked, and a bar. Under it, what the plan promises: how far it can change the map in the builds allowed.
 - **Edits** — three numbers: how many edits were accepted (green), how many builds were made and how many edits were
   considered. Under them the run's time bar, and below the last edit: green when accepted, red when refused. After
@@ -202,7 +301,7 @@ the run has gone and when it began. The buttons are on the right.
 - **Computer load** — CPU, memory, GPU, video memory: the whole machine's and the generator's own. The header says
   the share of the CPU the run has.
 
-**On the right**, two tabs:
+**On the right**, three tabs, the plan taking the whole right side:
 
 - **Scheme** — the plan from above or at a slant, with the edits on it (stairway annexes too, and, at the
   destruction stage, every crater, breach, fallen ceiling and debris pile as it is built) and, at the light stage,
@@ -212,6 +311,8 @@ the run has gone and when it began. The buttons are on the right.
   what is still in the plan, the map's colours (floor, water, lava, slime, lifts and doors) and the items (weapons,
   armour, health, ammo, power-ups, spawns, teleporters). Hover a sign for the detail, e.g. «a refused edit - red,
   fades in 10 seconds». The mouse controls are there too.
+- **Parameters** — the parameters the run was started with, in the same cards as on the Generate page, to look at
+  only.
 - **Detailed log** — the lines the generator writes.
 
 **The stages on the scheme.** Each stage shows on the scheme itself:
@@ -238,8 +339,8 @@ The buttons at the top right:
   «An interrupted generation» appears there with «Resume» and «Delete»), when «Keep the accepted steps on the disk» is on in the settings.
 - **Cancel** — the run stops and all its working files are deleted.
 
-When the map is ready the program says so and puts the map into the library. Failed checks are said too, with the
-details in the map's description.
+When the map is ready the program says so and puts the map into the library; the message says how many checks
+passed. It is a warning only when the map cannot be played (see «The library»).
 
 ### When the generator refuses
 
@@ -251,32 +352,48 @@ the walls» — with the generator's exact words under it. The same goes to the 
 
 ![Maps](screens/en/library.png)
 
-«Maps» shows every finished map as a tile. Over the cover — the map's base and how far it differs from it; under the
-cover — its name, when it was made, its size and its checks: green «checks passed» or red «failed: N». «Find by name
-or base» leaves only the maps that match. The tiles are sized by the «Size» slider or by the mouse wheel with Ctrl
-held. «Add a map» (top right) brings any map from the disk into the library; «Refresh» rereads the folder; «Open
-folder» opens it in Explorer.
+«Maps» shows every finished map as a tile. Over the cover — the map's base and how far it differs from it (for a map
+from scratch — «from scratch»); under the cover — its name, when it was made, its size and its checks:
+
+- green **«checks passed»** — all passed;
+- grey **«checks: 89 of 93»** — something did not pass, but the map plays: mostly measures of taste (the share of
+  corridors, the textures' colour, the number of sight lines) or a planned edit the generator could not build;
+- red **«cannot be played: N»** — only when a check failed that play needs: a spawn point in a wall or one that cannot
+  be stepped off, a lost pickup or a spawn under a moving part, a place one cannot get out of, a major item out of
+  reach, fewer spawns than asked.
+
+«Find by name or base» leaves only the maps that match. The tiles are sized by the «Size» slider or by the mouse wheel
+with Ctrl held. «Add a map» (top right) brings any map from the disk into the library; «Refresh» rereads the folder;
+«Open folder» opens it in Explorer.
 
 ![A map](screens/en/map.png)
 
-A click on a tile opens the map. At the top its name and the same marks (base, difference, checks); beside the cover
-its facts (made, size, base, difference from the base, how many checks passed) and the buttons; below, its
-description and checks in two cards:
+A click on a tile opens the map. At the top its name and the same marks (base, difference, checks); on a wide window,
+beside the name, its facts (made, size, base, difference from the base or the build's time, how many checks passed)
+and the buttons. Below on the left the cover across the column, the shots and the description under it; on the right,
+level with the cover, the checks. On a narrow window it all goes in one column.
 
-- **Description** — the base it was made from, the maps that gave rooms, likeness and variant number, what was
-  built, how long the run took.
-- **The map's checks** — every check marked «passed» / «NOT passed», with a plain explanation.
+- **Description** — the base it was made from (or what was asked and what came out, for a map from scratch), the maps
+  that gave rooms, likeness and variant number, what was built, how long the run took.
+- **The map's checks** — the header says «N of M passed»; the failed ones come first, each with what was measured and
+  what it should be, in words: e.g. «floor burnt white 2.0 % (people's maps 1 % at most)». A check play needs is marked
+  «- cannot be played».
+- **Check again** (a map from scratch) — measures the finished map anew with this Studio's checks: a minute or two, no
+  generation. The generator's own checks stay as they were.
 - **Shots** — a click opens a shot large; the arrows page through the rest, Esc closes; any shot can be made the
   cover. «Make the cover» starts the game on the map, takes a few views and closes it; «Choose from a file…» takes a
-  cover from your own picture.
+  cover from your own picture. A map from scratch's covers show its jump pad and teleporter when it has them.
 - **Play** — starts the game on this map. Your game settings are not changed.
 - **Copy into the game** — puts the map into your client's maps folder.
+- **Show file** and **Prepare a zip of the map** — an archive for a server: `baseq2/maps` and `baseq2/textures`,
+  everything the map needs.
 
 ## Settings
 
 ![Settings](screens/en/settings.png)
 
-The settings are laid out in cards, two columns: Look, Game client, Folders, CPU load, Memory and disk, Updates.
+The settings are laid out in cards, in columns by the window's width (up to three): Look, Game client, Folders, CPU
+load, Memory and disk, Updates.
 Each setting is a row: on the left what it does, on the right the setting itself.
 
 - **Look**: language (Russian or English), theme, «Page at start».
@@ -292,7 +409,9 @@ Each setting is a row: on the left what it does, on the right the setting itself
   (your maps and settings stay; the program restarts and shows «What's new»), «Cancel» — not now, and it asks again
   at the next start.
 
-The settings are kept in a file beside the program; where exactly is written at the bottom of the page.
+The settings are kept in a file beside the program; where exactly is written at the bottom of the page. The window
+keeps its size and place there too: it opens where it was closed, and on the first start on a wide screen —
+maximised.
 
 ## About
 
@@ -313,11 +432,16 @@ are; below, the versions' history as cards: what changed in each, the newest on 
 - **The run was interrupted** — the Generate page has a card «An interrupted generation» with «Resume».
 - **The generator crashed** — the program shows where the crash record lies; send it to the developer, and resume
   the run from the same place.
+- **A map says «checks: 89 of 93»** — it plays; what did not pass and why is said on the map's page under each failed
+  check.
+- **A map says «cannot be played»** — its page shows which check failed and where (a spawn point not in the open, for
+  one). Better make it again with another variant number.
+- **A map from scratch made by an older Studio** — «Check again» on its page measures it with this version's checks.
 
 ## In future versions
 
-- **A map from scratch** — a new map with no base map. The generator can already do it in a rough form, but the
-  program does not offer it yet: it will come once the maps made from existing ones reach the quality they need.
+- **Maps from scratch** — new layouts and mechanics of people's maps, the Studio's own textures nearer people's colours.
+- What comes next is decided by the players' word: write in Telegram — https://t.me/Q2PROX.
 
 ## Where the files are
 

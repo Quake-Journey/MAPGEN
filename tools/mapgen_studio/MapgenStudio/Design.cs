@@ -107,7 +107,18 @@ public static class Look
         foreach (var r in rows)
         {
             if (body.Children.Count > 0)
-                body.Children.Add(new Border { Height = 1, Background = Line, Margin = new Thickness(0, 2, 0, 2) });
+            {
+                // a row hidden takes its line with it (the PO 06.11: the variant number's row hides under «Случайный
+                // вариант» - two lines would stand together)
+                var line = new Border { Height = 1, Background = Line, Margin = new Thickness(0, 2, 0, 2), IsVisible = r.IsVisible };
+                var row = r;
+                row.PropertyChanged += (_, e) =>
+                {
+                    if (e.Property == Visual.IsVisibleProperty)
+                        line.IsVisible = row.IsVisible;
+                };
+                body.Children.Add(line);
+            }
             body.Children.Add(r);
         }
     }
@@ -157,17 +168,31 @@ public static class Look
     public static Control Pair(Control left, Control right, double minColumn = 460) =>
         new ColumnsPanel { MinColumn = minColumn, EqualHeights = true, Children = { left, right } };
 
+    /// <summary>
+    /// Brief 28 (the PO 06.11: «Почему нельзя было разбить группу … и положить их рядом по горизонтали?»; «у нас 27 год на
+    /// носу»): cards in as many columns as the width holds, each dealt to the shortest column so far.
+    /// </summary>
+    public static BalancedColumns Balanced(double minColumn, params Control?[] cards)
+    {
+        var b = new BalancedColumns { MinColumn = minColumn };
+        foreach (var c in cards)
+            if (c != null)
+                b.Children.Add(c);
+        return b;
+    }
+
     /// <summary>A column of cards.</summary>
-    public static StackPanel Stack(params Control[] cards)
+    public static StackPanel Stack(params Control?[] cards)
     {
         var s = new StackPanel { Spacing = 16 };
         foreach (var c in cards)
-            s.Children.Add(c);
+            if (c != null)            // a card a shape does not have (an open space's liquids, 3.57)
+                s.Children.Add(c);
         return s;
     }
 
-    /// <summary>A page wide enough for two columns, scrolled.</summary>
-    public static ScrollViewer Page(Control content, double maxWidth = 1640) => new()
+    /// <summary>A page as wide as the window lets it (brief 28: 1640 cut the PO's 2293 to two columns), scrolled.</summary>
+    public static ScrollViewer Page(Control content, double maxWidth = 2600) => new()
     {
         Content = new Border
         {
@@ -295,6 +320,205 @@ public sealed class ColumnsPanel : Panel
             y += c.DesiredSize.Height + Gap;
         }
         return final;
+    }
+}
+
+/// <summary>
+/// Brief 28 (the PO 06.11, the new-map form with «Открытый космос»: the left column ran 700 px past the right, a blank field
+/// beside it): cards in N columns, N = what the width holds at <see cref="MinColumn"/> each (one on a narrow window): the
+/// first N cards the top row in their order, the rest dealt so the tallest column ends as high as it can (see Deal),
+/// each column's cards in their order. The last arrangement is kept for the self-test (<see cref="Bottoms"/>).
+/// </summary>
+public sealed class BalancedColumns : Panel
+{
+    public double MinColumn { get; set; } = 600;
+    public double Gap { get; set; } = 18;
+    public int MaxColumns { get; set; } = 6;
+    private int[] _column = Array.Empty<int>();
+    private double[] _bottom = Array.Empty<double>();
+
+    /// <summary>The columns of the last arrangement.</summary>
+    public int Columns => _bottom.Length;
+    /// <summary>Each column's bottom in the last arrangement.</summary>
+    public IReadOnlyList<double> Bottoms => _bottom;
+    /// <summary>The cards' column in the last arrangement (-1: not shown).</summary>
+    public IReadOnlyList<int> ColumnOf => _column;
+
+    public int CountFor(double width)
+    {
+        var shown = Children.Count(c => c.IsVisible);
+        if (double.IsInfinity(width) || double.IsNaN(width) || shown == 0)
+            return 1;
+        return Math.Clamp((int)Math.Floor((width + Gap) / (MinColumn + Gap)), 1, Math.Max(1, Math.Min(MaxColumns, shown)));
+    }
+
+    private void Deal(double width)
+    {
+        var n = CountFor(width);
+        var w = double.IsInfinity(width) ? double.PositiveInfinity : (width - (n - 1) * Gap) / n;
+        _column = new int[Children.Count];
+        var shown = new List<int>();
+        var h = new double[Children.Count];
+        for (var i = 0; i < Children.Count; i++)
+        {
+            var c = Children[i];
+            c.Measure(new Size(w, double.PositiveInfinity));
+            _column[i] = -1;
+            if (c.IsVisible)
+            {
+                shown.Add(i);
+                h[i] = c.DesiredSize.Height;
+            }
+        }
+        /* the first card of each column in the cards' order (the top row reads as the form begins: who it is for, the
+           size and shape …); the rest so the tallest column ends as high as it can - the longest first to the shortest
+           column, then single moves and swaps while they lower it. Order-only dealing (each card to the shortest column
+           in turn) left a fifth of a four-column form blank on 3440 (the self-test, 06.11). Inside a column the cards
+           keep their order */
+        var load = new double[n];
+        var count = new int[n];
+        void Put(int i, int k, int sign)
+        {
+            load[k] += sign * (h[i] + (count[k] > (sign > 0 ? 0 : 1) ? Gap : 0));
+            count[k] += sign;
+        }
+        for (var t = 0; t < Math.Min(n, shown.Count); t++)
+        {
+            _column[shown[t]] = t;
+            Put(shown[t], t, 1);
+        }
+        var rest = shown.Skip(n).OrderByDescending(i => h[i]).ToList();
+        foreach (var i in rest)
+        {
+            var k = 0;
+            for (var j = 1; j < n; j++)
+                if (load[j] < load[k] - 0.5)
+                    k = j;
+            _column[i] = k;
+            Put(i, k, 1);
+        }
+        double Max() => load.Max();
+        void Improve(List<int> movable)
+        {
+            for (var pass = 0; pass < 40 && n > 1; pass++)
+            {
+                var better = false;
+                var before = Max();
+                foreach (var i in movable)
+                {
+                    var from = _column[i];
+                    for (var k = 0; k < n && !better; k++)
+                    {
+                        if (k == from)
+                            continue;
+                        Put(i, from, -1);
+                        Put(i, k, 1);
+                        if (Max() < before - 0.5)
+                        {
+                            _column[i] = k;
+                            better = true;
+                            break;
+                        }
+                        Put(i, k, -1);
+                        Put(i, from, 1);
+                    }
+                    if (better)
+                        break;
+                    foreach (var j in movable)
+                    {
+                        var to = _column[j];
+                        if (to == from || j == i)
+                            continue;
+                        Put(i, from, -1);
+                        Put(j, to, -1);
+                        Put(i, to, 1);
+                        Put(j, from, 1);
+                        if (Max() < before - 0.5)
+                        {
+                            _column[i] = to;
+                            _column[j] = from;
+                            better = true;
+                            break;
+                        }
+                        Put(i, to, -1);
+                        Put(j, from, -1);
+                        Put(i, from, 1);
+                        Put(j, to, 1);
+                    }
+                    if (better)
+                        break;
+                }
+                if (!better)
+                    break;
+            }
+        }
+        Improve(rest);
+        /* 3.57 (the PO's own form for an open space at 3440: 2100 / 1635 / 1634 / 1752, a blank of 15 %): when the pinned top
+           row leaves the columns uneven, every card may move then - each still tops the column it stands in */
+        if (n > 1 && load.Max() > 0 && load.Sum(x => load.Max() - x) / (n * load.Max()) > 0.10)
+            Improve(shown);
+        _bottom = new double[n];
+        var used = new bool[n];
+        foreach (var i in shown)
+        {
+            var k = _column[i];
+            _bottom[k] += (used[k] ? Gap : 0) + h[i];
+            used[k] = true;
+        }
+    }
+
+    protected override Size MeasureOverride(Size available)
+    {
+        Deal(available.Width);
+        var width = double.IsInfinity(available.Width) ? Children.Where(c => c.IsVisible).Select(c => c.DesiredSize.Width).DefaultIfEmpty(0).Max()
+                                                       : available.Width;
+        return new Size(width, _bottom.DefaultIfEmpty(0).Max());
+    }
+
+    protected override Size ArrangeOverride(Size final)
+    {
+        Deal(final.Width);
+        var n = _bottom.Length;
+        var w = (final.Width - (n - 1) * Gap) / n;
+        var y = new double[n];
+        var used = new bool[n];
+        for (var i = 0; i < Children.Count; i++)
+        {
+            var k = _column[i];
+            if (k < 0)
+                continue;
+            var c = Children[i];
+            if (used[k])
+                y[k] += Gap;
+            c.Arrange(new Rect(k * (w + Gap), y[k], w, c.DesiredSize.Height));
+            y[k] += c.DesiredSize.Height;
+            used[k] = true;
+        }
+        return final;
+    }
+}
+
+/// <summary>
+/// Brief 28: a picture as wide as its place lets it (between <see cref="MinWidth"/> and <see cref="MaxWidth"/>), its
+/// height by <see cref="Ratio"/> - the map page's cover grows with the window instead of staying 480 x 270.
+/// </summary>
+public sealed class AspectBox : Decorator
+{
+    public double Ratio { get; set; } = 9.0 / 16.0;
+
+    protected override Size MeasureOverride(Size available)
+    {
+        var w = double.IsInfinity(available.Width) ? MinWidth : Math.Clamp(available.Width, MinWidth, MaxWidth);
+        var size = new Size(w, w * Ratio);
+        Child?.Measure(size);
+        return size;
+    }
+
+    protected override Size ArrangeOverride(Size final)
+    {
+        var w = Math.Clamp(final.Width, MinWidth, MaxWidth);
+        Child?.Arrange(new Rect(0, 0, w, w * Ratio));
+        return new Size(w, w * Ratio);
     }
 }
 
@@ -507,5 +731,111 @@ public sealed class SideNav : DockPanel
     {
         foreach (var i in _items)
             i.On = i.Tag2 == tag;
+    }
+}
+
+/// <summary>
+/// A page of two stacks side by side on a wide window - the left <see cref="LeftShare"/> of the width, the right the
+/// rest - and one stack in its own order on a narrow one. The PO, 06.11, of a map's page on his 3440-wide window («вот
+/// так бредово абы как все расположено»): the cover stood 1200 wide in a column of 1850 with a blank beside it, the
+/// facts stretched across the rest with nothing under them, the description and the checks far down.
+/// </summary>
+public sealed class SplitColumns : Panel
+{
+    private readonly List<Control> _left = new(), _right = new(), _narrow = new();
+
+    /// <summary>The narrowest width that holds two stacks.</summary>
+    public double MinTwo { get; set; } = 1150;
+    public double Gap { get; set; } = 24;
+    public double Spacing { get; set; } = 14;
+    public double LeftShare { get; set; } = 0.6;
+
+    /// <summary>Two stacks now (the self-test reads it), the left one's width.</summary>
+    public bool Two { get; private set; }
+
+    /// <summary>Raised when the panel turns between one stack and two.</summary>
+    public event Action? TwoChanged;
+
+    /// <summary>One stack or two decided by the page (the map page decides with its head, before anything is measured).</summary>
+    public bool? Force { get; set; }
+    public double LeftWidth { get; private set; }
+
+    public SplitColumns(IEnumerable<Control?> left, IEnumerable<Control?> right, IEnumerable<Control?> narrow)
+    {
+        _left.AddRange(left.OfType<Control>());
+        _right.AddRange(right.OfType<Control>());
+        _narrow.AddRange(narrow.OfType<Control>());
+        foreach (var c in _left.Concat(_right).Concat(_narrow).Distinct())
+            Children.Add(c);
+    }
+
+    private static IEnumerable<Control> Shown(List<Control> list) => list.Where(c => c.IsVisible);
+
+    private double Stack(IEnumerable<Control> list, double width, bool measure, double x = 0)
+    {
+        double y = 0;
+        var first = true;
+        foreach (var c in list)
+        {
+            if (!first)
+                y += Spacing;
+            first = false;
+            if (measure)
+                c.Measure(new Size(width, double.PositiveInfinity));
+            else
+                c.Arrange(new Rect(x, y, width, c.DesiredSize.Height));
+            y += c.DesiredSize.Height;
+        }
+        return y;
+    }
+
+    protected override Size MeasureOverride(Size available)
+    {
+        var w = available.Width;
+        var two = Force ?? (!double.IsInfinity(w) && w >= MinTwo);
+        if (two != Two)
+        {
+            Two = two;
+            TwoChanged?.Invoke();
+        }
+        if (Two)
+        {
+            LeftWidth = Math.Floor((w - Gap) * LeftShare);
+            var hl = Stack(Shown(_left), LeftWidth, true);
+            var hr = Stack(Shown(_right), w - Gap - LeftWidth, true);
+            return new Size(w, Math.Max(hl, hr));
+        }
+        LeftWidth = w;
+        return new Size(double.IsInfinity(w) ? 0 : w, Stack(Shown(_narrow), w, true));
+    }
+
+    protected override Size ArrangeOverride(Size final)
+    {
+        if (Two)
+        {
+            // measured again at the final width (a scroll bar may have taken its share)
+            LeftWidth = Math.Floor((final.Width - Gap) * LeftShare);
+            Stack(Shown(_left), LeftWidth, true);
+            Stack(Shown(_right), final.Width - Gap - LeftWidth, true);
+            Stack(Shown(_left), LeftWidth, false);
+            Stack(Shown(_right), final.Width - Gap - LeftWidth, false, LeftWidth + Gap);
+        }
+        else
+            Stack(Shown(_narrow), final.Width, false);
+        return final;
+    }
+}
+
+/// <summary>Tells its owner the width it is given before its child is measured - a page that arranges its head and its
+/// body by the width decides once, for both (the map page, 3.56).</summary>
+public sealed class WidthSwitch : Decorator
+{
+    public Action<double>? OnWidth { get; set; }
+
+    protected override Size MeasureOverride(Size available)
+    {
+        if (!double.IsInfinity(available.Width))
+            OnWidth?.Invoke(available.Width);
+        return base.MeasureOverride(available);
     }
 }

@@ -11,6 +11,377 @@ public static class Versions
 
     public static readonly Entry[] All =
     {
+        new("3.57", "07.11.2026",
+            new[]
+            {
+                "Описание новой карты — по-русски целиком: «8 игроков, общий бой, свои текстуры студии: Завод» вместо «FFA, generated», устройство, украшения, мостики, дальность джампадов, места главных предметов и названия оружия и брони — словами формы, а не ключами",
+                "У непройденных проверок карт из основы и с нуля тоже всё сказано по-русски: раскопы, стёкла, невидимые стенки, обзор сквозь небо, механики, линии прострела, похожесть маршрутов",
+                "«Открытый космос» и «Башня»: форма больше не предлагает того, чего у них не бывает, — воду, лаву, кислоту, ямы, скругления, лестницы, лифты, двери и окна (у космоса и украшения на стенах); описание карты о них не пишет, а если их заказал старый пресет, сказано, что они не строятся",
+                "Карточки формы на широком экране раскладываются ровнее: если колонки выходят неровными, переставляются все карточки",
+                "Руководство на русском и английском обновлено до этой версии: пресеты, открытый космос и башня, стиль и свои текстуры, проверки счётом, страница карты, вкладки экрана генерации, окно; все снимки новые",
+                "Описание карты в космосе считает острова и джампады на готовой карте: дальность джампадов больше не «0»",
+            },
+            new[]
+            {
+                "A new map's Russian description says everything in words: the mode, the dressing, the layout, decorations, bridges, the pads' reach, where the powerups are and the weapons' and armours' names - the form's words, not keys",
+                "A failed check of a map from a base or from scratch says its measure in words too: digs, panes, invisible walls, sight through the sky, mechanics, sight lines, shared routes",
+                "«Open space» and «Tower»: the form no longer offers what they never have - water, lava, slime, pits, round shapes, stairs, lifts, doors and windows (and wall decorations in open space); the map's description leaves them out, and when an older preset asks for them it says they are not built",
+                "The form's cards on a wide screen are dealt more evenly: when the columns come out uneven, every card may move",
+                "The guide in Russian and English brought up to this version: presets, open space and tower, styles and the Studio's own textures, checks as a count, the map's page, the generation screen's tabs, the window; every picture new",
+                "A space map's description measures the islands and pads on the finished map: the pads' reach is no longer «0»",
+            }),
+        new("3.56", "06.11.2026",
+            new[]
+            {
+                "Кнопка «Начать генерацию» срабатывает с первого нажатия. У нижнего края экрана подсказка ложилась прямо под курсор и забирала нажатие себе — так было со всеми подсказками внизу экрана; теперь она встаёт над курсором",
+                "Страница карты на широком экране: обложка во всю левую колонку, под ней снимки и описание; справа сведения о карте, кнопки и проверки — без пустых полос. На узком окне всё в одну колонку",
+                "Экран генерации: подробный журнал снова на вкладке после «Параметров», схема занимает всё место справа",
+                "Большая карта с нуля (например, «Открытый космос» на 8 игроков с большой площадью) больше не вылезает за край мира Quake II и собирается: карта ставится в середину мира, а не в одну его половину",
+            },
+            new[]
+            {
+                "«Start generating» works on the first press. At the screen's foot a tooltip lay right under the pointer and took the press - every tooltip at the screen's foot did; now it stands above the pointer",
+                "A map's page on a wide screen: the cover across the left column, the shots and the description under it; the facts, the buttons and the checks on the right - no blank stripes. One column on a narrow window",
+                "The generation screen: the log a tab again, after «Parameters»; the scheme takes the whole right side",
+                "A big map from scratch (an 8-player «Open space» of a large area, say) no longer runs over the edge of Quake II's world and is built: the map stands in the world's middle, not in one half of it",
+            }),
+        new("3.55", "06.11.2026",
+            new[]
+            {
+                "Окно снова открывается там, где его закрыли: в 3.54 после закрытия не развёрнутого окна оно уезжало в левый верхний угол",
+                "Карта с нуля больше не пересвечивается после проверок: свет, с которым её построили и проверили, остаётся до конца — и после «Разрушения» тоже",
+                "Проверки новой карты с нуля смотрят на ту карту, что попала в библиотеку, — уже после разрушения и света, а не на черновик",
+                "У непройденной проверки на странице карты написано по-русски, что намерено и сколько должно быть",
+            },
+            new[]
+            {
+                "The window opens where it was closed again: in 3.54 a window not maximised went to the top-left corner after a close",
+                "A map from scratch is no longer relit after its checks: the light it was built and checked with stays to the end - after «Destruction» too",
+                "A new map from scratch is checked as the library gets it - after the ruin and the light, not as a draft",
+                "A failed check on a map's page says in words what was measured and what it should be",
+            }),
+        new("3.54", "06.11.2026",
+            new[]
+            {
+                "Проверки карты в списке и на её странице — счётом: «проверки пройдены» зелёным, «проверки: 85 из 86» спокойным серым, если карта играется. Красное «играть нельзя» — только когда карта и правда не играется: точка появления в стене или с неё не сойти, предмет потерян или точка появления под движущейся частью, есть место без выхода, до главного предмета не дойти, точек появления меньше заказанного",
+                "На странице карты непройденные проверки стоят первыми и под каждой написано, что намерено и сколько у карт людей",
+                "Кнопка «Перепроверить» на странице новой карты: заново измеряет готовую карту проверками этой версии, минута-две, без генерации",
+                "Плитки настроек в параметрах генерации, на главной, в настройках и на странице карты раскладываются по колонкам ровно по высоте; на широком экране — три колонки. Настройки «Открытого космоса» и «Башни» — своей плиткой рядом с «Размером и формой»",
+                "Окно запоминает свой размер и место, на широком экране при первом запуске открывается во весь экран",
+                "На экране генерации на широком мониторе схема построения крупнее, а журнал стоит рядом с ней, а не на отдельной вкладке",
+            },
+            new[]
+            {
+                "A map's checks in the list and on its page as a count: «checks passed» in green, «checks: 85 of 86» in quiet grey when the map plays. Red «cannot be played» only when it truly cannot: a spawn point in a wall or not to be stepped off, a pickup lost or a spawn under a moving part, a place with no way out, a main item out of reach, fewer spawns than asked",
+                "On a map's page the failed checks come first, each with what was measured and what people's maps have",
+                "A «Check again» button on a new map's page: measures the finished map again with this version's checks, a minute or two, no generation",
+                "The cards of the generation settings, the home page, the settings and a map's page are laid out in columns even in height; three columns on a wide screen. The settings of «Open space» and «Tower» are a card of their own beside «Size and shape»",
+                "The window remembers its size and place and opens maximised on the first start on a wide screen",
+                "On the generation screen on a wide monitor the build scheme is larger and the log stands beside it, not on a tab of its own",
+            }),
+        new("3.53", "06.11.2026",
+            new[]
+            {
+                "Джампады и телепорты выглядят как на картах людей: для прыжка вверх — светящийся диск на подставке, для полёта вдаль — наклонная плита со стрелками, а над ней бегут стрелки в сторону полёта; телепорт стоит в раме из двух стоек с мерцающим порталом и подсветкой",
+                "Обложки новой карты показывают джампад и телепорт, если они на ней есть",
+            },
+            new[]
+            {
+                "Jump pads and teleporters look as on people's maps: a lit disc on a plinth for a jump up, a slanted plate with arrows for a flight away, arrows running over it the way one flies; a teleporter stands in a frame of two posts with a shimmering portal and glow",
+                "A new map's covers show a jump pad and a teleporter when it has them",
+            }),
+        new("3.52", "06.11.2026",
+            new[]
+            {
+                "Новое устройство карты «Открытый космос»: острова висят в пустоте без стен, между ними джампады, мостики и телепорты, сорвался с края — погиб. Свои настройки: сколько островов, сколько из них достаются только джампадом, края открытые или с перилами, разброс высот, дальность джампадов, мостики",
+                "Новое устройство «Башня»: целые этажи друг над другом вокруг атриума под небом. Наверх ведут джампады и шахты, вниз можно спрыгнуть, а над верхним этажом есть площадки, куда попадают только джампадом. Свои настройки: сколько этажей, высота этажа, сколько шахт, сколько площадок наверху",
+                "«Корабли в небе» (раздел «Стиль»): до трёх кораблей из одиночной игры пролетают над картой — в космосе над островами или под ними, в башне над атриумом, на обычной карте над высокими дворами. Если подходящего двора нет, в описании карты сказано почему",
+                "Пресеты новых карт: 24 новых заводских — 13 в разделе «Открытый космос» и 11 в разделе «Башня», всего 184",
+            },
+            new[]
+            {
+                "A new layout «Open space»: islands hang in the void with no walls, jump pads, bridges and teleporters between them, a step off the edge is death. Its own settings: how many islands, how many only a jump pad reaches, open or railed edges, the height spread, the pads' reach, bridges",
+                "A new layout «A tower»: whole storeys over each other round an atrium under the sky. Jump pads and shafts lead up, one jumps down, and over the top storey there are ledges only a jump pad reaches. Its own settings: how many storeys, the storey height, how many shafts, how many ledges at the top",
+                "«Ships in the sky» (the «Style» group): up to three ships of the single-player game fly over the map - in open space over the islands or under them, in a tower over the atrium, on a usual map over the tall courts. With no fitting court the map's description says why",
+                "New-map presets: 24 new factory ones - 13 in «Open space» and 11 in «Tower», 184 in all",
+            }),
+        new("3.51", "06.11.2026",
+            new[]
+            {
+                "«Случайный вариант» (включён по умолчанию): каждая генерация сама берёт новый номер варианта, и каждый раз получается другая карта; поле номера скрыто. Номер виден в имени карты — чтобы повторить карту, выключите переключатель и введите номер",
+                "Страница генерации: заголовок «Загрузка — генератору разрешено …» больше не обрезан, он переносится на вторую строку",
+                "Новая карта строится на несколько минут быстрее: выбранный вариант каркаса больше не проверяется генератором дважды. Если генератор не возьмёт вариант основой, сам возьмётся следующий по качеству",
+            },
+            new[]
+            {
+                "«Random variant» (on by default): every generation takes a new variant number by itself, another map each time; the number box is hidden. The number is in the map's name - to make a map again, switch it off and type the number",
+                "The generate page: the header «Load - the generator may use up to …» is no longer cut, it wraps to a second line",
+                "A new map is built a few minutes faster: the chosen skeleton variant is no longer checked by the generator twice. If the generator does not take a variant as its base, the next best is taken by itself",
+            }),
+        new("3.50", "06.11.2026",
+            new[]
+            {
+                "Новая карта: на странице генерации вместо «Отделка: отличие от каркаса» — «Ход работы»: процент всей постройки, сколько осталось и когда закончится, какой этап идёт (например, «Этап 5 из 11: Правки»). То же в строке над другими страницами. Оценка уточняется по вашим прошлым картам с тем же числом игроков и временем",
+                "Пресеты новых карт: 160 заводских в 13 разделах вместо 18 — дуэли, на 3–4 игрока, общий бой, большие карты, команда на команду, миры, вода и лава, оружие, переходы, механики, вид. Каждый проверен: из него строятся карты",
+                "Каркас новой карты строится на всех разрешённых потоках процессора: планы и варианты карты считаются одновременно, проверки готовой карты идут вместе. Тот же запрос и номер теперь всегда дают ту же карту — раньше могли давать разные",
+                "Загрузка компьютера: в заголовке сказано, сколько потоков разрешено генератору и сколько он занимает. Правки карты по-прежнему собираются в один поток — так одна и та же карта получается одинаковой",
+                "«Время: N из M мин» у правок считается с начала работы генератора, а не с начала каркаса",
+                "Библиотека: у новых карт — «Построена за …» вместо отличия от каркаса",
+            },
+            new[]
+            {
+                "New map: the generate page shows «Progress» in place of «Dressing: difference from the skeleton» - the whole build's percent, the time left and when it ends, the stage under way (e.g. «Stage 5 of 11: Edits»). The same in the strip over the other pages. The estimate learns from your earlier maps with the same players and time",
+                "New-map presets: 160 factory ones in 13 groups instead of 18 - duels, 3-4 players, free-for-all, big maps, team games, worlds, water and lava, weapons, ways between places, mechanics, look. Each was checked: maps are made from it",
+                "A new map's skeleton is built on every processor thread allowed: the plans and the map variants side by side, the finished map's checks together. The same request and number now always make the same map - before they could make different ones",
+                "Computer load: the header says how many threads the generator may use and how much it uses. The map's edits are still built on one thread - so the same map comes out the same",
+                "The edits' «Time: N of M min» counts from the generator's start, not from the skeleton's",
+                "Library: a new map says «Built in …» in place of its difference from the skeleton",
+            }),
+        new("3.49", "06.11.2026",
+            new[]
+            {
+                "Кнопка «Загрузить» у пресетов открывает меню: категории, а в них заводские и ваши пресеты (в 3.48 открывалась пустая узкая рамка)",
+                "Список «По выбранным картам» помещается в своё окошко целиком: полоса прокрутки и кнопка «Добавить карты…» больше не обрезаны справа",
+            },
+            new[]
+            {
+                "The presets' «Load» button opens its menu: the categories, the factory's and your presets in them (3.48 opened an empty narrow frame)",
+                "The list of «The chosen maps» fits its drop-down whole: the scroll bar and «Add maps…» are no longer cut on the right",
+            }),
+        new("3.48", "06.11.2026",
+            new[]
+            {
+                "Пресеты параметров генерации: справа от заголовка страницы — какой пресет стоит и кнопки «Загрузить», «Создать», «Изменить», «Удалить». У новой карты и у карты из готовой — свои наборы. Заводские: для новых карт 18 (по умолчанию, дуэли, общий бой, миры со своими текстурами), для карт из готовых 10; свои — сколько угодно, по своим категориям или в заводские. Заводские нельзя изменить и удалить, свои удаляются с подтверждением. Если параметры поменяли после загрузки, рядом с названием — «(изменён)»",
+                "Карта с нуля, «По выбранным картам»: вместо россыпи галочек — одна кнопка со списком всех карт игры, поиском и галочками. Карта из другой папки берётся оттуда, где лежит, и больше не копируется в основы студии; снимете галочку — она уходит из списка",
+                "Размер пристроек «Ниши» больше не превращается в «Залы» после перезапуска студии",
+                "Карта с нуля: галочки механик «по умолчанию» показывают то, что сделает генератор («Две половины» у карты из двух половин), и отмеченные обратно как было снова считаются «по умолчанию»",
+            },
+            new[]
+            {
+                "Presets of the generation's parameters: right of the page's title - the preset in use and «Load», «Create», «Change», «Delete». A new map and a map from a ready one each have their own. The factory's: 18 for new maps (default, duels, free-for-all, worlds with the Studio's own textures), 10 for maps from ready ones; your own - as many as you like, in categories of your own or the factory's. A factory preset cannot be changed or deleted, yours are deleted after a question. Parameters changed after a load show «(changed)» beside the name",
+                "Map from scratch, «The chosen maps»: one button with a list of every map of the game, a search and a tick each in place of rows of ticks. A map from another folder is read where it lies and no longer copied into the Studio's bases; untick it and it leaves the list",
+                "The annex size «Niches» no longer turns into «Halls» after the Studio restarts",
+                "Map from scratch: the mechanics' default ticks show what the generator makes («Two halves» on a map of two halves), and ticked back as they were they count as the default again",
+            }),
+        new("3.47", "06.11.2026",
+            new[]
+            {
+                "Карта с нуля: кнопки, открывающие дверь к паверапу, больше не утоплены в столбики ламп, пилястры, панели украшений и скосы углов — стена под кнопкой остаётся свободной; плинтусы и пилястры не заходят и на скруглённые углы",
+                "Карта с нуля: «часы» (красная броня и мега в 5–9 секундах друг от друга) учитывают ниши паверапов — предмет в нише стоит дальше, и генератор заранее ставит пару ближе",
+                "Свои текстуры студии: выбранный цвет у снега, леса, города, планеты, фэнтези, пустыни и ада меняет оттенок, а не яркость — снег с «холодным» цветом остаётся светлым",
+                "Страница генерации после окончания генерации открывается сверху",
+                "Скругления: если какой-то вид не получился, проверка называет его, а в описании карты сказано почему",
+                "Проверка карты с нуля: кнопки паверапов свободны",
+                "Библиотека: длинная подпись карты на обложке (например, «с нуля, свои текстуры: Снег и лёд» по-английски) заканчивается многоточием, полностью — во всплывающей подсказке",
+            },
+            new[]
+            {
+                "Map from scratch: the buttons that open a powerup's door are no longer sunk into lamp posts, pilasters, decor panels or chamfers - the wall under a button stays bare; skirting and pilasters keep off rounded corners too",
+                "Map from scratch: the «clock» (body armour and mega 5-9 seconds apart) counts the powerups' nooks - an item in a nook stands further, and the generator places the pair closer beforehand",
+                "The Studio's own textures: a chosen colour for snow, forest, city, planet, fantasy, desert and hell turns the hue, not the brightness - snow in «cold» stays light",
+                "The generate page opens at its top after a run",
+                "Round shapes: a kind that could not be made is named by the check, and the map's description says why",
+                "From-scratch check: the powerups' buttons are free",
+                "Library: a long label on a map's cover (say «from scratch, own textures: Snow and ice») ends in an ellipsis, the whole of it in its tip",
+            }),
+        new("3.46", "05.11.2026",
+            new[]
+            {
+                "Экран идущей генерации: новая вкладка «Параметры» — с какими параметрами запущена генерация, в тех же карточках, что на странице генерации, только для просмотра (и у генерации, продолженной после перезапуска студии)",
+                "Страница генерации больше не прыгает наверх, когда выбор показывает или прячет строки (свои текстуры студии, свой стек, число игроков) и при смене языка: она остаётся там, где была прокручена",
+                "Экран генерации карты с нуля: заголовок «Каркас карты» больше не налезает на серую подсказку «Схема появится…»",
+                "Схема каркаса: подписи в обозначениях — русскими буквами, а не квадратиками",
+                "Карта с нуля: у «Небо над головой» правильное значение по умолчанию при своих текстурах студии (30 %), и оно меняется вместе со стилем",
+                "Экран генерации после смены языка — целиком на новом языке",
+                "Свои текстуры студии: семь новых тем — снег и лёд, лес, город, другая планета, фэнтези, пустыня, ад. У каждой свои материалы (снег, лёд, кора, мох, доски, булыжник, фасады с окнами, асфальт с разметкой, кратеры, кристаллы, светящиеся прожилки, руны, золотой орнамент, песок с рябью, песчаник, скала с лавой) и свои цвета и свет",
+                "Карта с нуля: «Скругления», как на medusa_b1 — скруглённые углы комнат, полукруглые торцы залов и восьмиугольные возвышения в одну-две ступени (под предметом зала или на свободном месте); сколько — немного, заметно или много, и какие из трёх",
+            },
+            new[]
+            {
+                "The running generation's page: a new tab «Parameters» - what the run was started with, in the same cards as the generate page, to look at only (a run resumed after a restart of the Studio too)",
+                "The generate page no longer jumps to its top when a choice shows or hides rows (the Studio's own textures, a custom stack, the player count) or the language changes: it stays where it was scrolled to",
+                "A map from scratch's run page: the title «Map skeleton» no longer lies over the grey «The scheme will appear…»",
+                "The skeleton's picture: its legend in Russian letters, not boxes",
+                "Map from scratch: «Sky overhead» says the right default with the Studio's own textures (30 %), and follows the style",
+                "The run page after a language change - all in the new language",
+                "The Studio's own textures: seven themes more - snow and ice, forest, city, another planet, fantasy, desert, hell. Each its own materials (snow, ice, bark, moss, planks, cobbles, facades with windows, asphalt with road markings, craters, crystals, glowing veins, runes, gold ornament, rippled sand, sandstone, lava rock), its own colours and light",
+                "Map from scratch: «Round shapes» as on medusa_b1 - rounded room corners, half-round hall ends and octagonal raised platforms a step or two high (under an item of the hall or on open floor); how many - a few, some or many, and which of the three",
+            }),
+        new("3.45", "05.11.2026",
+            new[]
+            {
+                "Карта с нуля: у квада, меги, неуязвимости и красной брони своё место. Новый параметр «Доступность главных предметов»: просто — на постаменте под своим цветным светом; средне — в нише в стене, через раз приподнятой над полом (запрыгнуть); сложно — в нише за дверью, которую открывает кнопка на стене (вторая кнопка внутри, чтобы не запереться); смешанно (по умолчанию) — самый ценный сложно, следующий средне, остальные просто",
+                "Карта с нуля: «Броня и мега по очереди в одной нише» — красная броня и мега (на общий бой и силовой щит) появляются по очереди в одном месте, как на q2dm8",
+                "Карта с нуля: текстуры «Сгенерированные студией» — студия сама рисует набор текстур: металлические панели и заклёпки, решётки, плитка, кирпич, камень, бетон, скала, бордюры с полосами «осторожно». Параметры: тема (техника, готика, завод, база), цвет, износ, размер деталей, рельеф и что одевать (всё, только детали или стены и пол). Шум взят из открытого генератора Procedural-PBR (лицензия MIT)",
+                "Отделка карты с нуля: карты для неё выбираются любые — одна или несколько из списка (карты людей, основы) или любые карты Quake II с диска кнопкой «Добавить карты…»; списка зашитых названий в настройках больше нет",
+                "Страница новой карты с нуля: блока «Что можно менять» на ней больше нет — это правки готовой карты; у карты с нуля лифты, комнаты, окна, жидкости и предметы задают её параметры, и генератор ничего из того блока к ней не применяет",
+                "Проверка карты с нуля: у каждого главного предмета своё освещённое место, доступность — как заказана",
+            },
+            new[]
+            {
+                "Map from scratch: the quad, mega, invulnerability and body armour get places of their own. A new parameter «How hard the powerups are to get»: easy - on a pedestal under its own coloured light; medium - in a nook in the wall, every other one raised over the floor (jump in); hard - in a nook behind a door a button on the wall opens (a second button inside, so nobody is shut in); mixed (the default) - the most valuable hard, the next medium, the rest easy",
+                "Map from scratch: «Armour and mega taking turns in one nook» - the body armour and the mega (and on a free-for-all a power shield) appear in turn in one place, as on q2dm8",
+                "Map from scratch: textures «Made by the Studio» - the Studio paints its own set: metal panels and rivets, gratings, tiles, brick, stone, concrete, rock, trims with hazard stripes. Parameters: theme (tech, gothic, factory, base), colour, wear, size of the detail, relief and what they dress (everything, only the detail, or walls and floors). The noise is the open generator Procedural-PBR's (MIT licence)",
+                "Map from scratch finish: any maps for it - one or several from the list (people's maps, bases) or any Quake II map from the disk by «Add maps…»; no hardcoded list of names in the settings any more",
+                "The from-scratch page: no «What may change» card any more - those are edits of a ready map; a map from scratch has its lifts, rooms, windows, liquids and items from its parameters, and the generator applies nothing of that card to it",
+                "From-scratch check: every powerup in a lit place of its own, as hard to reach as asked",
+            }),
+        new("3.44", "05.11.2026",
+            new[]
+            {
+                "Карта с нуля: нет тупиков — в каждую комнату ведут два прохода и больше; комната над комнатой строится только со вторым выходом (ещё одна лестница или проём, откуда спрыгнуть в зал); комнаты без второго выхода становятся нишей соседнего зала",
+                "Карта с нуля: лифты не наезжают друг на друга (на карте с параметрами два лифта делили одну клетку и мерцали)",
+                "Карта с нуля: лишнюю линию прострела закрывает уступ стены, колонна — только в крайнем случае: не больше одной на комнату (две в большом зале) и четырёх на карту, в узкой комнате ни одной",
+                "Карта с нуля: нет возвышений-«башенок» посреди залов — ни в каркасе, ни в отделке; проходы смещены друг относительно друга",
+                "Карта с нуля: нет голых коробок — комната без уступов получает окно к соседу, длинный зал колоннаду вдоль стены",
+                "Карта с нуля на общий бой: в наборе по умолчанию квад (красная броня, мега, жёлтая броня и квад); набор «Красная броня, мега и квад» и в списке",
+                "Проверка карты с нуля: лифты не наезжают, тупиков нет, голых коробок нет",
+            },
+            new[]
+            {
+                "Map from scratch: no dead ends - two doorways or more into every room; a room over a room is made only with a second way out (another flight or an opening to drop into the hall); a room with no second way becomes a bay of its neighbour",
+                "Map from scratch: lifts never run into each other (on the styled map two lifts shared a cell and flickered)",
+                "Map from scratch: a surplus sight line is closed by a jog of the wall, a column only as a last resort: one per room (two in a large hall), four per map, none in a narrow room",
+                "Map from scratch: no stepped mounds in the middle of halls - neither in the skeleton nor in the dressing; doorways off each other's axis",
+                "Map from scratch: no bare boxes - a room with no terrace gets a window to its neighbour, a long hall an arcade along its wall",
+                "Map from scratch for a free-for-all: the default set holds a quad (body armour, mega, combat armour and quad); «Body armour, mega and quad» in the list too",
+                "From-scratch check: lifts apart, no dead ends, no bare boxes",
+            }),
+        new("3.43", "05.11.2026",
+            new[]
+            {
+                "Карта с нуля: текстур больше — у выбранной карты людей берутся до четырёх текстур стен (помещения по очереди), пол комнат и коридоров свой; колонны, балки, рамы проходов и ступени — в её мелких текстурах (опоры, решётки, панели). На дуэли 8–15 текстур вместо 4–8",
+                "Карта с нуля: лампы на стенах — под карнизом, на столбиках у стены, над проходами на перемычке; посреди потолка лампа только там, куда со стен свет не доходит",
+                "Карта с нуля: настоящие коридоры шириной в две клетки с поворотом (буквой Г или П) между залами; доля коридоров как у карт людей",
+                "Карта с нуля: комнаты над комнатами — над низкой комнатой вторая, вход в неё с соседнего балкона или по ступеням",
+                "Проверка карты с нуля: число текстур, пол над полом и коридоры с поворотом",
+            },
+            new[]
+            {
+                "Map from scratch: more textures - up to four wall textures of the chosen people's map (the spaces take them in turn), rooms and corridors with their own floors; columns, beams, doorway frames and steps in its small textures (supports, gratings, panels). A duel wears 8-15 textures instead of 4-8",
+                "Map from scratch: lamps on the walls - under the cornice, on posts by the wall, over doorways on their lintel; a lamp in the middle of a ceiling only where no wall lamp reaches",
+                "Map from scratch: real corridors two cells wide with a turn (an L or a U) between the halls; the corridor share as on people's maps",
+                "Map from scratch: rooms over rooms - a second room over a low one, entered from a neighbour's balcony or up a flight of steps",
+                "From-scratch check: the number of textures, floor over floor and corridors with a turn",
+            }),
+        new("3.42", "05.11.2026",
+            new[]
+            {
+                "Карта с нуля: отделка по умолчанию — как у карт людей. Генератор берёт одну из карт q2dm, q2duel, ztn2dm, koldduel1, omf, ptrip, match1, kaktus и одевает карту в её текстуры стен, пола и потолка, её бордюры и лампы; залы, комнаты и коридоры в разных текстурах",
+                "Карта с нуля: свет цветной, как у выбранной карты людей, а не белый",
+                "Карта с нуля: прежний набор текстур генератора больше не ставится — он был серым и втрое светлее текстур людей, карты выходили выбеленными. В «Смешанно» потолки и бордюры — только его тёмные цветные текстуры",
+                "Проверка карты с нуля: цвет, яркость текстур, яркость на экране, доля самой частой текстуры и цвет света — с границами по картам людей",
+            },
+            new[]
+            {
+                "Map from scratch: the default finish is like people's maps. The generator takes one of q2dm, q2duel, ztn2dm, koldduel1, omf, ptrip, match1, kaktus and dresses the map in its wall, floor and ceiling textures, its trims and lamps; halls, rooms and corridors in different textures",
+                "Map from scratch: the light is tinted as on the chosen people's map, not white",
+                "Map from scratch: the generator's old texture set is no longer used - it was grey and three times lighter than people's textures, the maps came out washed out. In «Mixed» ceilings and trims take only its dark coloured textures",
+                "From-scratch check: colour, texture brightness, on-screen brightness, the largest texture's share and the light's colour - banded on people's maps",
+            }),
+        new("3.41", "05.11.2026",
+            new[]
+            {
+                "Страница «Новая карта с нуля» на широком окне: карточки больше не налезают друг на друга; карточки «Переделка основы» на ней больше нет",
+                "На всех экранах карты с нуля — генерация, её ход, строка генерации, главная, карточка в библиотеке, схема и описание — ни слова об основе: вместо неё каркас и его отделка",
+                "Главная страница и руководство: студия делает карты из готовых и с нуля; в руководстве глава «Новая карта с нуля»",
+                "Карта с нуля: нет мест, откуда нельзя выбраться, — проверено и ходьбой с физикой самой игры; заказанный тупик допускается только внутри своей комнаты",
+                "Карта с нуля: свет как у карт людей — пол и стены не пересвечены (солнце мягче, лампы во дворах слабее)",
+                "Карта с нуля: стены отделаны — плинтус, карниз, пилястры, балки под высоким потолком, рамы и арки проходов; ничего не висит в воздухе (проверка)",
+                "Карта с нуля: бассейн не больше трети зала и не прямоугольником; длинных линий прострела на дуэли столько, сколько просили, или на одну больше; точек появления на высоте не все",
+                "Карта с нуля: другие параметры — другая планировка (раньше при одном номере варианта планировка была одна)",
+            },
+            new[]
+            {
+                "The «A new map from scratch» page on a wide window: the cards no longer run over each other; the «Base remodels» card is gone from it",
+                "Every screen of a map from scratch - the Generate page, its run, the strip, the home page, its card in the library, the scheme and the description - says nothing of a base: its skeleton and the skeleton's dressing instead",
+                "The home page and the guide: the Studio makes maps from existing ones and from scratch; the guide's chapter «A new map from scratch»",
+                "Map from scratch: no place one cannot get out of - checked by a walk with the game's own movement too; an asked dead end is allowed only inside its own room",
+                "Map from scratch: light as on people's maps - floors and walls not burnt white (a softer sun, weaker lamps in the courts)",
+                "Map from scratch: the walls finished - skirting, cornice, pilasters, beams under a high ceiling, doorway frames and arches; nothing hangs in the air (a check)",
+                "Map from scratch: a pool takes a third of its hall at most and is not a plain rectangle; a duel's long sight lines as many as asked or one more; not every spawn at height",
+                "Map from scratch: other parameters - another layout (before, one variant number gave one layout)",
+            }),
+        new("3.40", "04.11.2026",
+            new[]
+            {
+                "Карта с нуля: из каждой части ямы есть ступени наверх — мост через яму больше не оставляет половину без выхода; проверка «нет мест, куда можно попасть и откуда нельзя выбраться»",
+                "Карта с нуля: перестройки основы и блоки в комнатах больше не пробуются (на такой основе они не строились ни разу, а в описании карты стояло «0 из 3»)",
+            },
+            new[]
+            {
+                "Map from scratch: steps lead out of every part of a pit - a bridge across it no longer leaves one half with no way out; the check «no place one can get into and not out of»",
+                "Map from scratch: the base's remodels and room blocks are no longer tried (on such a base none was ever built, and the map's description said «0 of 3»)",
+            }),
+        new("3.39", "04.11.2026",
+            new[]
+            {
+                "Карта с нуля: каждая заказанная жидкость получает свою яму — лава больше не забирает все ямы у воды",
+                "Проверка карты с нуля больше не обрывается на середине из-за знака, который не умеет печатать консоль Windows",
+            },
+            new[]
+            {
+                "Map from scratch: every liquid asked gets a pit of its own - lava no longer takes every pit from the water",
+                "The check of a map from scratch no longer stops half way on a sign the Windows console cannot print",
+            }),
+        new("3.38", "04.11.2026",
+            new[]
+            {
+                "Карта с нуля: генератор не развешивает по стенам свои украшения, какой бы ни была их настройка для карт из основы — на карте с нуля их задаёт её собственная настройка «Украшения на стенах»",
+            },
+            new[]
+            {
+                "Map from scratch: the generator hangs none of its ornaments on the walls, whatever their setting for maps from a base - a map from scratch has its own «Wall decorations» setting",
+            }),
+        new("3.37", "04.11.2026",
+            new[]
+            {
+                "Карта с нуля: лифт больше не стоит на ступенях лестницы, а внизу его платформа вровень с полом, без мерцания",
+                "Выход телепорта — в нескольких шагах от его входа; точки появления не ставятся рядом с телепортами, их выходами и джампадами",
+                "Вода лежит только в углублениях и заполняет их вместе со ступенями; затопить комнаты поверх пола можно отдельной настройкой «Разрешить воде возвышаться над полом» (выключена)",
+                "Ничего не висит в воздухе: светильник — только в потолке над самим светом; панели на стенах по умолчанию выключены; блоков в комнатах на карте с нуля нет",
+            },
+            new[]
+            {
+                "Map from scratch: a lift no longer stands on a stair's steps, and at rest its plat is flush with the floor, no flicker",
+                "A teleporter's exit stands a few steps from its pad; no spawn beside a teleporter, its exit or a jump pad",
+                "Water lies only in hollows and fills them over their steps; rooms flooded over their floor only with «Let water stand above the floor» (off)",
+                "Nothing hangs in the air: a lamp only set into a ceiling over its light; wall panels off by default; no blocks in the rooms of a map from scratch",
+            }),
+        new("3.36", "04.11.2026",
+            new[]
+            {
+                "Проверки карты с нуля в карточке карты названы простыми словами — по-русски и по-английски",
+            },
+            new[]
+            {
+                "The checks of a map from scratch are named in plain words on the map's card - in Russian and English",
+            }),
+        new("3.35", "04.11.2026",
+            new[]
+            {
+                "Новая карта с нуля: третий способ начать карту на странице генерации — без карты-основы, своя планировка по параметрам",
+                "Параметры карты с нуля: на сколько игроков и режим (дуэль, общий бой, команда на команду), точки появления, размер, уровни высоты, вертикальный размах, коридоры и открытые площадки, небо, длинные линии прострела, устройство (две половины, одна арена, кольцо)",
+                "Переходы по заказу: лестницы, пандусы, лифты, джампады, телепорты, лестницы-стремянки, спуски, двери, окна разной формы и цвета стекла",
+                "Вода, лава и кислота долей пола; смертельные ямы с мостом или джампадом через них",
+                "Оружие поштучно, наборы брони и стека или свой набор, осколки, патроны и аптечки на игрока, главные предметы на высоте",
+                "Механики с карт людей: стек на часах, две половины, пушка на уступе, асимметрия маршрута, мелкие аптечки, давление на спавны, тупик со стеком, три подхода, телепорт к зеркальному стеку, джампад над пропастью, лифт как уязвимость, стремянка под предметом",
+                "Стиль: текстуры по вкусу генератора, по выбранным картам (только отделка, ни одной их постройки) или смешанно; украшения на стенах, солнце, тёплый или холодный свет",
+                "Каркас карты виден на странице генерации до первой стены; в описании карты — что просили и что получилось",
+                "Карта с нуля проверяется мерками карт людей и доказательством, что она не копия ни одной известной карты",
+            },
+            new[]
+            {
+                "A new map from scratch: the third way to start a map on the Generate page - no base map, its own plan by the parameters",
+                "Parameters of a map from scratch: players and mode (duel, free for all, team against team), spawns, size, height levels, vertical span, corridors and open places, sky, long sight lines, layout (two halves, one arena, a ring)",
+                "Ways between levels as asked: stairs, ramps, lifts, jump pads, teleporters, ladders, drops, doors, windows of several outlines and glass colours",
+                "Water, lava and slime as shares of the floor; deadly chasms with a bridge or a jump pad across",
+                "Weapons one by one, armour and stack sets or your own set, shards, ammo and health per player, major items at height",
+                "Mechanics from people's maps: a stack on a clock, two halves, a gun on a ledge, route asymmetry, small health, spawn pressure, a dead-end stack, three approaches, a teleport to a mirrored stack, a jump pad over a chasm, a lift as exposure, a ladder under an item",
+                "Style: the generator's textures, the chosen maps' (only their skins, none of their buildings) or mixed; wall decorations, sun, warm or cold light",
+                "The map's skeleton shows on the run page before the first wall; the map's description says what was asked and what was made",
+                "A map from scratch is checked by people's maps' measures and proved not a copy of any known map",
+            }),
         new("3.34", "13.10.2026",
             new[]
             {

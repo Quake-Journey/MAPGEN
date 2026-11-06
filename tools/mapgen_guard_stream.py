@@ -27,9 +27,17 @@ NO_WINDOW = 0x08000000
 
 def one(mask: int, script: str, args: list[str]) -> None:
     """This process pinned, the load guard told the same mask, the guard run here as its own main."""
+    from ctypes import wintypes
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # the handle is pointer-wide: without the types the pseudo-handle went in as a 32-bit int and the mask was never
+    # set (found 04.11: a generation run under --one 3c showed every core in its affinity)
+    k32.GetCurrentProcess.restype = wintypes.HANDLE
+    k32.SetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.c_size_t]
+    k32.SetProcessAffinityMask.restype = wintypes.BOOL
+    k32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
     h = k32.GetCurrentProcess()
-    k32.SetProcessAffinityMask(h, ctypes.c_size_t(mask))
+    if not k32.SetProcessAffinityMask(h, mask):
+        raise SystemExit(f"could not pin to {mask:#x} (error {ctypes.get_last_error()})")
     k32.SetPriorityClass(h, BELOW_NORMAL)
     sys.path.insert(0, str(TOOLS))
     import mapgen_load_guard as load_guard

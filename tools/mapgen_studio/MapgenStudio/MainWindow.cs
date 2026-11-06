@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
@@ -27,6 +28,26 @@ public sealed partial class MainWindow : Window
     private MapEntry? _openMap;
 
     private Settings S => App.Settings;
+
+    /// <summary>Brief 28: a form card's narrowest column - two from 1218, three from 1836 (the PO's 2293 at 150 %).</summary>
+    internal const double FormColumn = 600;
+
+    /// <summary>The 3.56 map page (the facts and buttons over the checks on the right), for the self-test's RED only.</summary>
+    internal static bool OldMapLayout;
+
+    /// <summary>The map page's cover, facts and checks as last built (the self-test measures them).</summary>
+    internal Control? MapCover { get; private set; }
+    internal Control? MapFacts { get; private set; }
+    internal Control? MapChecks { get; private set; }
+
+    /// <summary>Where the map page put its facts: «head» (beside the name), «right» (over the checks) or «top» (over the cover).</summary>
+    internal string MapFactsMode { get; private set; } = "";
+
+    /// <summary>The self-test's long Python path for the settings page (a path on the disk cannot be made long).</summary>
+    internal static string? PythonShownForTest;
+
+    /// <summary>Brief 28 D4: the 3.53 arrangement of the new-map form, for the self-test's RED only.</summary>
+    internal static bool OldFormLayout;
 
     public MainWindow()
     {
@@ -63,7 +84,42 @@ public sealed partial class MainWindow : Window
         var timer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         timer.Tick += (_, _) => Tick();
         timer.Start();
+        // brief 29 D1: the place kept while the window still has one - in `Closing`. Avalonia (12.1.3, TopLevel.HandleClosed)
+        // drops the platform window before it raises `Closed`, and `Position` then reads 0,0: 3.54 saved every close of a
+        // window not maximised as the screen's top-left corner. Before OnClosing: a close it cancels (a run going) keeps it too
+        Closing += (_, _) =>
+        {
+            if (_keepsPlace && !PlaceSavedOnClosed)
+                KeepWindowPlace();
+        };
+        Closed += (_, _) =>
+        {
+            if (_keepsPlace && PlaceSavedOnClosed)
+                KeepWindowPlace();
+        };
         Closing += OnClosing;
+        Opened += (_, _) =>
+        {
+            if (!_keepsPlace)
+                return;
+            FirstOnWideScreen();
+            // brief 28 D3: kept on a resize and a move too (a second after the last one), not only on close - a window
+            // never shown (the self-test's) never gets here, so it never writes the settings
+            var keepSoon = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            keepSoon.Tick += (_, _) =>
+            {
+                keepSoon.Stop();
+                KeepWindowPlace();
+            };
+            void Soon()
+            {
+                keepSoon.Stop();
+                keepSoon.Start();
+            }
+            Resized += (_, _) => Soon();
+            PositionChanged += (_, _) => Soon();
+            Closed += (_, _) => keepSoon.Stop();
+        };
         Opened += OnFirstOpened;            // brief 10 (D3): «what's new» after an update, the update check
         // a cover launch still open when the window goes: that one client closed, the map copies taken back
         Closed += (_, _) =>
@@ -161,6 +217,22 @@ public sealed partial class MainWindow : Window
     private string? _formName;
     private bool _suggesting;
 
+    /* the PO 06.11: «Случайный вариант» - its toggle and the number's row (the self-test reads them) */
+    internal ToggleSwitch? _seedRandom;
+    internal Control? _seedRow;
+
+    /// <summary>After a start, with «Случайный вариант» on: the next run's number drawn and kept (the form shows its name).</summary>
+    private void NextRandomSeed()
+    {
+        if (!S.SeedRandom)
+            return;
+        S.Seed = S.NewSeed();
+        if (!SelfTesting)
+            S.Save();
+    }
+    /// <summary>Brief 23 D2: the values a form's row could not show (none for the factory presets - the self-test asks).</summary>
+    internal readonly List<string> _choiceMisses = new();
+
     /// <summary>The form's likeness, seed, families and options into the settings (never from the self-test).</summary>
     /// <summary>A line of what a button got (press, release, click) into ui_clicks.txt beside the program, kept
     /// small - the evidence for a click that «did not take».</summary>
@@ -181,6 +253,8 @@ public sealed partial class MainWindow : Window
 
     private void KeepForm()
     {
+        // brief 23 D2: every change of either form passes here - the preset bar says whether the form is still its preset
+        SayPreset();
         if (!SelfTesting)
             S.Save();
     }
@@ -194,8 +268,9 @@ public sealed partial class MainWindow : Window
     /// пристраивать»; «размеры карты могут меняться как угодно»): the map's size and how unequally its parts stretch.
     /// Open by default - it is the first thing a generation does to the base.
     /// </summary>
-    private Control FramePicker()
+    private Control FramePicker(GenerationOptions? shown = null)
     {
+        // `shown`: a run's options on its page, to look at only (its controls are off) - nothing goes into the settings
         var ex = new OptionGroup("gen.warp", "gen.warp.desc", FASymbol.FullScreen, Look.TealC, "gen.warp.tip");
         void SliderRow(string key, int steps, int index, Func<int, string> show, Action<int> set)
         {
@@ -209,7 +284,7 @@ public sealed partial class MainWindow : Window
             said.Text = show(index);
             slider.PropertyChanged += (_, e) =>
             {
-                if (e.Property != Avalonia.Controls.Primitives.RangeBase.ValueProperty)
+                if (e.Property != Avalonia.Controls.Primitives.RangeBase.ValueProperty || shown != null)
                     return;
                 set((int)slider.Value);
                 said.Text = show((int)slider.Value);
@@ -218,8 +293,15 @@ public sealed partial class MainWindow : Window
             var footer = new StackPanel { Orientation = Orientation.Horizontal, Children = { slider, said } };
             ex.Add(Loc.T(key), Loc.T($"{key}.tip"), footer, $"{key}.tip");
         }
-        var o = S.Options;
+        var o = shown ?? S.Options;
         var sizeAt = Array.IndexOf(WarpSizes, o.WarpSize);
+        // brief 23 D2: a value the sliders cannot show (a preset's) is said to the self-test
+        if (sizeAt < 0)
+            _choiceMisses.Add($"gen.warp.size = {o.WarpSize}");
+        foreach (var (k, v, lo, hi) in new[] { ("gen.warp.shape", o.WarpShape, 0, 100), ("gen.warp.shift", o.WarpShift, 0, 100),
+                                               ("gen.warp.height", o.WarpHeight, 100, 200) })
+            if (v % 10 != 0 || v < lo || v > hi)
+                _choiceMisses.Add($"{k} = {v}");
         if (sizeAt < 0)
             sizeAt = Array.IndexOf(WarpSizes, 100);
         SliderRow("gen.warp.size", WarpSizes.Length, sizeAt, i => Loc.F("gen.warp.size.value", WarpSizes[i]),
@@ -231,6 +313,8 @@ public sealed partial class MainWindow : Window
                   i => S.Options = S.Options with { WarpShift = i * 10 });
         // the base turned or mirrored whole: «Как в основе», 90°, 180°, 270°, mirrored, or by the seed
         var turns = new[] { 0, 1, 2, 3, 4, 8 };
+        if (Array.IndexOf(turns, o.WarpTurn) < 0)
+            _choiceMisses.Add($"gen.warp.turn = {o.WarpTurn}");
         var turnBox = new ComboBox
         {
             MinWidth = 220, SelectedIndex = Math.Max(0, Array.IndexOf(turns, o.WarpTurn)),
@@ -255,7 +339,7 @@ public sealed partial class MainWindow : Window
     /// Row 410 (the PO, 05.10: «какие еще параметры добавить ... чтобы получать больше вариаций творчества»): the
     /// plan's own counts and sizes and the liquids, each «По умолчанию» first - the likeness decides.
     /// </summary>
-    private (Control rooms, Control liquids, Control basis, Control ruin) CreativePicker()
+    private (Control rooms, Control liquids, Control basis, Control ruin) CreativePicker(GenerationOptions? shown = null)
     {
         // the PO, 12.10: by group, each a card with its name - what is built anew, the liquids, what is changed in the
         // base's own rooms, the ruin
@@ -266,6 +350,8 @@ public sealed partial class MainWindow : Window
         var ex = rooms;
         void Row(string key, string[] items, int index, Action<int> set)
         {
+            if (index < 0 || index >= items.Length)
+                _choiceMisses.Add($"{key} = {index}");
             var box = new ComboBox { MinWidth = 260, ItemsSource = items, SelectedIndex = Math.Max(0, index) }.Tip($"{key}.tip");
             box.SelectionChanged += (_, _) =>
             {
@@ -275,7 +361,7 @@ public sealed partial class MainWindow : Window
             ex.Add(Loc.T(key), Loc.T($"{key}.tip"), box, $"{key}.tip");
         }
         string[] Counts(int[] values) => values.Select(v => v == 0 ? Loc.T("gen.default") : v.ToString()).ToArray();
-        var o = S.Options;
+        var o = shown ?? S.Options;
         Row("gen.opt.digs", Counts(CountChoices), Array.IndexOf(CountChoices, o.Digs), i => S.Options = S.Options with { Digs = CountChoices[i] });
         Row("gen.opt.annexes", Counts(CountChoices), Array.IndexOf(CountChoices, o.Annexes), i => S.Options = S.Options with { Annexes = CountChoices[i] });
         Row("gen.opt.annex_size", new[] { "gen.default", "gen.size.small", "gen.size.medium", "gen.size.large", "gen.size.halls", "gen.size.niches" }.Select(Loc.T).ToArray(),
@@ -295,6 +381,8 @@ public sealed partial class MainWindow : Window
         // rooms a flood may take
         void LiquidRow(string key, int value, Action<int> set)
         {
+            if (value != -1 && (value < 0 || value > 100 || value % 5 != 0))
+                _choiceMisses.Add($"{key} = {value}");
             var auto = new CheckBox { Content = Loc.T("gen.default"), IsChecked = value < 0, VerticalAlignment = VerticalAlignment.Center };
             var slider = new Slider
             {
@@ -306,6 +394,8 @@ public sealed partial class MainWindow : Window
             void Show() => said.Text = auto.IsChecked == true ? "" : $"{(int)slider.Value} %";
             void Keep()
             {
+                if (shown != null)
+                    return;
                 set(auto.IsChecked == true ? -1 : (int)slider.Value);
                 slider.IsEnabled = auto.IsChecked != true;
                 Show();
@@ -370,6 +460,11 @@ public sealed partial class MainWindow : Window
             {
                 if (e.Property != Avalonia.Controls.Primitives.RangeBase.ValueProperty)
                     return;
+                if (shown != null)
+                {
+                    Show();
+                    return;
+                }
                 S.Options = S.Options with { Destruction = SliderToDestruction(slider.Value) };
                 Show();
                 KeepForm();
@@ -542,6 +637,98 @@ public sealed partial class MainWindow : Window
     /// <summary>The window test answers its own questions «yes».</summary>
     public static bool UiTesting { get; set; }
 
+    /// <summary>
+    /// Brief 28: the window as it was closed - its size (900 x 600 at least), its place when that is still on a screen
+    /// (checked once it is open), maximised when it was. Nothing saved: 1180 x 780 in the screen's middle.
+    /// </summary>
+    internal static void ApplyWindowPlace(Window w, Settings s)
+    {
+        if (s.WindowW > 0 && s.WindowH > 0)
+        {
+            w.Width = Math.Max(s.WindowW, 900);
+            w.Height = Math.Max(s.WindowH, 600);
+            if (s.WindowX != int.MinValue && s.WindowY != int.MinValue)
+            {
+                w.WindowStartupLocation = WindowStartupLocation.Manual;
+                w.Position = new PixelPoint(s.WindowX, s.WindowY);
+            }
+        }
+        if (s.WindowMax)
+            w.WindowState = WindowState.Maximized;
+    }
+
+    private bool _keepsPlace;
+
+    /// <summary>Brief 29 D1: the 3.54 way (the place saved in `Closed`), for the window test's RED only.</summary>
+    internal static bool PlaceSavedOnClosed;
+
+    /// <summary>
+    /// Brief 29 D1: THE window of the program (the start's, or the window test's own) takes the place it was closed in and
+    /// keeps it. Every other window (the self-test's, the guide's shots, the start test's off the screen) neither takes nor
+    /// writes it - 3.54 did both for any MainWindow, and a shots window at -4000 would have maximised on a wide screen.
+    /// </summary>
+    internal void KeepPlace()
+    {
+        _keepsPlace = true;
+        ApplyWindowPlace(this, S);
+    }
+
+    /// <summary>The first start on a wide screen (over 1700 wide in the screen's own units): maximised; a saved place off
+    /// every screen: the window back in the middle of the primary one.</summary>
+    private void FirstOnWideScreen()
+    {
+        // the window test's own window stays off the screen where it put it
+        if (UiTesting)
+            return;
+        try
+        {
+            var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
+            if (screen == null)
+                return;
+            if (S.WindowW <= 0 && screen.WorkingArea.Width / screen.Scaling > 1700)
+                WindowState = WindowState.Maximized;
+            else if (S.WindowX != int.MinValue && !Screens.All.Any(sc => sc.WorkingArea.Contains(new PixelPoint(S.WindowX + 40, S.WindowY + 20))))
+            {
+                var area = screen.WorkingArea;
+                Position = new PixelPoint(area.X + Math.Max(0, (area.Width - (int)(Width * screen.Scaling)) / 2),
+                                          area.Y + Math.Max(0, (area.Height - (int)(Height * screen.Scaling)) / 2));
+            }
+        }
+        catch (Exception)
+        {
+            // a platform without screens (the self-test's windows are never shown): nothing to place
+        }
+    }
+
+    /// <summary>The window's size, place and maximised state into the settings when it closes.</summary>
+    private void KeepWindowPlace()
+    {
+        try
+        {
+            // a minimised window keeps what it was before (closed from the taskbar it opens as it was shown last)
+            if (WindowState == WindowState.Minimized)
+                return;
+            S.WindowMax = WindowState == WindowState.Maximized;
+            if (WindowState == WindowState.Normal)
+            {
+                S.WindowW = (int)Math.Round(Width);
+                S.WindowH = (int)Math.Round(Height);
+                S.WindowX = Position.X;
+                S.WindowY = Position.Y;
+            }
+            else if (S.WindowW <= 0)
+            {
+                S.WindowW = 1180;
+                S.WindowH = 780;
+            }
+            S.Save();
+        }
+        catch (Exception)
+        {
+            // a settings file that cannot be written: the next start opens as the first did
+        }
+    }
+
     /// <summary>R8: quitting while a generation runs asks first; stopping ends it at the current step.</summary>
     private async void OnClosing(object? sender, WindowClosingEventArgs e)
     {
@@ -640,7 +827,8 @@ public sealed partial class MainWindow : Window
             Notice(Loc.F("python.chosen", said, path));
             ShowPage();
         };
-        return new StackPanel { Orientation = Orientation.Horizontal, Children = { install, choose } };
+        // a wrap, not a line: a long path beside the buttons ran into the next card at three columns (his self-test, 06.11)
+        return new WrapPanel { Children = { install, choose } };
     }
 
     internal void Notice(string text, FAInfoBarSeverity severity = FAInfoBarSeverity.Success)
@@ -652,6 +840,15 @@ public sealed partial class MainWindow : Window
 
     private void ShowPage()
     {
+        /* the PO, 05.11 («если выбирать режим текстур, сгенерированных генератором, или свои установки по количеству
+           броней - интерфейс перегружается и перекидывает наверх окна»): a page built again in its place (a choice
+           that shows or hides rows, the language, a map added) keeps where it was scrolled to; another page, or another
+           map opened, starts at its top */
+        // brief 22 D5: the run's page and the form are two pages under «generate» - the form after a run starts at its
+        // top (it took the run view's left column's offset)
+        var key = _page + "|" + (_page == "library" ? _openMap?.Name ?? "" : _page == "generate" ? (Generation.Current != null ? "run" : "form") : "");
+        var keep = key == _shownPage ? PageScroller(_content.Content as Control)?.Offset : null;
+        _scrollNote = $"key {key} shown {_shownPage} keep {keep?.Y}";
         _content.Content = _page switch
         {
             "generate" => GeneratePage(),
@@ -660,9 +857,60 @@ public sealed partial class MainWindow : Window
             "about" => AboutPage(),
             _ => HomePage(),
         };
+        _shownPage = key;
+        if (keep is { Y: > 0 } at && PageScroller(_content.Content as Control) is { } scroller)
+        {
+            /* the new page has no height until it is laid out (its scroller's extent 0 right after the swap - the first
+               try set 0 there, 05.11 self-test): it is put where the old one was the moment its height lets it - its
+               scroller's extent and viewport, as they are measured. A page shorter than that goes as far as it can after
+               a few layout passes, and then nothing more is moved (the user's own scrolling is his). Not by the clock:
+               the first measure of the generate page took over two seconds in the self-test */
+            var placed = false;
+            var heard = 0;
+            var passes = 0;
+            void Done()
+            {
+                placed = true;
+                scroller.PropertyChanged -= Measured;
+                scroller.LayoutUpdated -= Passed;
+            }
+            void Try(bool last)
+            {
+                if (placed)
+                    return;
+                heard++;
+                var room = scroller.Extent.Height - scroller.Viewport.Height;
+                _scrollLast = $"heard {heard}, room {room:0} (extent {scroller.Extent.Height:0}, viewport {scroller.Viewport.Height:0})";
+                if (room >= at.Y || (last && room > 0))
+                {
+                    scroller.Offset = new Vector(0, Math.Min(at.Y, room));
+                    _scrollNote += $"; set {scroller.Offset.Y:0} of {room:0} after {heard}";
+                    Done();
+                }
+            }
+            void Measured(object? sender, AvaloniaPropertyChangedEventArgs e)
+            {
+                if (e.Property == ScrollViewer.ExtentProperty || e.Property == ScrollViewer.ViewportProperty)
+                    Try(false);
+            }
+            void Passed(object? sender, EventArgs e) => Try(++passes >= 8);
+            scroller.PropertyChanged += Measured;
+            scroller.LayoutUpdated += Passed;
+            _scrollNote += "; waiting";
+        }
         _nav.Select(_page);
         UpdateStrip(Generation.Current);
     }
+
+    private string _shownPage = "";
+    /// <summary>What the last page built again did with its scroll (the self-test says it when it fails).</summary>
+    private string _scrollNote = "";
+    private string _scrollLast = "";
+
+    /// <summary>The page's own scroller: the page itself, or the first one inside it (the generate page's, under its
+    /// head and above its foot) - not a list's inside a card.</summary>
+    private static ScrollViewer? PageScroller(Control? page) =>
+        page as ScrollViewer ?? page?.GetLogicalDescendants().OfType<ScrollViewer>().FirstOrDefault();
 
     // ---- Home -----------------------------------------------------------------------------------------------
 
@@ -701,8 +949,11 @@ public sealed partial class MainWindow : Window
             actions.Children.Add(a);
         }
         page.Children.Add(actions);
-        page.Children.Add(Look.Columns(Look.Stack(HomeNow(maps), HomeReady()), Look.Stack(HomeDocs(), HomeSteps())));
-        return Look.Page(page, 1500);
+        // brief 28: the home's cards by the window's width (two, three or four columns)
+        var homeCards = Look.Balanced(560, HomeNow(maps), HomeReady(), HomeDocs(), HomeSteps());
+        homeCards.MaxColumns = 2;       // four cards: two by two (three columns left one card alone under a blank)
+        page.Children.Add(homeCards);
+        return Look.Page(page);
     }
 
     /// <summary>The guide shipped beside the program: doc\MAPGEN_Studio_Guide_RU.html (.docx), in the language chosen.</summary>
@@ -753,7 +1004,7 @@ public sealed partial class MainWindow : Window
                 Children =
                 {
                     Look.CardHead(g.Running ? FASymbol.Play : FASymbol.Accept, state,
-                                  Loc.F("home.now.run", g.Request.Name, g.Request.Donor), GenerationView.NowLine(g), open),
+                                  Loc.Fs("home.now.run", g.Request.FromScratch, g.Request.Name, g.Request.BaseLabel), GenerationView.NowLine(g), open),
                 },
             });
         }
@@ -920,14 +1171,20 @@ public sealed partial class MainWindow : Window
             c.Margin = new Thickness(0, 0, 6, 6);
             chips.Children.Add(c);
         }
-        if ((m.Donor ?? m.Base) is { Length: > 0 } donor)
+        if (m.Scratch is { Length: > 0 } scratchLabel)
+            Add(Look.Chip(scratchLabel, Look.TealC, FASymbol.Map));
+        else if ((m.Donor ?? m.Base) is { Length: > 0 } donor)
             Add(Look.Chip(Loc.F("lib.chip.base", donor), Look.BlueC, FASymbol.Map));
-        if (m.Difference >= 0)
+        // brief 24 D1.5: a map from scratch - how long it was built, not its difference from its skeleton
+        if (m.Scratch != null)
+        {
+            if (m.BuiltSeconds > 0)
+                Add(Look.Chip(Loc.F("lib.chip.built", RunProgress.LeftWords(TimeSpan.FromSeconds(m.BuiltSeconds))), Look.VioletC));
+        }
+        else if (m.Difference >= 0)
             Add(Look.Chip(Loc.F("lib.chip.diff", m.Difference / 10), m.Target > 0 && m.Difference >= m.Target ? Look.GreenC : Look.VioletC));
-        if (m.Gates.Count > 0)
-            Add(m.GatesPassed == m.Gates.Count
-                    ? Look.Chip(Loc.T("lib.chip.checks.ok"), Look.GreenC, FASymbol.Accept)
-                    : Look.Chip(Loc.F("lib.chip.checks.bad", m.Gates.Count - m.GatesPassed), Look.RedC, FASymbol.Cancel));
+        if (ChecksChip(m) is { } checksChip)
+            Add(checksChip);
         return chips;
     }
 
@@ -938,6 +1195,7 @@ public sealed partial class MainWindow : Window
         var g = Generation.Current;
         if (g != null)
         {
+            _presetLabel = null;        // the form's bar is not on the run's page
             _runView ??= new GenerationView(() =>
             {
                 Generation.Current = null;
@@ -948,29 +1206,35 @@ public sealed partial class MainWindow : Window
                 _page = "library";
                 _openMap = Library.Scan(S).FirstOrDefault(m => m.Name == name);
                 Rebuild();
-            });
+            }, RunParams);
             UpdateRun(g);
             // row 410 (the PO 05.10, the Studio vanished): the view kept for the run is still the child of the page
             // it was last shown on - back on this page it was given to a second one, «The Control already has a
             // parent», and the window died with the generation in it
             if (_runView.Parent is Decorator old)
                 old.Child = null;
-            return Ui.FillPage(_runView, 1800);
+            return Ui.FillPage(_runView, double.PositiveInfinity);   // brief 28: the whole window (1800 held the scheme at 693 on 3440)
         }
         _runView = null;
         // the PO, 11.10: the form as the run's page - its head, cards in two columns, the start always in sight
         var p = new StackPanel { Spacing = 10 };
-        p.Children.Add(Look.PageHead(Loc.T("gen.title"), Loc.T("gen.sub")));
+        // brief 23 D2 (the PO's picture: the empty space right of «Новая карта»): the presets of this form
+        p.Children.Add(Look.PageHead(Loc.T("gen.title"), Loc.Ts("gen.sub", S.ScratchMode), PresetBar()));
+        // brief 19 D8: the third way to start - a new map from scratch, its own cards in place of the bases
+        var scratch = S.ScratchMode;
+        p.Children.Add(ModeSwitch());
         var mapRows = new List<Control>();
         var doneRows = new List<Control>();
         var summary = new TextBlock { FontSize = 14.5, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
-        void Summarise() => summary.Text = Loc.F("gen.summary",
-                                                 _chosen.Count == 0 ? Loc.T("gen.summary.nobase") : string.Join(", ", _chosen),
-                                                 S.Fidelity, S.TimeMinutes, _formName ?? $"mg_{S.Fidelity}_{S.Seed}");
+        string DefaultName() => scratch ? $"mg_new_{S.Seed}" : $"mg_{S.Fidelity}_{S.Seed}";
+        void Summarise() => summary.Text = scratch
+            ? Loc.F("gen.summary.scratch", S.Scratch.Players, S.Scratch.SizePercent, S.TimeMinutes, _formName ?? DefaultName())
+            : Loc.F("gen.summary", _chosen.Count == 0 ? Loc.T("gen.summary.nobase") : string.Join(", ", _chosen),
+                    S.Fidelity, S.TimeMinutes, _formName ?? DefaultName());
         // row 410: no base is put in by itself any more - a base nobody ticked became THE base (q2dm1, 05.10)
         _chosen.RemoveAll(d => !Engine.Donors().Contains(d));
         KeepBases();
-        var missing = Generation.Missing(S, _chosen.FirstOrDefault() ?? "q2dm1");
+        var missing = scratch ? Generation.Missing(S, "", scratch: true) : Generation.Missing(S, _chosen.FirstOrDefault() ?? "q2dm1");
         if (missing != null)
             p.Children.Add(new FAInfoBar
             {
@@ -1035,7 +1299,8 @@ public sealed partial class MainWindow : Window
             Minimum = 1, Maximum = 100, Value = S.Fidelity, SmallChange = 1, LargeChange = 10, MinWidth = 140,
             SpinButtonPlacementMode = FANumberBoxSpinButtonPlacementMode.Inline,
         };
-        mapRows.Add(Ui.Setting("gen.fidelity", "gen.fidelity.desc", FASymbol.Target, fidelity, "gen.fidelity.tip"));
+        if (!scratch)
+            mapRows.Add(Ui.Setting("gen.fidelity", "gen.fidelity.desc", FASymbol.Target, fidelity, "gen.fidelity.tip"));
         // the PO, 07.10: «Быстрее ↔ Точнее»; brief 16 D6: the minutes a run may take - 15, 30, 60 or 120
         {
             var speed = new Slider
@@ -1069,17 +1334,26 @@ public sealed partial class MainWindow : Window
                     said,
                 },
             };
-            mapRows.Add(Ui.Setting("gen.speed", "gen.speed.desc", FASymbol.Clock, row, "gen.speed.tip"));
+            mapRows.Add(Ui.Setting("gen.speed", Loc.Ks("gen.speed.desc", scratch), FASymbol.Clock, row, "gen.speed.tip"));
         }
         var seed = new FANumberBox
         {
             Minimum = 0, Maximum = 2147483647, Value = S.Seed, SmallChange = 1, MinWidth = 140,
             SpinButtonPlacementMode = FANumberBoxSpinButtonPlacementMode.Inline,
         };
-        mapRows.Add(Ui.Setting("gen.seed", "gen.seed.desc", FASymbol.Refresh, seed, "gen.seed.tip"));
+        /* the PO 06.11: «нужна опция где номера вариантов - Случайный вариант, и когда включена (по умолчанию), то выбор
+           вариантов вручную скрывается». On: the number box hidden, each run a number of its own (its map's name says
+           it); off: the box, the number typed is the run's (to make a map again) */
+        var randomSeed = new ToggleSwitch { IsChecked = S.SeedRandom };
+        _seedRandom = randomSeed;
+        mapRows.Add(Ui.Setting("gen.seed.random", "gen.seed.random.desc", FASymbol.Refresh, randomSeed, "gen.seed.random.tip"));
+        var seedRow = Ui.Setting("gen.seed", Loc.Ks("gen.seed.desc", scratch), FASymbol.Refresh, seed, "gen.seed.tip");
+        seedRow.IsVisible = !S.SeedRandom;
+        _seedRow = seedRow;
+        mapRows.Add(seedRow);
         // row 410: the form keeps what was set - every redraw (ticking a base is one) rebuilt it to 20 / 42 /
         // mg_20_42 / every family; the name typed by hand is kept until the page is left
-        var name = new TextBox { MinWidth = 200, Text = _formName ?? $"mg_{S.Fidelity}_{S.Seed}" };
+        var name = new TextBox { MinWidth = 200, Text = _formName ?? DefaultName() };
         name.TextChanged += (_, _) =>
         {
             if (!_suggesting)
@@ -1095,11 +1369,20 @@ public sealed partial class MainWindow : Window
             if (_formName != null)
                 return;
             _suggesting = true;
-            name.Text = $"mg_{S.Fidelity}_{S.Seed}";
+            name.Text = DefaultName();
             _suggesting = false;
         }
         fidelity.ValueChanged += (_, _) => SuggestName();
         seed.ValueChanged += (_, _) => SuggestName();
+        randomSeed.IsCheckedChanged += (_, _) =>
+        {
+            S.SeedRandom = randomSeed.IsChecked == true;
+            seedRow.IsVisible = !S.SeedRandom;
+            // switched on: a new number now, so the name shown is the map the next start makes
+            if (S.SeedRandom)
+                seed.Value = S.NewSeed();     // its ValueChanged keeps it and suggests the name
+            KeepForm();
+        };
         mapRows.Add(Ui.Setting("gen.name", "gen.name.desc", FASymbol.Edit, name, "gen.name.tip"));
         var families = new OptionGroup("gen.families", "gen.families.desc", FASymbol.Repair, Look.PinkC, "gen.families.tip");
         var boxes = new Dictionary<string, CheckBox>();
@@ -1145,6 +1428,58 @@ public sealed partial class MainWindow : Window
                 return;
             }
             var skip = Families.Where(kv => boxes[kv.Key].IsChecked != true).SelectMany(kv => kv.Value).ToList();
+            if (scratch)
+            {
+                /* the PO, 05.11 («и вот этот блок, он вообще о чём, когда речь о новой карте?»): «Что можно менять» is
+                   the edits of a ready map - not on this page; the run from scratch skips every family
+                   (Generation.cs), the user's ticks for maps from a base stay as they were */
+                var sdn = (long)(double.IsNaN(seed.Value) ? 0 : seed.Value);
+                // brief 19: no frame for a base made from scratch - its size is its own parameter
+                // the PO, 04.11 («висящих в воздухе архитектурных штучек»): the engine's ornaments hung from a reference are
+                // not dealt on a map from scratch (Decor 1 = 0 %) - its own «Украшения на стенах» governs; the base's
+                // remodels and blocks neither (Fable 04.11: the skipped families still came as planned edits, 0 of 3 built)
+                var opts = S.Options with { WarpSize = 100, WarpShape = 0, WarpTurn = 0, WarpHeight = 100, WarpShift = 0, Decor = 1, Remodels = 0, Blocks = 0,
+                                            FloorShifts = -1, StairReshapes = -1 };
+                /* brief 25 A2: islands in the void - the engine's building edits are rooms' (annexes, stairways, storeys,
+                   spans, halls, digs, floor moves, new liquids): none of them on an open space; it only rebuilds, lights
+                   and delivers (a ruin, when asked, stays) */
+                // brief 25 B: nor on a tower - an annex, a storey, a dig or a floor moved would cut into the storeys
+                // over it and the pads' landings
+                if (S.Scratch.Shape is "space" or "tower")
+                    opts = opts with { Digs = 0, Annexes = 0, AnnexSize = 0, Storeys = 0, Spans = 0, Halls = 0, Liquids = "", Stairways = 0,
+                                       FloorShifts = 0, StairReshapes = 0, NewWater = 0, NewSlime = 0, NewLava = 0 };
+                var rq = new GenerationRequest(mapName, "", S.Scratch.Fidelity, sdn, skip, S.SaveMapSource,
+                                               MaxAttempts: S.Builds, TimeMinutes: S.TimeMinutes, Options: opts,
+                                               Scratch: S.Scratch.ToPython(Path.Combine(S.ClientDir, "baseq2"), Engine.DonorsDir));
+                var saidS = Generation.NameTaken(S, rq.Name, out var heldS);
+                if (saidS.Length > 0)
+                {
+                    var answerS = await AskTaken(rq.Name, saidS, heldS);
+                    if (answerS == 0)
+                        return;
+                    if (answerS == 2)
+                    {
+                        name.BringIntoView();
+                        name.Focus();
+                        name.SelectAll();
+                        return;
+                    }
+                }
+                try
+                {
+                    Generation.Queue.Clear();
+                    Generation.Start(rq, S);
+                    _formName = null;
+                    NextRandomSeed();
+                }
+                catch (Exception ex)
+                {
+                    Notice(ex.Message, FAInfoBarSeverity.Error);
+                    return;
+                }
+                ShowPage();
+                return;
+            }
             if (_chosen.Count == 0)
             {
                 Notice(Loc.T("gen.donors.none"), FAInfoBarSeverity.Warning);
@@ -1196,6 +1531,7 @@ public sealed partial class MainWindow : Window
                 Generation.Queue.AddRange(requests.Skip(1));
                 Generation.Start(requests[0], S);
                 _formName = null;
+                NextRandomSeed();
             }
             catch (Exception ex)
             {
@@ -1218,7 +1554,8 @@ public sealed partial class MainWindow : Window
         // bases grows to (it scrolls inside its card past eight); the generation's options in two columns under them
         // second edition, the same evening: the bases' card as tall as the two beside it, whatever its list holds (the
         // list scrolls inside it); the options as cards by group, each pair one height
-        var top = new ColumnsPanel
+        // brief 19: the map and done cards go into one page only - the scratch page builds its own head row
+        var top = scratch ? null : new ColumnsPanel
         {
             LeftFollowsRight = true,
             Children =
@@ -1229,10 +1566,46 @@ public sealed partial class MainWindow : Window
             },
         };
         var creative = CreativePicker();
-        p.Children.Add(Look.Stack(top,
-                                  Look.Pair(FramePicker(), creative.rooms),
-                                  Look.Pair(creative.basis, creative.liquids),
-                                  Look.Pair(creative.ruin, families.Card)));
+        if (scratch)
+        {
+            var sc = ScratchCards();
+            /* brief 28 (the PO 06.11, the form with «Открытый космос»: «Выглядит как косяк UI» - the left column ran 700 px
+               past the right; «у нас 27 год на носу»): every card in as many columns as the window holds, each dealt to
+               the shortest column - people, size & shape, the shape's own, the map, the done, liquids, moves,
+               mechanics, items, style, ruin. A map from scratch has no base: no remodels, no blocks (3.40) */
+            if (OldFormLayout)
+            {
+                // the 3.53 arrangement, for the self-test's RED only (brief 28 D4): two stacks side by side, the shape's
+                // rows inside «Размер и форма»
+                if (sc.own != null && sc.shape is Border shapeCard && shapeCard.Child is StackPanel shapeBody && sc.own is Border ownCard
+                    && ownCard.Child is StackPanel ownBody && ownBody.Children.Count > 1 && shapeBody.Children.Count > 1
+                    && shapeBody.Children[1] is StackPanel shapeRows && ownBody.Children[1] is StackPanel ownRows)
+                {
+                    var moved = ownRows.Children.ToList();
+                    ownRows.Children.Clear();
+                    shapeRows.Children.AddRange(moved);
+                }
+                p.Children.Add(Look.Stack(new ColumnsPanel
+                {
+                    Children =
+                    {
+                        Look.Stack(sc.people, sc.shape),
+                        Look.Stack(Look.Group(FASymbol.Target, Look.BlueC, Loc.T("gen.card.map"), Loc.Ts("gen.card.map.desc", true), null, mapRows),
+                                   Look.Group(FASymbol.Save, Look.TealC, Loc.T("gen.card.done"), Loc.T("gen.card.done.desc"), null, doneRows),
+                                   sc.liquids),
+                    },
+                }, Look.Pair(sc.moves, sc.mechanics), Look.Pair(sc.items, Look.Stack(sc.style, creative.ruin))));
+            }
+            else
+            p.Children.Add(Look.Balanced(FormColumn, sc.people, sc.shape, sc.own,
+                                         Look.Group(FASymbol.Target, Look.BlueC, Loc.T("gen.card.map"), Loc.Ts("gen.card.map.desc", true), null, mapRows),
+                                         Look.Group(FASymbol.Save, Look.TealC, Loc.T("gen.card.done"), Loc.T("gen.card.done.desc"), null, doneRows),
+                                         sc.liquids, sc.moves, sc.mechanics, sc.items, sc.style, creative.ruin));
+        }
+        else
+            p.Children.Add(Look.Stack(top!,
+                                      Look.Balanced(FormColumn, FramePicker(), creative.rooms, creative.basis, creative.liquids,
+                                                    creative.ruin, families.Card)));
         // the start at the page's foot, in sight however far the page is scrolled: what will be made, and the button
         Summarise();
         var footGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 20 };
@@ -1475,14 +1848,19 @@ public sealed partial class MainWindow : Window
     {
         var cover = CoverImage(m, 240, 135);
         var over = new WrapPanel { Margin = new Thickness(8), VerticalAlignment = VerticalAlignment.Top };
-        if ((m.Donor ?? m.Base) is { Length: > 0 } donor)
+        if (m.Scratch is { Length: > 0 } scratchLabel)
+            over.Children.Add(Shade(scratchLabel));
+        else if ((m.Donor ?? m.Base) is { Length: > 0 } donor)
             over.Children.Add(Shade(Loc.F("lib.chip.base", donor)));
-        if (m.Difference >= 0)
+        if (m.Scratch != null)
+        {
+            if (m.BuiltSeconds > 0)
+                over.Children.Add(Shade(Loc.F("lib.chip.built", RunProgress.LeftWords(TimeSpan.FromSeconds(m.BuiltSeconds)))));
+        }
+        else if (m.Difference >= 0)
             over.Children.Add(Shade(Loc.F("lib.chip.diff", m.Difference / 10)));
         var picture = new Grid { Children = { cover, over } };
-        var checks = m.Gates.Count == 0 ? null
-                   : m.GatesPassed == m.Gates.Count ? Look.Chip(Loc.T("lib.chip.checks.ok"), Look.GreenC, FASymbol.Accept)
-                   : Look.Chip(Loc.F("lib.chip.checks.bad", m.Gates.Count - m.GatesPassed), Look.RedC, FASymbol.Cancel);
+        var checks = ChecksChip(m);
         var line = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 6 };
         line.Children.Add(new TextBlock { Text = $"{m.Made:dd.MM.yyyy HH:mm} · {Ui.Size(m.Bytes)}", FontSize = 11.5, Opacity = 0.7,
                                           VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis });
@@ -1519,12 +1897,20 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>A few words over a picture: white on a dark rounded ground, readable on any cover.</summary>
-    private static Border Shade(string text) => new()
+    /// The PO's library, 06.11: «from scratch, own textures: Snow and ice» wanted 214 px on a tile of 203 - a long
+    /// theme's name ends in an ellipsis, the whole label in its tip.
+    private static Border Shade(string text)
     {
-        Background = new SolidColorBrush(Color.FromArgb(0xb0, 0x10, 0x10, 0x14)), CornerRadius = new CornerRadius(8),
-        Padding = new Thickness(7, 2, 7, 3), Margin = new Thickness(0, 0, 5, 5),
-        Child = new TextBlock { Text = text, FontSize = 11.5, FontWeight = FontWeight.SemiBold, Foreground = Brushes.White },
-    };
+        var b = new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(0xb0, 0x10, 0x10, 0x14)), CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(7, 2, 7, 3), Margin = new Thickness(0, 0, 5, 5),
+            Child = new TextBlock { Text = text, FontSize = 11.5, FontWeight = FontWeight.SemiBold, Foreground = Brushes.White,
+                                    TextTrimming = TextTrimming.CharacterEllipsis },
+        };
+        ToolTip.SetTip(b, text);
+        return b;
+    }
 
     private Control CoverImage(MapEntry m, double width, double height)
     {
@@ -1568,6 +1954,75 @@ public sealed partial class MainWindow : Window
         };
     }
 
+    /// <summary>
+    /// Brief 27 D1 (the PO 06.11: «вместо "Не пройдено" надо писать кол-во пройденных и кол-во не пройденных, но никак не
+    /// жирный красный статус»): green when every check passed; a quiet count «проверки: 85 из 86» when some failed and the
+    /// map plays; red «играть нельзя: N» only for the checks that mean it cannot be played.
+    /// </summary>
+    internal static Border? ChecksChip(MapEntry m)
+    {
+        if (m.Gates.Count == 0)
+            return null;
+        if (m.GatesPassed == m.Gates.Count)
+            return Look.Chip(Loc.T("lib.chip.checks.ok"), Look.GreenC, FASymbol.Accept);
+        if (m.GatesBlocking > 0)
+            return Look.Chip(Loc.F("lib.chip.checks.blocking", m.GatesBlocking), Look.RedC, FASymbol.Cancel);
+        return Look.Chip(Loc.F("lib.chip.checks.count", m.GatesPassed, m.Gates.Count), Look.GreyC);
+    }
+
+    /// <summary>Brief 27 D2: what a failed check measured, in words - a band's «value (band lo..hi)» as «измерено v, у людей
+    /// lo..hi», the 3.52 space and tower measure not made on the delivered map as what it was; else the check's own words.</summary>
+    internal static string SaidWords(string what, string said) => GateSaid.Words(what, said);
+
+    /// <summary>Brief 27 D3: «Перепроверить» - the map measured again in a job of the hour's CPU share; the page anew when done.</summary>
+    private Button RecheckButton(MapEntry m)
+    {
+        var again = new Button { Content = Loc.T("lib.recheck"), Margin = new Thickness(0, 0, 0, 10) }.Tip("lib.recheck.tip");
+        again.Click += (_, _) =>
+        {
+            again.IsEnabled = false;
+            again.Content = Loc.T("lib.recheck.running");
+            NativeJob job;
+            string outFile;
+            try
+            {
+                job = Recheck.Start(S, m, out outFile);
+            }
+            catch (Exception ex)
+            {
+                Notice(Loc.F("lib.recheck.failed", ex.Message), FAInfoBarSeverity.Error);
+                again.IsEnabled = true;
+                again.Content = Loc.T("lib.recheck");
+                return;
+            }
+            var timer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            timer.Tick += (_, _) =>
+            {
+                if (!job.Exited(out _))
+                    return;
+                timer.Stop();
+                job.Dispose();
+                var why = Recheck.Finish(S, m, outFile);
+                if (why != null)
+                {
+                    Notice(Loc.F("lib.recheck.failed", why), FAInfoBarSeverity.Error);
+                    again.IsEnabled = true;
+                    again.Content = Loc.T("lib.recheck");
+                    return;
+                }
+                var now = Library.Scan(S).FirstOrDefault(x => x.Name == m.Name) ?? m;
+                Notice(Loc.F("lib.recheck.done", m.Name, now.GatesPassed, now.Gates.Count), FAInfoBarSeverity.Success);
+                if (_openMap?.Name == m.Name)
+                {
+                    _openMap = now;
+                    ShowPage();
+                }
+            };
+            timer.Start();
+        };
+        return again;
+    }
+
     private Control MapPage(MapEntry m)
     {
         var p = new StackPanel { Spacing = 8 };
@@ -1583,155 +2038,185 @@ public sealed partial class MainWindow : Window
             Spacing = 8, Margin = new Thickness(0, 6, 0, 12),
             Children = { new TextBlock { Text = m.Name, FontSize = 30, FontWeight = FontWeight.SemiBold }, MapChips(m) },
         });
-        var top = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,24,*") };
-        var cover = CoverImage(m, 480, 270);
-        var coverButton = new Button { Content = cover, Padding = new Thickness(0), Background = Brushes.Transparent,
-                                       CornerRadius = new CornerRadius(12), ClipToBounds = true, VerticalAlignment = VerticalAlignment.Top }
+        // brief 28: the cover as wide as its column; the PO 06.11 (3440 wide: «бредово абы как»): the whole column - the
+        // 1200 cap left a blank of 650 beside it (OldMapLayout keeps the cap for the self-test's RED)
+        var cover = CoverImage(m, 960, 540);
+        cover.Width = double.NaN;
+        cover.Height = double.NaN;
+        var coverBox = new AspectBox { MinWidth = 300, MaxWidth = 3000, Child = cover, HorizontalAlignment = HorizontalAlignment.Stretch };
+        var coverButton = new Button { Content = coverBox, Padding = new Thickness(0), Background = Brushes.Transparent,
+                                       CornerRadius = new CornerRadius(12), ClipToBounds = true, VerticalAlignment = VerticalAlignment.Top,
+                                       HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch }
             .Tip("shots.open.tip");
         coverButton.Click += (_, _) => OpenShots(m, m.CoverPath);
-        Grid.SetColumn(coverButton, 0);
-        top.Children.Add(coverButton);
-        var facts = new StackPanel { Spacing = 14 };
-        Control Fact(string name, string value)
+        MapCover = coverBox;          // the picture itself: what the PO sees beside a blank or not
+        /* the facts and the buttons: in the head beside the name on a wide window (the PO 06.11, 23:56: «вот этот блок
+           справа ну блин какого хрена он справа, когда слева куча места есть???»), in the body over the cover on a narrow one */
+        StackPanel BuildFacts(bool inHead)
         {
-            var g = new Grid { ColumnDefinitions = new ColumnDefinitions("150,*"), Margin = new Thickness(0, 4, 0, 4) };
-            g.Children.Add(new TextBlock { Text = name, FontSize = 13.5, Opacity = 0.65 });
-            var v = new TextBlock { Text = value, FontSize = 14, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap };
-            Grid.SetColumn(v, 1);
-            g.Children.Add(v);
-            return g;
-        }
-        var factRows = new List<Control>
-        {
-            Fact(Loc.T("lib.fact.made"), m.Made.ToString("f")),
-            Fact(Loc.T("lib.fact.size"), Ui.Size(m.Bytes)),
-        };
-        if ((m.Donor ?? m.Base) is { Length: > 0 } baseName)
-            factRows.Add(Fact(Loc.T("lib.fact.base"), baseName));
-        if (m.Difference >= 0)
-            factRows.Add(Fact(Loc.T("lib.fact.diff"), m.Target > 0 ? Loc.F("lib.fact.diff.of", m.Difference / 10, m.Target / 10)
-                                                                    : $"{m.Difference / 10} %"));
-        if (m.Gates.Count > 0)
-            factRows.Add(Fact(Loc.T("lib.fact.checks"), Loc.F("lib.fact.checks.of", m.GatesPassed, m.Gates.Count)));
-        var factCard = new StackPanel();
-        foreach (var f in factRows)
-            factCard.Children.Add(f);
-        facts.Children.Add(Look.Card(factCard));
-        var actions = new WrapPanel { Margin = new Thickness(0, 0, 0, 0) };
-        var toClient = Ui.Button("lib.to_client", "lib.to_client.tip", FASymbol.Download, accent: true);
-        toClient.Click += (_, _) =>
-        {
-            if (!Settings.CheckClient(S.ClientDir).ok)
+            var facts = new StackPanel { Spacing = inHead ? 10 : 14 };
+            Control Fact(string name, string value)
             {
-                Notice(Loc.T("lib.to_client.noclient"), FAInfoBarSeverity.Warning);
-                return;
+                var g = new Grid { ColumnDefinitions = new ColumnDefinitions(inHead ? "Auto,*" : "150,*"), ColumnSpacing = inHead ? 14 : 0, Margin = new Thickness(0, 4, 0, 4) };
+                g.Children.Add(new TextBlock { Text = name, FontSize = 13.5, Opacity = 0.65 });
+                var v = new TextBlock { Text = value, FontSize = 14, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap };
+                Grid.SetColumn(v, 1);
+                g.Children.Add(v);
+                return g;
             }
-            try
+            var factRows = new List<Control>
             {
-                Notice(Loc.F("lib.to_client.done", Library.CopyToClient(S, m)));
+                Fact(Loc.T("lib.fact.made"), m.Made.ToString("f")),
+                Fact(Loc.T("lib.fact.size"), Ui.Size(m.Bytes)),
+            };
+            if (m.Scratch is { Length: > 0 } scratchLabel)
+                factRows.Add(Fact(Loc.Ts("lib.fact.base", true), scratchLabel));
+            else if ((m.Donor ?? m.Base) is { Length: > 0 } baseName)
+                factRows.Add(Fact(Loc.T("lib.fact.base"), baseName));
+            // brief 24 D1.5: a map from scratch says how long it was built, not its difference from its skeleton
+            if (m.Scratch != null)
+            {
+                if (m.BuiltSeconds > 0)
+                    factRows.Add(Fact(Loc.T("lib.fact.built"), GenerationView.Dur(TimeSpan.FromSeconds(m.BuiltSeconds))));
             }
-            catch (Exception ex)
+            else if (m.Difference >= 0)
+                factRows.Add(Fact(Loc.T("lib.fact.diff"), m.Target > 0 ? Loc.F("lib.fact.diff.of", m.Difference / 10, m.Target / 10)
+                                                                        : $"{m.Difference / 10} %"));
+            if (m.Gates.Count > 0)
+                factRows.Add(Fact(Loc.T("lib.fact.checks"), Loc.F("lib.fact.checks.of", m.GatesPassed, m.Gates.Count)));
+            // in the head the facts run across in cells of two words (the PO 06.11: the empty place beside the name); in the
+            // body they stand one under another as before
+            Panel factCard = inHead ? new WrapPanel() : new StackPanel();
+            foreach (var f in factRows)
             {
-                Notice(ex.Message, FAInfoBarSeverity.Error);
+                if (inHead)
+                {
+                    f.Width = 380;           // «Отличие от основы» / «Difference from the base» 148 + the value (his library, 3.56)
+                    f.Margin = new Thickness(0, 2, 24, 2);
+                }
+                factCard.Children.Add(f);
             }
-        };
-        var play = Ui.Button("lib.play", "lib.play.tip", FASymbol.Play);
-        play.Click += (_, _) => LaunchClient(() =>
-        {
-            _play = Client.Play(S, m);
-            Notice(Loc.F("lib.play.running", m.Name), FAInfoBarSeverity.Informational);
-        });
-        var shoot = Ui.Button("cover.make", "cover.make.tip", FASymbol.Camera);
-        shoot.Click += (_, _) => LaunchClient(() =>
-        {
-            _cover = Covers.Start(m, S);
-            Notice(Loc.F("cover.running", m.Name), FAInfoBarSeverity.Informational);
-        });
-        /* S-3: a cover from a picture of the user's own */
-        var fromFile = Ui.Button("cover.file", "cover.file.tip", FASymbol.Image);
-        fromFile.Click += async (_, _) =>
-        {
-            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            facts.Children.Add(Look.Card(factCard));
+            var actions = new WrapPanel { Margin = new Thickness(0, 0, 0, 0) };
+            var toClient = Ui.Button("lib.to_client", "lib.to_client.tip", FASymbol.Download, accent: true);
+            toClient.Click += (_, _) =>
             {
-                Title = Loc.T("cover.file"),
-                AllowMultiple = false,
-                FileTypeFilter = new[] { new FilePickerFileType("PNG / JPG") { Patterns = new[] { "*.png", "*.jpg", "*.jpeg" } } },
+                if (!Settings.CheckClient(S.ClientDir).ok)
+                {
+                    Notice(Loc.T("lib.to_client.noclient"), FAInfoBarSeverity.Warning);
+                    return;
+                }
+                try
+                {
+                    Notice(Loc.F("lib.to_client.done", Library.CopyToClient(S, m)));
+                }
+                catch (Exception ex)
+                {
+                    Notice(ex.Message, FAInfoBarSeverity.Error);
+                }
+            };
+            var play = Ui.Button("lib.play", "lib.play.tip", FASymbol.Play);
+            play.Click += (_, _) => LaunchClient(() =>
+            {
+                _play = Client.Play(S, m);
+                Notice(Loc.F("lib.play.running", m.Name), FAInfoBarSeverity.Informational);
             });
-            var path = files.Count > 0 ? files[0].TryGetLocalPath() : null;
-            if (path == null)
-                return;
-            try
+            var shoot = Ui.Button("cover.make", "cover.make.tip", FASymbol.Camera);
+            shoot.Click += (_, _) => LaunchClient(() =>
             {
-                Library.AddCover(S, m.Name, path);
-                _openMap = Library.Scan(S).FirstOrDefault(x => x.Name == m.Name) ?? m;
-                Notice(Loc.T("cover.file.done"));
-                ShowPage();
-            }
-            catch (Exception ex)
-            {
-                Notice(ex.Message, FAInfoBarSeverity.Error);
-            }
-        };
-        var show = Ui.Button("lib.show_file", "lib.show_file.tip", FASymbol.OpenFolder);
-        show.Click += (_, _) => OpenInExplorer(Path.GetDirectoryName(m.BspPath) ?? S.BspPath);
-        /* the PO, 07.10: the map for a server in one zip - baseq2/maps and baseq2/textures, everything it needs */
-        var zip = Ui.Button("lib.zip", "lib.zip.tip", FASymbol.Save);
-        zip.Click += async (_, _) =>
-        {
-            if (!Settings.CheckClient(S.ClientDir).ok)
-            {
-                Notice(Loc.T("lib.to_client.noclient"), FAInfoBarSeverity.Warning);
-                return;
-            }
-            // the PO, 07.10: «как пользователь должен про это догадаться?» - he says where it goes, the usual way
-            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
-            {
-                Title = Loc.T("lib.zip"),
-                SuggestedFileName = m.Name + ".zip",
-                DefaultExtension = "zip",
-                ShowOverwritePrompt = true,
-                FileTypeChoices = new[] { new FilePickerFileType("ZIP") { Patterns = new[] { "*.zip" } } },
+                _cover = Covers.Start(m, S);
+                Notice(Loc.F("cover.running", m.Name), FAInfoBarSeverity.Informational);
             });
-            var target = file?.TryGetLocalPath();
-            if (target == null)
-                return;
-            zip.IsEnabled = false;
-            Notice(Loc.F("lib.zip.running", m.Name), FAInfoBarSeverity.Informational);
-            try
+            /* S-3: a cover from a picture of the user's own */
+            var fromFile = Ui.Button("cover.file", "cover.file.tip", FASymbol.Image);
+            fromFile.Click += async (_, _) =>
             {
-                var r = await Task.Run(() => MapZip.Build(S, m, target));
-                Notice(Loc.F("lib.zip.done", r.ZipPath, r.Textures, Ui.Size(r.Bytes))
-                       + (r.Missing.Count > 0 ? " " + Loc.F("lib.zip.missing", r.Missing.Count,
-                                                             string.Join(", ", r.Missing.Take(5))) : ""),
-                       r.Missing.Count > 0 ? FAInfoBarSeverity.Warning : FAInfoBarSeverity.Success);
-                ShowFileInExplorer(r.ZipPath);
-            }
-            catch (Exception ex)
+                var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+                {
+                    Title = Loc.T("cover.file"),
+                    AllowMultiple = false,
+                    FileTypeFilter = new[] { new FilePickerFileType("PNG / JPG") { Patterns = new[] { "*.png", "*.jpg", "*.jpeg" } } },
+                });
+                var path = files.Count > 0 ? files[0].TryGetLocalPath() : null;
+                if (path == null)
+                    return;
+                try
+                {
+                    Library.AddCover(S, m.Name, path);
+                    _openMap = Library.Scan(S).FirstOrDefault(x => x.Name == m.Name) ?? m;
+                    Notice(Loc.T("cover.file.done"));
+                    ShowPage();
+                }
+                catch (Exception ex)
+                {
+                    Notice(ex.Message, FAInfoBarSeverity.Error);
+                }
+            };
+            var show = Ui.Button("lib.show_file", "lib.show_file.tip", FASymbol.OpenFolder);
+            show.Click += (_, _) => OpenInExplorer(Path.GetDirectoryName(m.BspPath) ?? S.BspPath);
+            /* the PO, 07.10: the map for a server in one zip - baseq2/maps and baseq2/textures, everything it needs */
+            var zip = Ui.Button("lib.zip", "lib.zip.tip", FASymbol.Save);
+            zip.Click += async (_, _) =>
             {
-                Notice(ex.Message, FAInfoBarSeverity.Error);
-            }
-            finally
+                if (!Settings.CheckClient(S.ClientDir).ok)
+                {
+                    Notice(Loc.T("lib.to_client.noclient"), FAInfoBarSeverity.Warning);
+                    return;
+                }
+                // the PO, 07.10: «как пользователь должен про это догадаться?» - he says where it goes, the usual way
+                var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+                {
+                    Title = Loc.T("lib.zip"),
+                    SuggestedFileName = m.Name + ".zip",
+                    DefaultExtension = "zip",
+                    ShowOverwritePrompt = true,
+                    FileTypeChoices = new[] { new FilePickerFileType("ZIP") { Patterns = new[] { "*.zip" } } },
+                });
+                var target = file?.TryGetLocalPath();
+                if (target == null)
+                    return;
+                zip.IsEnabled = false;
+                Notice(Loc.F("lib.zip.running", m.Name), FAInfoBarSeverity.Informational);
+                try
+                {
+                    var r = await Task.Run(() => MapZip.Build(S, m, target));
+                    Notice(Loc.F("lib.zip.done", r.ZipPath, r.Textures, Ui.Size(r.Bytes))
+                           + (r.Missing.Count > 0 ? " " + Loc.F("lib.zip.missing", r.Missing.Count,
+                                                                 string.Join(", ", r.Missing.Take(5))) : ""),
+                           r.Missing.Count > 0 ? FAInfoBarSeverity.Warning : FAInfoBarSeverity.Success);
+                    ShowFileInExplorer(r.ZipPath);
+                }
+                catch (Exception ex)
+                {
+                    Notice(ex.Message, FAInfoBarSeverity.Error);
+                }
+                finally
+                {
+                    zip.IsEnabled = true;
+                }
+            };
+            foreach (var c in new Control[] { toClient, play, shoot, fromFile, show, zip })
             {
-                zip.IsEnabled = true;
+                c.Margin = new Thickness(0, 0, 8, 8);
+                actions.Children.Add(c);
             }
-        };
-        foreach (var c in new Control[] { toClient, play, shoot, fromFile, show, zip })
-        {
-            c.Margin = new Thickness(0, 0, 8, 8);
-            actions.Children.Add(c);
+            facts.Children.Add(actions);
+            return facts;
         }
-        facts.Children.Add(actions);
-        Grid.SetColumn(facts, 2);
-        top.Children.Add(facts);
-        p.Children.Add(top);
+        var facts = BuildFacts(inHead: false);
+        var headFacts = OldMapLayout ? null : BuildFacts(inHead: true);
+        if (headFacts != null)
+            headFacts.MaxWidth = 1500;
         /*
          * S-2: every shot of the map - the PO, 05.10: tiles across the whole width, sized by Ctrl+wheel or the
          * slider, and a click shows the shot as big as the window (where it can be made the cover)
          */
         TileWall? shots = null;
+        StackPanel? shotsBlock = null;
         if (m.Shots.Count > 0)
         {
-            p.Children.Add(Ui.Text(Loc.T("cover.strip"), 13, 0.75));
+            shotsBlock = new StackPanel { Spacing = 8 };
+            shotsBlock.Children.Add(Ui.Text(Loc.T("cover.strip"), 13, 0.75));
             shots = new TileWall { BaseWidth = 160, Gap = 8 };
             foreach (var shot in m.Shots)
             {
@@ -1749,7 +2234,7 @@ public sealed partial class MainWindow : Window
                 button.Click += (_, _) => OpenShots(m, path);
                 shots.Children.Add(TileWall.Card(button));
             }
-            p.Children.Add(shots);
+            shotsBlock.Children.Add(shots);
         }
         ShotsWall = shots;
         /* S-5: a map made elsewhere says so, and names its base when its checks report does */
@@ -1760,35 +2245,88 @@ public sealed partial class MainWindow : Window
         var gateRows = new List<Control>();
         if (m.Gates.Count == 0)
             gateRows.Add(Ui.Text(Loc.T("lib.gates.none"), 14, 0.7));
-        foreach (var (pass, what) in m.Gates)
+        // brief 27 D3: a map from scratch measured again by this Studio (its run's request and skeleton)
+        if (Recheck.CanRun(S, m))
+            gateRows.Add(RecheckButton(m));
+        // brief 27 D2 (the PO 06.11: «не понятно почему не пройдена»): the failed ones first, each with what it measured;
+        // red only for a check that means the map cannot be played
+        foreach (var i in Enumerable.Range(0, m.Gates.Count).OrderBy(i => m.Gates[i].pass ? 1 : 0).ToList())
         {
+            var (pass, what) = m.Gates[i];
+            var blocking = !pass && Library.Blocking(what);
             var g = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 10, Margin = new Thickness(0, 4, 0, 4) };
-            g.Children.Add(new FASymbolIcon { Symbol = pass ? FASymbol.Accept : FASymbol.Cancel, FontSize = 15,
-                                              Foreground = pass ? Look.Green : Look.Red, VerticalAlignment = VerticalAlignment.Top,
-                                              Margin = new Thickness(0, 2, 0, 0) });
-            var t = new TextBlock { Text = $"{Loc.Gate(what)} — {(pass ? Loc.T("lib.gates.pass") : Loc.T("lib.gates.fail"))}",
-                                    TextWrapping = TextWrapping.Wrap, FontSize = 14 };
-            Grid.SetColumn(t, 1);
-            g.Children.Add(t);
+            g.Children.Add(new FASymbolIcon { Symbol = pass ? FASymbol.Accept : blocking ? FASymbol.Cancel : FASymbol.Important, FontSize = 15,
+                                              Foreground = pass ? Look.Green : blocking ? Look.Red : new SolidColorBrush(Look.AmberC),
+                                              VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 2, 0, 0) });
+            var words = new StackPanel { Spacing = 2 };
+            words.Children.Add(new TextBlock { Text = $"{Loc.Gate(what)} — {(pass ? Loc.T("lib.gates.pass") : Loc.T("lib.gates.fail"))}"
+                                                      + (blocking ? Loc.T("lib.gates.blocking") : ""),
+                                               TextWrapping = TextWrapping.Wrap, FontSize = 14 });
+            var said = i < m.Said.Count ? m.Said[i] : "";
+            if (!pass && said.Length > 0)
+                words.Children.Add(new TextBlock { Text = SaidWords(what, said), TextWrapping = TextWrapping.Wrap, FontSize = 12.5, Opacity = 0.72 });
+            Grid.SetColumn(words, 1);
+            g.Children.Add(words);
             gateRows.Add(g);
         }
         var allPassed = m.Gates.Count > 0 && m.GatesPassed == m.Gates.Count;
-        var gateCard = Look.Group(allPassed ? FASymbol.Accept : FASymbol.Important, allPassed ? Look.GreenC : m.Gates.Count == 0 ? Look.GreyC : Look.RedC,
+        var gateCard = Look.Group(allPassed ? FASymbol.Accept : m.GatesBlocking > 0 ? FASymbol.Cancel : FASymbol.Important,
+                                  allPassed ? Look.GreenC : m.GatesBlocking > 0 ? Look.RedC : m.Gates.Count == 0 ? Look.GreyC : Look.AmberC,
                                   Loc.T("lib.gates"), m.Gates.Count > 0 ? Loc.F("lib.fact.checks.of", m.GatesPassed, m.Gates.Count) : null,
                                   null, gateRows);
-        p.Children.Add(new Border { Height = 8 });
-        p.Children.Add(Look.Columns(descCard, gateCard, 420));
+        /* the PO 06.11 (3440 wide): two stacks - the cover across the left three fifths, the shots and the description under
+           it; the facts, the buttons and the checks beside it from its top. One stack on a narrow window: the cover, the
+           facts, the shots, the description, the checks */
+        // 3.56's arrangement (the facts over the checks on the right) kept for the self-test's RED only
+        var split = OldMapLayout
+            ? new SplitColumns(new Control?[] { coverButton, shotsBlock, descCard }, new Control?[] { facts, gateCard },
+                               new Control?[] { coverButton, facts, shotsBlock, descCard, gateCard })
+            : new SplitColumns(new Control?[] { coverButton, shotsBlock, descCard }, new Control?[] { facts, gateCard },
+                               new Control?[] { facts, coverButton, shotsBlock, descCard, gateCard });
+        p.Children.Add(split);
+        MapChecks = gateCard;
         // the map's page: back and its name stay put; the shots across the whole width, sized like the library's
         var (backControl, nameControl) = (p.Children[0], p.Children[1]);
         p.Children.RemoveRange(0, 2);
-        var head = new StackPanel { Spacing = 8, Children = { backControl, nameControl } };
-        if (shots == null)
-            return new DockPanel { Children = { Docked(head), Ui.Page(p) } };
-        return TilePage.Build(head, p, shots, 80, () => S.ShotTile, v =>
+        Control head = new StackPanel { Spacing = 8, Children = { backControl, nameControl } };
+        if (headFacts != null)
         {
-            S.ShotTile = (int)v;
-            KeepView();
-        });
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,48,*") };
+            row.Children.Add(head);
+            headFacts.HorizontalAlignment = HorizontalAlignment.Left;
+            headFacts.VerticalAlignment = VerticalAlignment.Top;
+            Grid.SetColumn(headFacts, 2);
+            row.Children.Add(headFacts);
+            head = row;
+        }
+        MapFacts = facts;
+        MapFactsMode = "";
+        /* one place for the facts at a time, decided by the page's width before anything is measured: beside the name when
+           the body is wide enough for two stacks AND the head for the facts in two rows (a body of 1500: the PO's 3440
+           has 3100); over the checks on the right between 1150 and 1500; over the cover in one stack under 1150 */
+        void Decide(double width)
+        {
+            var body = width - 72 - 16;            // TilePage's padding and a scroll bar
+            var two = body >= split.MinTwo;
+            var inHead = headFacts != null && body >= 1500;
+            split.Force = two;
+            if (headFacts != null)
+                headFacts.IsVisible = inHead;
+            facts.IsVisible = !inHead;
+            MapFacts = inHead ? headFacts : facts;
+            MapFactsMode = inHead ? "head" : two ? "right" : "top";
+        }
+        if (shots == null)
+            return new WidthSwitch { OnWidth = Decide, Child = new DockPanel { Children = { Docked(head), Ui.Page(p) } } };
+        return new WidthSwitch
+        {
+            OnWidth = Decide,
+            Child = TilePage.Build(head, p, shots, 80, () => S.ShotTile, v =>
+            {
+                S.ShotTile = (int)v;
+                KeepView();
+            }),
+        };
     }
 
     private static Control Docked(Control top)
@@ -1874,6 +2412,8 @@ public sealed partial class MainWindow : Window
             S.Language = lang;
             Loc.Language = lang;
             S.Save();
+            // a run's page is kept between visits: made again, or its tabs and cards keep the other language's words
+            _runView = null;
             Rebuild();
         };
         look.Add(Ui.Setting("set.language", "set.language.desc", FASymbol.Globe, language, "set.language.tip"));
@@ -1919,17 +2459,17 @@ public sealed partial class MainWindow : Window
             ShowPage();
         };
         game.Add(Ui.Setting("set.client", "set.client.desc", FASymbol.Games,
-                                  new StackPanel { Orientation = Orientation.Horizontal, Children = { clientText, chooseClient } },
+                                  new WrapPanel { Children = { clientText, chooseClient } },
                                   "set.client.tip"));
         // the PO, 06.10: Python for the checks - where it is, chosen or installed from here
-        var pyNow = Engine.Python;
+        var pyNow = PythonShownForTest ?? Engine.Python;
         var pyText = new TextBlock
         {
             Text = pyNow ?? Loc.T("set.python.none"), VerticalAlignment = VerticalAlignment.Center, MaxWidth = 420,
             TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 8, 0),
         };
         game.Add(Ui.Setting("set.python", "set.python.desc", FASymbol.Code,
-                                  new StackPanel { Orientation = Orientation.Horizontal, Children = { pyText, PythonButtons(null) } },
+                                  new WrapPanel { Children = { pyText, PythonButtons(null) } },
                                   "set.python.tip"));
 
         folders.Add(FolderSetting("set.bsp", () => S.BspDir, v => S.BspDir = v, @"data\bsp"));
@@ -1973,13 +2513,17 @@ public sealed partial class MainWindow : Window
         memory.Add(Ui.Setting("set.keep_checkpoints", "set.keep_checkpoints.desc", FASymbol.Save, keep,
                               "set.keep_checkpoints.tip"));
         p.Children.Add(Look.PageHead(Loc.T("set.title"), Loc.T("set.sub")));
-        var left = Look.Stack(Look.Group(FASymbol.Globe, Look.VioletC, Loc.T("set.look"), Loc.T("set.look.sub"), null, look),
-                              Look.Group(FASymbol.Games, Look.GreenC, Loc.T("set.client"), Loc.T("set.client.sub"), null, game),
-                              Look.Group(FASymbol.Folder, Look.AmberC, Loc.T("set.folders"), Loc.T("set.folders.sub"), null, folders));
-        var right = Look.Stack(Look.Group(FASymbol.Clock, Look.BlueC, Loc.T("set.cpu"), Loc.T("set.cpu.sub"), null, cpu),
-                               Look.Group(FASymbol.Library, Look.TealC, Loc.T("set.memory"), Loc.T("set.memory.sub"), null, memory),
-                               Look.Group(FASymbol.Sync, Look.PinkC, Loc.T("set.updates"), Loc.T("set.updates.sub"), null, UpdateRows()));
-        p.Children.Add(Look.Columns(left, right));
+        // brief 28: the six cards by the window's width, three columns at most (two cards each: four columns left one
+        // card alone under a blank, the self-test 06.11)
+        var setCards = Look.Balanced(FormColumn,
+                                     Look.Group(FASymbol.Globe, Look.VioletC, Loc.T("set.look"), Loc.T("set.look.sub"), null, look),
+                                     Look.Group(FASymbol.Games, Look.GreenC, Loc.T("set.client"), Loc.T("set.client.sub"), null, game),
+                                     Look.Group(FASymbol.Folder, Look.AmberC, Loc.T("set.folders"), Loc.T("set.folders.sub"), null, folders),
+                                     Look.Group(FASymbol.Clock, Look.BlueC, Loc.T("set.cpu"), Loc.T("set.cpu.sub"), null, cpu),
+                                     Look.Group(FASymbol.Library, Look.TealC, Loc.T("set.memory"), Loc.T("set.memory.sub"), null, memory),
+                                     Look.Group(FASymbol.Sync, Look.PinkC, Loc.T("set.updates"), Loc.T("set.updates.sub"), null, UpdateRows()));
+        setCards.MaxColumns = 3;
+        p.Children.Add(setCards);
         p.Children.Add(new TextBlock { Text = Loc.F("set.saved", Settings.IniPath), FontSize = 12.5, Opacity = 0.6,
                                        Margin = new Thickness(0, 16, 0, 0), TextWrapping = TextWrapping.Wrap });
         return Look.Page(p);
@@ -2030,7 +2574,7 @@ public sealed partial class MainWindow : Window
             ShowPage();
         };
         return Ui.Setting(key, key + ".desc", FASymbol.Folder,
-                          new StackPanel { Orientation = Orientation.Horizontal, Children = { text, choose, reset } },
+                          new WrapPanel { Children = { text, choose, reset } },
                           "set.choose.tip");
     }
 
@@ -2119,6 +2663,7 @@ reshaping families dropped at the plan (their own rules refuse them on this map)
         var b = new System.Text.StringBuilder();
         var keepLang = Loc.Language;
         var keepTheme = App.Settings.Theme;
+        var keepScratch = App.Settings.ScratchMode;
         /*
          * Row 404: two unfinished runs, one carried by a live Studio (this one) and one whose Studio is gone - the
          * first is running, never offered to resume, and refuses a resume; the second is interrupted. Both stay in
@@ -2253,12 +2798,14 @@ reshaping families dropped at the plan (their own rules refuse them on this map)
             App.ApplyTheme(theme);
             var w = new MainWindow();
             var maps = Library.Scan(App.Settings);
-            foreach (var page in new[] { "home", "generate", "generate-each", "generate-graft", "library", "map", "settings", "about" })
+            foreach (var page in new[] { "home", "generate", "generate-each", "generate-graft", "generate-scratch", "library", "map", "settings", "about" })
             {
                 try
                 {
+                    // brief 19: the Generate page in its third mode, a map from scratch - every card in both languages
+                    App.Settings.ScratchMode = page == "generate-scratch";
                     // row 399: the Generate page with several bases ticked, in both modes
-                    if (page.StartsWith("generate-"))
+                    if (page.StartsWith("generate-") && page != "generate-scratch")
                     {
                         var donors = Engine.Donors();
                         if (donors.Count < 2)
@@ -2308,8 +2855,16 @@ reshaping families dropped at the plan (their own rules refuse them on this map)
                 }
             }
         }
+        // the PO, 04.11: text over text on a wide screen, and a base named on a map that has none - every screen asked
+        App.ApplyTheme("light");
+        ScreensSelfTest(b);
+        LayoutSelfTest(b);
+        // brief 23: the style maps' list, the six annex sizes, the presets
+        PresetsSelfTest(b);
+        ProgressSelfTest(b);
         Loc.Language = keepLang;
         App.ApplyTheme(keepTheme);
+        App.Settings.ScratchMode = keepScratch;
         /*
          * Brief 15 D9: when the asked difference is not reached, the description says which family found no more room.
          * The plan's account of the PO's options on q2dm1 (seed 6675, the recut driver's listing of 08.10), with the

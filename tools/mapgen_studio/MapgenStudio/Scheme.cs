@@ -1,3 +1,4 @@
+using Avalonia.LogicalTree;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -7,6 +8,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Rendering.SceneGraph;
 using Avalonia.Skia;
@@ -138,7 +140,7 @@ public sealed class SchemeModel
         var artifact = File.Exists(g.Artifact) ? g.Artifact : "";
         var memory = g.Running ? g.MemoryRoot : "";
         // the PO, 11.10: the frame's stage draws the donor stretching, the light's the portals
-        var donor = g.Running && g.Stage is "start" or "warp" or "baseline" ? Engine.DonorPath(g.Request.Donor) : "";
+        var donor = g.Running && g.Stage is "start" or "warp" or "baseline" && File.Exists(g.BasePath) ? g.BasePath : "";
         var warp = g.Warp;
         var light = g.Running && g.Stage == "light";
         _refresh = Task.Run(() =>
@@ -659,7 +661,7 @@ public sealed class SchemeView : Control, CopyText.IDrawnText
         if (s == null || s.Faces.Count == 0)
         {
             ctx.FillRectangle(new SolidColorBrush(Color.FromRgb(0x16, 0x18, 0x1c)), new Rect(Bounds.Size));
-            var t = new FormattedText(Loc.T("scheme.wait"), CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+            var t = new FormattedText(Loc.Ts("scheme.wait", SchemeLegend.ScratchRun), CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
                                       Typeface.Default, 14, Brushes.Gray);
             ctx.DrawText(t, new Point(16, 16));
             return;
@@ -1001,11 +1003,20 @@ public sealed class SchemePanel : DockPanel
 {
     public readonly SchemeModel Model = new();
     private readonly SchemeHost _view;
+    private readonly Expander _legend;
     private readonly Slider _cut = new() { Minimum = 0, Maximum = 1, Value = 1, Width = 200, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _cutText = new() { VerticalAlignment = VerticalAlignment.Center, Opacity = 0.75, MinWidth = 70 };
     private readonly ToggleSwitch _on = new() { OnContent = Loc.T("scheme.on"), OffContent = Loc.T("scheme.off") };
     private readonly Func<Generation?> _run;
     private SchemeFullScreen? _full;
+    // brief 19 D8: a map from scratch shows its skeleton (places, levels, routes) before any brush exists
+    private readonly Image _plan = new() { Stretch = Stretch.Uniform };
+    /* the PO, 05.11 (a shot of «Каркас карты — до первой стены» with «Схема появится …» written through it): the box
+       lies over the scheme view, which draws its waiting line under it - the box is opaque, as dark as the view and the
+       skeleton's picture, its words light in either theme */
+    private readonly Border _planBox = new() { IsVisible = false, Padding = new Thickness(8),
+                                               Background = new SolidColorBrush(Color.FromRgb(0x16, 0x18, 0x1c)) };
+    private string _planKey = "";
     private SchemeModel.Snapshot? _cutFor;
     private bool _cutMoved, _setting;
 
@@ -1041,13 +1052,64 @@ public sealed class SchemePanel : DockPanel
             bar.Children.Add(c);
         }
         // the PO, 11.10 («читать там можно разве что с лупой»): the legend as signs with short words, folded
-        var legend = SchemeLegend.Make();
+        var legend = _legend = SchemeLegend.Make();
         SetDock(bar, Dock.Top);
         SetDock(legend, Dock.Top);
         Children.Add(bar);
         Children.Add(legend);
-        Children.Add(new Border { Child = _view, CornerRadius = new CornerRadius(4), ClipToBounds = true, MinHeight = 240 });
+        _planBox.Child = new DockPanel
+        {
+            Children =
+            {
+                new StackPanel
+                {
+                    [DockPanel.DockProperty] = Dock.Top,
+                    Children =
+                    {
+                        new TextBlock { Text = Loc.T("scratch.plan.title"), FontSize = 15, FontWeight = FontWeight.SemiBold,
+                                        Foreground = Brushes.WhiteSmoke },
+                        new TextBlock { Text = Loc.T("scratch.plan.sub"), Foreground = Brushes.Gainsboro, Opacity = 0.8,
+                                        TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 8) },
+                    },
+                },
+                _plan,
+            },
+        };
+        Children.Add(new Grid
+        {
+            Children =
+            {
+                new Border { Child = _view, CornerRadius = new CornerRadius(4), ClipToBounds = true, MinHeight = 240 },
+                _planBox,
+            },
+        });
         ApplyCut();
+    }
+
+    /// <summary>The skeleton's picture while a map from scratch makes its base (its stage «scratch»).</summary>
+    private void ShowPlan(Generation g)
+    {
+        var path = g.Request.FromScratch && g.Running && g.Stage == "scratch" ? Path.Combine(g.ScratchDir, "plan.png") : "";
+        if (path.Length == 0 || !File.Exists(path))
+        {
+            _planBox.IsVisible = false;
+            return;
+        }
+        try
+        {
+            var key = path + File.GetLastWriteTimeUtc(path).Ticks;
+            if (key != _planKey)
+            {
+                using var fs = File.OpenRead(path);
+                _plan.Source = new Bitmap(fs);
+                _planKey = key;
+            }
+            _planBox.IsVisible = true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // half written: the next beat reads it
+        }
     }
 
     private void ApplyCut()
@@ -1082,6 +1144,10 @@ public sealed class SchemePanel : DockPanel
     /// <summary>The window's beat: read on, while the plan is on.</summary>
     public void Update(Generation g)
     {
+        // the PO, 04.11: a map from scratch has no base - the legend and the waiting line say the skeleton's words
+        SchemeLegend.ScratchRun = g.Request.FromScratch;
+        SchemeLegend.Say(_legend, g.Request.FromScratch);
+        ShowPlan(g);
         if (App.Settings.Scheme)
             Model.RefreshAsync(g);
         if (!ReferenceEquals(Model.Current, _cutFor))
@@ -1209,7 +1275,8 @@ public sealed class SchemeFullScreen : Window
         _stage.Text = GenerationView.NowLine(g);
         _times.Text = GenerationView.RunLine(g);
         _edits.Text = g.Budget > 0 ? Loc.F("run.attempts", g.Accepted, g.Compiles, g.Budget, g.Attempts)
-                      + (g.Target > 0 ? "   " + Loc.F("run.likeness", g.Divergence / 10, g.Target / 10) : "")
+                      + (g.Request.FromScratch ? "   " + Loc.F("run.progress.short", Math.Floor(RunProgress.Of(g).Percent))
+                         : g.Target > 0 ? "   " + Loc.Fs("run.likeness", false, g.Divergence / 10, g.Target / 10) : "")
                     : "";
     }
 }
@@ -1221,6 +1288,19 @@ public sealed class SchemeFullScreen : Window
 /// </summary>
 public static class SchemeLegend
 {
+    /// <summary>The run shown is a map from scratch (the waiting line and the legend say the skeleton's words).</summary>
+    public static bool ScratchRun { get; set; }
+
+    /// <summary>The legend's words for the run shown: a sign whose text has a variant for a map from scratch takes it.</summary>
+    public static void Say(Control legend, bool scratch)
+    {
+        foreach (var v in legend.GetLogicalDescendants())
+            if (v is TextBlock { Tag: string key } t)
+                t.Text = Loc.Ts(key, scratch);
+            else if (v is StackPanel { Tag: string tip } c)
+                ToolTip.SetTip(c, Loc.Ts(tip, scratch));
+    }
+
     private const int Columns = 7;
 
     private sealed class Sign : Control
@@ -1281,11 +1361,14 @@ public static class SchemeLegend
                 var cell = new StackPanel
                 {
                     Orientation = Orientation.Horizontal, Spacing = 6, Background = Brushes.Transparent,
-                    Children = { new Sign(mark, colour), new TextBlock { Text = Loc.T(key), FontSize = 13, VerticalAlignment = VerticalAlignment.Center,
+                    Children = { new Sign(mark, colour), new TextBlock { Text = Loc.T(key), Tag = key, FontSize = 13, VerticalAlignment = VerticalAlignment.Center,
                                                                          TextTrimming = TextTrimming.CharacterEllipsis } },
                 };
                 if (Loc.Has(key + ".tip"))
+                {
                     ToolTip.SetTip(cell, Loc.T(key + ".tip"));
+                    cell.Tag = key + ".tip";
+                }
                 Grid.SetRow(cell, r);
                 Grid.SetColumn(cell, c + 1);
                 grid.Children.Add(cell);

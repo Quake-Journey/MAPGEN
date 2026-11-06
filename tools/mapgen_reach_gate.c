@@ -65,6 +65,9 @@ int main(int argc, char **argv)
     /* The account behind the count of special traversals. Behind a flag: the
        ordinary run of this tool is read by a guard that counts lines. */
     bool show_certificates = false;
+    /* Brief 20 D2: every place a player can reach and not leave, not the first eight - a map from scratch may ask a
+       dead end (left by a rocket jump), and its check tells the places inside the dead end from a trap elsewhere. */
+    bool all_traps = false;
     /* What the transaction's own standing-water gate counts on this file: a
        vertical liquid face with AIR on the other side of it. A pit's wall has
        rock there and is not one, and «водой в воздухе» is what the PO filmed. */
@@ -102,6 +105,8 @@ int main(int argc, char **argv)
             connectivity_only = true;
         else if (!strcmp(argv[a], "--certificates"))
             show_certificates = true;
+        else if (!strcmp(argv[a], "--all-traps"))
+            all_traps = true;
         else if (!strcmp(argv[a], "--physics")) {
             /* The identity of the movement rules this build computes with,
                which is what a certificate has to carry. */
@@ -264,7 +269,7 @@ int main(int argc, char **argv)
              */
             uint32_t shown = 0;
             const uint32_t total = MapGenReach_NumStates(reach);
-            for (uint32_t i = 0; i < total && shown < 8; i++) {
+            for (uint32_t i = 0; i < total && (all_traps || shown < 8); i++) {
                 const mapgen_reach_state_t *s = MapGenReach_State(reach, i);
                 if (!s->reachable || s->can_return || s->hazard)
                     continue;

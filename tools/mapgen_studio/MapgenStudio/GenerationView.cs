@@ -19,13 +19,14 @@ namespace MapgenStudio;
 /// </summary>
 public sealed class GenerationView : DockPanel
 {
-    private static readonly string[] AllStages = { "start", "warp", "baseline", "plan", "attempt", "judge", "light", "gates", "destruction",
+    private static readonly string[] AllStages = { "scratch", "start", "warp", "baseline", "plan", "attempt", "judge", "light", "gates", "destruction",
                                                    "relight", "cover", "done" };
 
     /// <summary>The run's stages: the ruin's only when the run asked for one (the PO, 07.10), and the base's frame only
     /// when it is to change.</summary>
-    private static string[] StagesOf(Generation g) =>
-        AllStages.Where(s => (s != "destruction" || (g.Request.Options?.Destruction ?? 0) > 0)
+    internal static string[] StagesOf(Generation g) =>
+        AllStages.Where(s => (s != "scratch" || g.Request.FromScratch)
+                          && (s != "destruction" || (g.Request.Options?.Destruction ?? 0) > 0)
                           && (s != "warp" || (g.Request.Options is { } o && (o.WarpSize != 100 || o.WarpShape > 0))))
                  .ToArray();
 
@@ -63,6 +64,17 @@ public sealed class GenerationView : DockPanel
     /* brief 16 D2: the plan's word, under the bar it is about */
     private readonly TextBlock _planWord = new() { FontSize = 13, Foreground = Amber, TextWrapping = TextWrapping.Wrap };
 
+    // ---- brief 24 D1: «Ход работы» of a map from scratch, in the difference's place ----
+    private readonly TextBlock _progNow = new() { FontSize = 34, FontWeight = FontWeight.SemiBold, Foreground = Blue };
+    private readonly TextBlock _progWord = new() { FontSize = 16, Opacity = 0.75, VerticalAlignment = VerticalAlignment.Bottom,
+                                                   Margin = new Thickness(8, 0, 0, 6) };
+    private readonly ProgressBar _progBar = new() { Minimum = 0, Maximum = 100, Height = 8, Margin = new Thickness(0, 4, 0, 6) };
+    private readonly TextBlock _progLeft = new() { FontSize = 14, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock _progStage = new() { FontSize = 13, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0) };
+    private readonly TextBlock _progInner = new() { FontSize = 13, Opacity = 0.75, TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock _progElapsed = new() { FontSize = 12, Opacity = 0.65, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
+    private readonly Border _progCard;
+
     // ---- the edits ----
     private readonly TextBlock _nAccepted = Big(Green), _nBuilt = Big(null), _nTried = Big(Muted);
     private readonly TextBlock _builtCaption = Caption("run.stat.built");
@@ -74,6 +86,7 @@ public sealed class GenerationView : DockPanel
     // ---- the plan ----
     private readonly Grid _planRows = new() { ColumnDefinitions = new ColumnDefinitions("*,90,Auto"), RowSpacing = 6, ColumnSpacing = 10 };
     private readonly Border _planCard;
+    private readonly Border _diffCard;
     private readonly TextBlock _ruin = new() { FontSize = 13, Opacity = 0.8, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
     private string _planShown = "";
 
@@ -82,6 +95,13 @@ public sealed class GenerationView : DockPanel
     private readonly Expander _stagesBox = new() { HorizontalAlignment = HorizontalAlignment.Stretch, IsExpanded = false };
     private readonly LoadMeter _meter = new();
     private readonly Expander _loadBox = new() { HorizontalAlignment = HorizontalAlignment.Stretch, IsExpanded = false };
+    /* the PO 06.11 (his picture: «Загрузка — генератору разрешено до 80 % (12 из …» cut at the column's edge): the folded
+       blocks' headers are texts that wrap - a string header is one line, clipped by the 420 px column */
+    private readonly TextBlock _stagesHead = new() { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock _loadHead = new() { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+
+    /// <summary>The load box's header as shown (the self-test reads it).</summary>
+    internal string LoadHeader => _loadHead.Text ?? "";
     private readonly TextBlock _memory = new() { FontSize = 13, Foreground = Amber, TextWrapping = TextWrapping.Wrap };
 
     // ---- the right ----
@@ -93,6 +113,29 @@ public sealed class GenerationView : DockPanel
     public LoadMeter Meter => _meter;
     private readonly Action<string> _openMap;
     private Generation? _g;
+    // the PO, 05.11: the parameters the run was started with, on a tab of its own (MainWindow.RunParams)
+    private readonly Func<Generation, Control>? _paramsView;
+    private readonly TabItem _paramsTab = new() { FontSize = 15 };
+    // brief 28 (the PO 06.11: «само окно генерации оно вообще не оптимизировано для ультрашироких мониторов … чтобы
+    // карта построения больше размером была»): on a wide view the log stands beside the scheme, the left pane by the width
+    private readonly TabControl _tabs = new() { VerticalAlignment = VerticalAlignment.Stretch };
+    private readonly TabItem _logTab = new() { FontSize = 15 };
+    private readonly Grid _right = new();
+    private readonly DockPanel _logPane = new() { Margin = new Thickness(0, 6, 0, 0) };
+    private ScrollViewer? _leftScroll;
+    private bool? _wide;
+
+    /// <summary>The view's width from which the log stood beside the scheme (3.54-3.55). The PO, 06.11: «подробный журнал
+    /// вернуть в таб после параметров, а карту растянуть на свободную область справа» - never now; kept for the RED.</summary>
+    public const double WideFrom = double.PositiveInfinity;
+
+    /// <summary>The 3.54-3.55 way (the log beside the scheme from 1500 wide), for the self-test's RED only.</summary>
+    internal static bool OldBeside;
+    /// <summary>Whether the log stands beside the scheme now (the self-test reads it).</summary>
+    public bool Wide => _wide == true;
+    /// <summary>The scheme's own width now (the self-test reads it).</summary>
+    public double SchemeWidth => _scheme.Bounds.Width;
+    private string _paramsFor = "";
 
     private static TextBlock Big(IBrush? brush)
     {
@@ -120,9 +163,57 @@ public sealed class GenerationView : DockPanel
         Spacing = 0, MinWidth = 96, Children = { number, caption },
     };
 
-    public GenerationView(Action again, Action<string> openMap)
+    /// <summary>
+    /// Brief 28: the left pane three tenths of the view (390..560); from <see cref="WideFrom"/> the log beside the scheme (the
+    /// scheme three fifths of the right), below it the log a tab again.
+    /// </summary>
+    private void ApplyWidth(double w)
+    {
+        if (double.IsInfinity(w) || double.IsNaN(w) || w <= 0)
+            return;
+        if (_leftScroll != null)
+            _leftScroll.Width = Math.Clamp(w * 0.3, 390, 560);   // 420 left the scheme 597 wide on a 1366 laptop
+        var wide = w >= (OldBeside ? 1500 : WideFrom);
+        if (_wide == wide)
+            return;
+        _wide = wide;
+        _right.Children.Clear();
+        _logTab.Content = null;
+        if (_logPane.Children.Contains(_log))
+            _logPane.Children.Remove(_log);
+        if (wide)
+        {
+            if (_tabs.SelectedItem == _logTab)
+                _tabs.SelectedIndex = 0;
+            _tabs.Items.Remove(_logTab);
+            _logPane.Children.Add(_log);
+            _right.ColumnDefinitions = new ColumnDefinitions("3*,14,2*");
+            Grid.SetColumn(_tabs, 0);
+            Grid.SetColumn(_logPane, 2);
+            _right.Children.Add(_tabs);
+            _right.Children.Add(_logPane);
+        }
+        else
+        {
+            _logTab.Content = _log;
+            if (!_tabs.Items.Contains(_logTab))
+                _tabs.Items.Add(_logTab);          // after the scheme and the parameters
+            _right.ColumnDefinitions = new ColumnDefinitions("*");
+            Grid.SetColumn(_tabs, 0);
+            _right.Children.Add(_tabs);
+        }
+    }
+
+    protected override Size MeasureOverride(Size availableSize)
+    {
+        ApplyWidth(availableSize.Width);
+        return base.MeasureOverride(availableSize);
+    }
+
+    public GenerationView(Action again, Action<string> openMap, Func<Generation, Control>? paramsView = null)
     {
         _openMap = openMap;
+        _paramsView = paramsView;
         LastChildFill = true;
 
         // the head: name, base, the stage now as a badge, the time; the buttons on the right
@@ -165,8 +256,21 @@ public sealed class GenerationView : DockPanel
         };
         var edits = new StackPanel { Children = { stats, _attempts.Tip("run.attempts.tip"), _time, _last, _tail } };
         _planCard = Card("run.plan.head", new StackPanel { Children = { _planRows, _ruin } });
+        var progress = new StackPanel
+        {
+            Children =
+            {
+                new StackPanel { Orientation = Orientation.Horizontal, Children = { _progNow, _progWord } },
+                _progBar, _progLeft, _progStage, _progInner, _progElapsed,
+            },
+        };
+        _progCard = Card("run.progress.head", progress, "run.progress.tip");
+        _progCard.Tag = "run-progress";
+        _progCard.IsVisible = false;
         _stagesBox.Content = _stages;
         _loadBox.Content = _meter;
+        _stagesBox.Header = _stagesHead;
+        _loadBox.Header = _loadHead;
         _meter.Width = double.NaN;
         _meter.HorizontalAlignment = HorizontalAlignment.Stretch;
         var left = new StackPanel
@@ -175,7 +279,8 @@ public sealed class GenerationView : DockPanel
             Margin = new Thickness(0, 0, 16, 12),
             Children =
             {
-                Card("run.diff.head", diff),
+                _progCard,
+                (_diffCard = Card("run.diff.head", diff)),
                 Card("run.edits.head", edits),
                 _planCard,
                 _stagesBox,
@@ -190,12 +295,25 @@ public sealed class GenerationView : DockPanel
         };
         DockPanel.SetDock(leftScroll, Dock.Left);
         Children.Add(leftScroll);
+        _leftScroll = leftScroll;
 
-        // the right: the scheme and the log, the whole height (the PO: the map must not be pushed down)
-        var tabs = new TabControl { VerticalAlignment = VerticalAlignment.Stretch };
-        tabs.Items.Add(new TabItem { Header = Loc.T("scheme.tab"), Content = _scheme, FontSize = 15 });
-        tabs.Items.Add(new TabItem { Header = Loc.T("run.log"), Content = _log, FontSize = 15 }.Tip("run.log.tip"));
-        Children.Add(tabs);
+        // the right: the scheme and the log, the whole height (the PO: the map must not be pushed down); side by side
+        // on a wide view (ApplyWidth)
+        _tabs.Items.Add(new TabItem { Header = Loc.T("scheme.tab"), Content = _scheme, FontSize = 15 });
+        _logTab.Header = Loc.T("run.log");
+        _logTab.Tip("run.log.tip");
+        if (_paramsView != null)
+        {
+            _paramsTab.Header = Loc.T("run.params.tab");
+            _tabs.Items.Add(_paramsTab.Tip("run.params.tab.tip"));
+        }
+        // the PO, 06.11: the log a tab after the parameters
+        _tabs.Items.Add(_logTab);
+        var logHead = new TextBlock { Text = Loc.T("run.log"), FontSize = 15, FontWeight = FontWeight.SemiBold, Margin = new Thickness(4, 6, 0, 10) };
+        DockPanel.SetDock(logHead, Dock.Top);
+        _logPane.Children.Add(logHead);
+        Children.Add(_right);
+        ApplyWidth(1180);
 
         _pause.Click += (_, _) => _g?.Pause(!_g.Paused);
         _stop.Click += (_, _) =>
@@ -265,15 +383,31 @@ public sealed class GenerationView : DockPanel
     public void Update(Generation g)
     {
         _g = g;
+        // the PO, 04.11: a map from scratch has no base - its words are the skeleton's and its dressing's
+        var sc = g.Request.FromScratch;
+        if (_diffCard.Child is StackPanel { Children.Count: > 0 } dc && dc.Children[0] is TextBlock dh)
+            dh.Text = Loc.Ts("run.diff.head", sc);
+        ToolTip.SetTip(_likeness, Loc.Ts("run.likeness.tip", sc));
+        ToolTip.SetTip(_planWord, Loc.Ts("run.plan.value.tip", sc));
         _meter.Update(g);
         _scheme.Update(g);
+        // the run's parameters: made once for each run shown (they do not change while it goes)
+        var paramsKey = g.RunDir + "|" + Loc.Language;
+        if (_paramsView != null && paramsKey != _paramsFor)
+        {
+            _paramsFor = paramsKey;
+            _paramsTab.Header = Loc.T("run.params.tab");
+            _paramsTab.Content = _paramsView(g);
+        }
 
         // the head
         _title.Text = Loc.F("run.title", g.Request.Name);
         // row 410: what the map is made from, plainly - the PO's mg_10_42 was q2dm1's without his knowing
-        _bases.Text = g.Request.Grafts is { Count: > 0 } grafts
-            ? Loc.F("run.base.grafts", g.Request.Donor, string.Join(", ", grafts))
-            : Loc.F("run.base", g.Request.Donor);
+        _bases.Text = g.Request.FromScratch
+            ? Loc.F("run.base.scratch", ScratchParams.BriefOf(g.Request.Scratch))
+            : g.Request.Grafts is { Count: > 0 } grafts
+                ? Loc.F("run.base.grafts", g.Request.Donor, string.Join(", ", grafts))
+                : Loc.F("run.base", g.Request.Donor);
         _now.Text = NowLine(g);
         var failed = !g.Running && g.Error.Length > 0;
         var tint = failed ? RedC : !g.Running ? GreenC : g.Paused ? AmberC : BlueC;
@@ -286,7 +420,7 @@ public sealed class GenerationView : DockPanel
         // the time left is the badge's; here the run's own clock
         _elapsed.Text = g.Running ? Loc.F("run.elapsed", Dur(g.Worked(g.Began, end)), g.Began.ToString("HH:mm:ss")) : RunLine(g);
         _queue.Text = Generation.Queue.Count > 0
-            ? Loc.F("run.queue", string.Join(", ", Generation.Queue.Select(q => $"{q.Name} ({q.Donor})")))
+            ? Loc.F("run.queue", string.Join(", ", Generation.Queue.Select(q => $"{q.Name} ({q.BaseLabel})")))
             : "";
         _queue.IsVisible = _queue.Text.Length > 0;
 
@@ -299,18 +433,26 @@ public sealed class GenerationView : DockPanel
         _planWord.Text = g.PlanCan < 0 ? "" : Loc.F("run.diff.plan", (g.PlanCan / 10.0).ToString("0.#"), g.PlanBuilds);
         _planWord.IsVisible = _planWord.Text.Length > 0;
 
+        // brief 24 D1: a map from scratch shows the whole build in the difference's place
+        _progCard.IsVisible = sc;
+        _diffCard.IsVisible = !sc;
+        if (sc)
+            ShowProgress(g);
+
         // the edits
         var minutes = g.Request.TimeMinutes;
         _nAccepted.Text = g.Accepted.ToString();
         _nBuilt.Text = g.Compiles.ToString();
         _nTried.Text = g.Attempts.ToString();
         _builtCaption.Text = minutes > 0 || g.Budget <= 0 ? Loc.T("run.stat.built") : Loc.F("run.stat.built.of", g.Budget);
-        // brief 16 D6: a run with minutes is measured by them - the bar is its time
+        // brief 16 D6: a run with minutes is measured by them - the bar is its time; brief 24 D1.6: by the engine's
+        // clock, which starts after the skeleton (3.49's «11 из 30 мин» at 12:30 was 7 of 30 by the engine's)
+        var engineWorked = EngineWorked(g, end);
         _attempts.Maximum = minutes > 0 ? minutes * 60.0 : Math.Max(1, g.Budget);
-        _attempts.Value = minutes > 0 ? Math.Min(g.Worked(g.Began, end).TotalSeconds, minutes * 60.0)
+        _attempts.Value = minutes > 0 ? Math.Min(engineWorked.TotalSeconds, minutes * 60.0)
                                       : Math.Min(g.Compiles, g.Budget);
         _time.Text = g.Budget <= 0 ? Loc.T("run.edits.wait")
-                   : minutes > 0 ? Loc.F("run.time.of", (int)g.Worked(g.Began, end).TotalMinutes, minutes)
+                   : minutes > 0 ? Loc.F("run.time.of", (int)engineWorked.TotalMinutes, minutes)
                    : Loc.F("run.builds.of", g.Compiles, g.Budget);
         var accepted = g.LastVerdict == "ACCEPTED";
         _last.Text = g.LastFamily.Length > 0
@@ -364,8 +506,8 @@ public sealed class GenerationView : DockPanel
         _ruin.IsVisible = ruin > 0;
 
         // folded: the stages, their header saying the one under way
-        _stagesBox.Header = Loc.F("run.stages.head", Loc.T(g.Running ? $"stage.{(g.Stage == "resume" ? "attempt" : g.Stage)}"
-                                                                       : failed ? "run.now.failed" : "run.now.done"));
+        _stagesHead.Text = Loc.F("run.stages.head", Loc.Ts(g.Running ? $"stage.{(g.Stage == "resume" ? "attempt" : g.Stage)}"
+                                                                        : failed ? "run.now.failed" : "run.now.done", sc));
         _stages.Children.Clear();
         // a resumed run replays its ledger: that is the edits stage, gone through again (the PO 05.10 saw every
         // stage waiting while it replayed)
@@ -404,7 +546,7 @@ public sealed class GenerationView : DockPanel
             {
                 Children =
                 {
-                    new TextBlock { Text = Loc.T($"stage.{key}"), FontSize = 13, Opacity = done || now || broke ? 1.0 : 0.55,
+                    new TextBlock { Text = Loc.Ts($"stage.{key}", sc), FontSize = 13, Opacity = done || now || broke ? 1.0 : 0.55,
                                     FontWeight = now ? FontWeight.SemiBold : FontWeight.Normal, TextWrapping = TextWrapping.Wrap },
                 },
             };
@@ -413,9 +555,14 @@ public sealed class GenerationView : DockPanel
             Grid.SetColumn(words, 1);
             row.Children.Add(icon);
             row.Children.Add(words);
-            _stages.Children.Add(row.Tip($"stage.{key}.tip"));
+            _stages.Children.Add(row.Tip(Loc.Ks($"stage.{key}.tip", sc)));
         }
-        _loadBox.Header = g.CpuShare > 0 ? Loc.F("run.load.head", g.CpuShare) : Loc.T("load.title");
+        // brief 24 D2 (the PO: «ограничение 80 %, а реально студия юзает гораздо меньше»): the ceiling in CPUs - the
+        // bits of the job's mask - and what the generator uses of the whole machine (its row of the card)
+        _loadHead.Text = g.CpuShare <= 0 ? Loc.T("load.title")
+                        : _meter.GeneratorShare is { } used
+                            ? Loc.F("run.load.head", g.CpuShare, g.CpuThreads, Environment.ProcessorCount, Math.Round(used))
+                            : Loc.F("run.load.head.wait", g.CpuShare, g.CpuThreads, Environment.ProcessorCount);
         // the working files in memory is the rule and not news; on the disk is (row 411)
         _memory.Text = g.MemoryNote == Loc.T("run.memory.on") ? "" : g.MemoryNote;
         _memory.IsVisible = _memory.Text.Length > 0;
@@ -449,12 +596,15 @@ public sealed class GenerationView : DockPanel
             }
             else
             {
+                // brief 27: a map that plays is a success with its count; a warning only when it cannot be played
                 var bad = g.Gates.Count(x => !x.pass);
-                _outcome.Severity = bad == 0 ? FAInfoBarSeverity.Success : FAInfoBarSeverity.Warning;
+                var blocking = g.Gates.Count(x => !x.pass && Library.Blocking(x.what));
+                _outcome.Severity = blocking > 0 ? FAInfoBarSeverity.Warning : FAInfoBarSeverity.Success;
                 _outcome.Title = Loc.F("run.done.title", g.LibraryName);
                 _outcome.Message = g.Gates.Count == 0 ? Loc.T("run.done.nogates")
                                  : bad == 0 ? Loc.F("run.done.gates", g.Gates.Count)
-                                 : Loc.F("run.done.gatesfail", bad, g.Gates.Count);
+                                 : blocking > 0 ? Loc.F("run.done.gatesblocking", blocking, g.Gates.Count - bad, g.Gates.Count)
+                                 : Loc.F("run.done.gatesfail", g.Gates.Count - bad, g.Gates.Count);
                 // row 410: a map delivered on a result that is not OK says why (koldduel1 with q3t2's rooms offered:
                 // «ERR_DONOR_OMITTED» - none of q3t2's rooms fitted, which the run page did not say)
                 // brief 9 D4: what the second map gave, or why nothing - never «не подошли» alone
@@ -462,8 +612,10 @@ public sealed class GenerationView : DockPanel
                     _outcome.Message += "\n" + second;
                 else if (g.Result.Length > 0 && g.Result != "OK" && Loc.Has($"result.{g.Result}.delivered"))
                 {
-                    _outcome.Message += "\n" + Loc.F($"result.{g.Result}.delivered", string.Join(", ", g.Request.Grafts ?? Array.Empty<string>()));
-                    _outcome.Severity = FAInfoBarSeverity.Warning;
+                    _outcome.Message += "\n" + Loc.Fs($"result.{g.Result}.delivered", sc, string.Join(", ", g.Request.Grafts ?? Array.Empty<string>()));
+                    // a map from scratch whose dressing did less than asked is still the map asked for - no warning
+                    if (!sc)
+                        _outcome.Severity = FAInfoBarSeverity.Warning;
                 }
             }
         }
@@ -471,6 +623,43 @@ public sealed class GenerationView : DockPanel
         var text = string.Join("\n", tail);
         if (_log.Text != text)
             _log.Text = text;
+    }
+
+    /// <summary>
+    /// The engine's own clock (brief 24 D1.6): its minutes count from its start - after the skeleton of a map from
+    /// scratch (pipeline_driver.c: `time(NULL) - g_progress_began`); none of them before it starts.
+    /// </summary>
+    internal static TimeSpan EngineWorked(Generation g, DateTime end) =>
+        g.StageBegan.TryGetValue("start", out var t) ? g.Worked(t, end)
+        : g.Request.FromScratch ? TimeSpan.Zero : g.Worked(g.Began, end);
+
+    /// <summary>Brief 24 D1: «Ход работы» - the percent, the time left, the stage k of n and what it is doing, the run's clock.</summary>
+    private void ShowProgress(Generation g)
+    {
+        var p = RunProgress.Of(g);
+        _progNow.Text = $"{Math.Floor(p.Percent):0} %";
+        _progNow.Foreground = !g.Running && g.Error.Length == 0 ? Green : !g.Running ? Red : Blue;
+        _progWord.Text = Loc.T("run.progress.word");
+        _progBar.Value = p.Percent;
+        var stageName = Loc.Ts($"stage.{p.Stage}", true);
+        if (g.Running)
+        {
+            _progLeft.Text = RunProgress.LeftLine(g, p);
+            _progStage.Text = Loc.F("run.progress.stage", p.At, p.Count, stageName, Dur(p.InStage));
+            _progInner.Text = p.Inner;
+            _progElapsed.Text = Loc.F("run.progress.elapsed", Dur(g.Worked(g.Began, DateTime.Now)), g.Began.ToString("HH:mm:ss"));
+        }
+        else
+        {
+            _progLeft.Text = g.Error.Length == 0
+                ? Loc.F("run.progress.built", Dur(g.Worked(g.Began, g.Ended ?? DateTime.Now)))
+                : Loc.F("run.progress.stopped", p.At, p.Count, stageName);
+            _progStage.Text = "";
+            _progInner.Text = "";
+            _progElapsed.Text = RunLine(g);
+        }
+        _progStage.IsVisible = _progStage.Text.Length > 0;
+        _progInner.IsVisible = _progInner.Text.Length > 0;
     }
 
     /// <summary>The stage under way: how long it has gone, and for the edits how long they have left and when they end.</summary>
@@ -508,7 +697,7 @@ public sealed class GenerationView : DockPanel
         if (g.Paused)
             return Loc.T("run.now.paused");
         var key = g.Stage == "resume" ? "attempt" : g.Stage;
-        var head = Loc.T($"stage.{g.Stage}.now");
+        var head = Loc.Ts($"stage.{g.Stage}.now", g.Request.FromScratch);
         return g.StageBegan.TryGetValue(key, out var since) ? $"{head} — {StageNow(g, key, since, EditsLeft(g))}" : head;
     }
 
@@ -529,7 +718,7 @@ public sealed class GenerationView : DockPanel
     /// before a new build, while paused, or outside the edits. The builds left are the fewer of the budget's and
     /// those the likeness still needs at the recent gain per build (the generator stops at either).
     /// </summary>
-    private static TimeSpan? EditsLeft(Generation g)
+    internal static TimeSpan? EditsLeft(Generation g)
     {
         if (!g.Running || g.Paused || g.Stage is not ("attempt" or "resume") || g.Budget <= 0)
             return null;
@@ -570,7 +759,7 @@ public sealed class GenerationView : DockPanel
         if (g.Request.TimeMinutes > 0)
         {
             var budget = g.Request.TimeMinutes * 60.0;
-            var byTime = budget - (240.0 + budget / 30.0) - g.Worked(g.Began, DateTime.Now).TotalSeconds;
+            var byTime = budget - (240.0 + budget / 30.0) - EngineWorked(g, DateTime.Now).TotalSeconds;
             left = Math.Min(left, Math.Max(0.0, byTime) + tail * per);
         }
         return TimeSpan.FromSeconds(Math.Max(tail > 0 ? per * 0.1 : 0, left));
@@ -593,6 +782,9 @@ public sealed class RunStrip : Border
     private readonly FASymbolIcon _icon = new() { FontSize = 18, HorizontalAlignment = HorizontalAlignment.Center,
                                                   VerticalAlignment = VerticalAlignment.Center };
     public event Action? Open;
+
+    /// <summary>The strip's second line (the self-test reads it).</summary>
+    internal string Line2 => _line2.Text ?? "";
 
     public RunStrip()
     {
@@ -632,15 +824,31 @@ public sealed class RunStrip : Border
         _icon.Foreground = new SolidColorBrush(colour);
         _icon.Symbol = failed ? FASymbol.Cancel : !g.Running ? FASymbol.Accept : g.Paused ? FASymbol.Pause : FASymbol.Play;
         _line1.Foreground = new SolidColorBrush(colour);
-        _line1.Text = Loc.F("strip.line1", g.Request.Name, g.Request.Donor, GenerationView.NowLine(g));
+        var sc = g.Request.FromScratch;
+        _line1.Text = Loc.Fs("strip.line1", sc, g.Request.Name, g.Request.BaseLabel, GenerationView.NowLine(g));
         var minutes = g.Request.TimeMinutes;
-        var time = minutes > 0 ? Loc.F("strip.time", (int)g.Worked(g.Began, g.Ended ?? DateTime.Now).TotalMinutes, minutes)
+        var time = minutes > 0 ? Loc.F("strip.time", (int)GenerationView.EngineWorked(g, g.Ended ?? DateTime.Now).TotalMinutes, minutes)
                                : GenerationView.Dur(g.Worked(g.Began, g.Ended ?? DateTime.Now));
-        _line2.Text = g.Target > 0
-            ? Loc.F("strip.line2", g.Divergence / 10, g.Target / 10, g.Accepted, g.Compiles, time)
-            : Loc.F("strip.line2.early", time);
-        _bar.Maximum = Math.Max(1, g.Target);
-        _bar.Value = Math.Min(g.Divergence, g.Target);
+        if (sc)
+        {
+            // brief 24 D1.4: a map from scratch - the whole build, the stage k of n, the time left; the bar is the percent
+            var p = RunProgress.Of(g);
+            _line2.Text = g.Running
+                ? Loc.F("strip.line2.progress", Math.Floor(p.Percent), p.At, p.Count, Loc.Ts($"stage.{p.Stage}", true),
+                        RunProgress.LeftLine(g, p))
+                : g.Error.Length == 0 ? Loc.F("run.progress.built", GenerationView.Dur(g.Worked(g.Began, g.Ended ?? DateTime.Now)))
+                : Loc.F("run.progress.stopped", p.At, p.Count, Loc.Ts($"stage.{p.Stage}", true));
+            _bar.Maximum = 100;
+            _bar.Value = p.Percent;
+        }
+        else
+        {
+            _line2.Text = g.Target > 0
+                ? Loc.Fs("strip.line2", sc, g.Divergence / 10, g.Target / 10, g.Accepted, g.Compiles, time)
+                : Loc.Fs("strip.line2.early", sc, time);
+            _bar.Maximum = Math.Max(1, g.Target);
+            _bar.Value = Math.Min(g.Divergence, g.Target);
+        }
         _bar.Foreground = new SolidColorBrush(colour);
     }
 }

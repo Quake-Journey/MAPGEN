@@ -762,7 +762,7 @@ public sealed class SchemeOverlay : Control, CopyText.IDrawnText
         var s = _model.Current;
         if (s == null)
         {
-            ctx.DrawText(new FormattedText(Loc.T("scheme.wait"), CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+            ctx.DrawText(new FormattedText(Loc.Ts("scheme.wait", SchemeLegend.ScratchRun), CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
                                            Typeface.Default, 14, Brushes.Gray), new Point(16, 16));
             return;
         }

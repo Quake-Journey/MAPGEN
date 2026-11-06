@@ -18,6 +18,7 @@ public sealed class App : Application
     public override void Initialize()
     {
         CopyText.Install();         // brief 15, the PO: any text of any window copied by the right mouse button
+        TipPlace.Install();         // the PO 06.11: a tooltip never lies under the pointer (the start button's first press)
         Settings = Settings.Load();
         Settings.EnsureFolders();
         Loc.Language = Settings.Language;
@@ -77,6 +78,69 @@ public sealed class App : Application
                 File.WriteAllText(Path.Combine(Settings.ProgramDir, "selftest.txt"), report);
                 // the lifetime has not started yet; its Shutdown from here throws - leave directly
                 Environment.Exit(report.Contains("FAIL") ? 1 : 0);
+            }
+            // brief 27 D3: «Перепроверить» without the window (`--recheck NAME`): the result in recheck.txt beside the program
+            if (Environment.GetCommandLineArgs().Contains("--recheck"))
+            {
+                var argv = Environment.GetCommandLineArgs();
+                var at = Array.IndexOf(argv, "--recheck");
+                var name = at + 1 < argv.Length ? argv[at + 1] : "";
+                var report = new System.Text.StringBuilder();
+                var map = Library.Scan(Settings).FirstOrDefault(m => m.Name == name);
+                if (map == null || !Recheck.CanRun(Settings, map))
+                    report.AppendLine($"FAIL {name}: not in the library or not a map from scratch with its run");
+                else
+                {
+                    report.AppendLine($"before: {map.GatesPassed} of {map.Gates.Count}, blocking {map.GatesBlocking}");
+                    var job = Recheck.Start(Settings, map, out var outFile);
+                    while (!job.Exited(out _))
+                        Thread.Sleep(500);
+                    job.Dispose();
+                    var why = Recheck.Finish(Settings, map, outFile);
+                    var now = Library.Scan(Settings).First(m => m.Name == name);
+                    report.AppendLine(why == null ? $"after: {now.GatesPassed} of {now.Gates.Count}, blocking {now.GatesBlocking}" : $"FAIL {why}");
+                    foreach (var (i, g) in now.Gates.Select((g, i) => (i, g)).Where(x => !x.g.pass))
+                        report.AppendLine($"  failed: {g.what} -- {(i < now.Said.Count ? now.Said[i] : "")}");
+                }
+                File.WriteAllText(Path.Combine(Settings.ProgramDir, "recheck.txt"), report.ToString());
+                Environment.Exit(0);
+            }
+            // brief 28: pictures of the pages as laid out (`--layout-shots DIR`), for the report
+            if (Environment.GetCommandLineArgs().Contains("--layout-shots"))
+            {
+                var argv = Environment.GetCommandLineArgs();
+                var at = Array.IndexOf(argv, "--layout-shots");
+                var dir = at + 1 < argv.Length ? argv[at + 1] : Path.Combine(Settings.TempPath, "layout_shots");
+                File.WriteAllLines(Path.Combine(dir.Length > 0 ? dir : ".", "..", "layout_shots.txt"), MainWindow.LayoutShots(dir));
+                Environment.Exit(0);
+            }
+            // brief 26: the cover views of a map's jump pad and teleporter (`--fixture-views BSP OUT`), for
+            // tools/check_mapgen_fixtures.py - one line per view: what x y z yaw
+            if (Environment.GetCommandLineArgs().Contains("--fixture-views"))
+            {
+                var argv = Environment.GetCommandLineArgs();
+                var at = Array.IndexOf(argv, "--fixture-views");
+                var bsp = at + 1 < argv.Length ? argv[at + 1] : "";
+                var outFile = at + 2 < argv.Length ? argv[at + 2] : Path.Combine(Settings.TempPath, "fixture_views.txt");
+                File.WriteAllLines(outFile, Covers.Fixtures(bsp).Select(v => string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                                   $"{v.What} {v.X:0} {v.Y:0} {v.Z:0} {v.Yaw:0}")));
+                Environment.Exit(0);
+            }
+            // brief 23 D2: every factory preset's body as the generator and the engine get it, for
+            // tools/check_mapgen_presets.py - scratch/<key>.json (the request), base/<key>.txt (the likeness and the words)
+            if (Environment.GetCommandLineArgs().Contains("--presets-dump"))
+            {
+                var argv = Environment.GetCommandLineArgs();
+                var at = Array.IndexOf(argv, "--presets-dump");
+                var outDir = at + 1 < argv.Length ? argv[at + 1] : Path.Combine(Settings.TempPath, "presets_dump");
+                Directory.CreateDirectory(Path.Combine(outDir, "scratch"));
+                Directory.CreateDirectory(Path.Combine(outDir, "base"));
+                foreach (var f in Presets.Factory(Presets.Scratch))
+                    File.WriteAllText(Path.Combine(outDir, "scratch", Presets.FactoryKey(f) + ".json"), Presets.ScratchOf(f.Body).ToPython());
+                foreach (var f in Presets.Factory(Presets.Base))
+                    File.WriteAllText(Path.Combine(outDir, "base", Presets.FactoryKey(f) + ".txt"),
+                                      $"fidelity={f.Body["fidelity"]}\n" + string.Join(" ", Presets.OptionsOf(f.Body).Args()) + "\n");
+                Environment.Exit(0);
             }
             if (Environment.GetCommandLineArgs().Contains("--generate"))
             {

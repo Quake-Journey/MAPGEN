@@ -29,7 +29,9 @@ DOC = REPO / "doc" / "mapgen_studio"
 STUDIO = REPO / "tools" / "mapgen_studio" / "MapgenStudio"
 GUIDES = {"ru": DOC / "MAPGEN_Studio_Guide_RU.md", "en": DOC / "MAPGEN_Studio_Guide_EN.md"}
 IMAGE = re.compile(r"!\[[^\]]*\]\(screens/(ru|en)/([a-z_]+\.png)\)")
-PAGES = ["home", "generate", "generate_options", "library", "map", "settings", "about", "run", "run_full"]
+PAGES = ["home", "generate", "generate_options", "generate_scratch", "generate_scratch_tower", "library", "map", "map_scratch",
+         "settings", "about",
+         "run", "run_full"]
 FAILED = TOTAL = 0
 
 
@@ -63,7 +65,9 @@ def loc_options(lang: str) -> list[str]:
 
 
 INSTALLED = Path(r"O:\Claude2\MapgenStudio")
-SHOT_MAPS = ("mg_10_45f", "mg_cor", "mg_q3t2")
+# brief 20 D1: a map from scratch for its card; brief 30 (3.57): the PO's open space mg_new_51907 (pads, a teleporter in its frame)
+SHOT_MAPS = ("mg_10_45f", "mg_cor", "mg_q3t2", "mg_new_51907")
+FULL_JOB = "mg_new_51907"          # the map on the whole screen: the open space's scheme
 SHOT_INI = r"""[ui]
 language=ru
 theme=light
@@ -108,6 +112,13 @@ def make_shots(work: Path, pages: list[str] | None = None) -> Path | None:
         for f in (INSTALLED / "data" / "descriptions").glob(f"{m}.*"):
             shutil.copy2(f, out / "data" / "descriptions" / f.name)
         shutil.copytree(INSTALLED / "data" / "covers" / m, out / "data" / "covers" / m, dirs_exist_ok=True)
+        # its run's request: the library knows a map from scratch by it (Library.RunFacts) - its chip, its card
+        run = INSTALLED / "data" / "runs" / m
+        if (run / "request.txt").is_file():
+            (out / "data" / "runs" / m).mkdir(parents=True, exist_ok=True)
+            for f in ("request.txt", "ledger.txt", "scratch_request.json", "scratch_skeleton.txt"):
+                if (run / f).is_file():
+                    shutil.copy2(run / f, out / "data" / "runs" / m / f)
     shutil.copy2(TOOLS / "mapgen_delivery_gates.py", out / "tools" / "mapgen_delivery_gates.py")
     (out / "MapgenStudio.ini").write_text(SHOT_INI, encoding="utf-8")
     shots = DOC / "screens"
@@ -115,11 +126,11 @@ def make_shots(work: Path, pages: list[str] | None = None) -> Path | None:
     if not pages or any(p not in ("run", "run_full") for p in pages):
         subprocess.run([str(exe), "--shots", str(shots)], cwd=out, timeout=600, env=env)
     print((out / "shots.txt").read_text(encoding="utf-8") if (out / "shots.txt").is_file() else "no shots report")
-    job = work / "mg_10_45f"
+    job = work / FULL_JOB
     (job / "baseline").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(INSTALLED / "data" / "bsp" / "mg_10_45f.bsp", job / "baseline" / "q2mg.bsp")
+    shutil.copy2(INSTALLED / "data" / "bsp" / f"{FULL_JOB}.bsp", job / "baseline" / "q2mg.bsp")
     for f in ("plan.txt", "ledger.txt"):
-        shutil.copy2(INSTALLED / "data" / "runs" / "mg_10_45f" / f, job / f)
+        shutil.copy2(INSTALLED / "data" / "runs" / FULL_JOB / f, job / f)
     for lang in ("ru", "en") if not pages or "run_full" in pages else ():
         from PIL import Image       # only the full-screen picture is laid together (a home-only retake needs none)
         subprocess.run([str(exe), "--shots-full", str(shots), str(job), lang], cwd=out, timeout=180)

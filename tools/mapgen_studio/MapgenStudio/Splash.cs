@@ -197,6 +197,9 @@ public sealed class Splash : Window
             await Step("splash.window", () =>
             {
                 main = new MainWindow();
+                // brief 29 D1: the start's window takes and keeps its place; the start test's goes off the screen instead
+                if (!_test)
+                    main.KeepPlace();
                 if (_test)
                 {
                     main.WindowStartupLocation = WindowStartupLocation.Manual;

@@ -1043,8 +1043,10 @@ def mark_own_rooms(digs: list, annexes: list) -> list:
     """An annex - named so by the ledger's shape, or matching a planned annex's (or one-door storey's) two ends -
     ends in its own room."""
     for d in digs:
-        if d.get("shape") == "annex" or any(all(abs(d["to"][i] - a["ends"][3 + i]) <= 1.0 for i in range(3))
-                                            for a in annexes):
+        # brief 19 (04.11): a room copied whole (shape room-copy / room-of, brief 11) is an annex too - its far end is
+        # the middle of the room it copied; a map from scratch has no plan the re-deal could match it with
+        if d.get("shape") in ("annex", "room-copy", "room-of") or any(
+                all(abs(d["to"][i] - a["ends"][3 + i]) <= 1.0 for i in range(3)) for a in annexes):
             d["own_room_end"] = "to"
     return digs
 
@@ -1197,6 +1199,12 @@ def selftest(work: Path) -> None:
               " not in it", not ok and "storeys in the plan, 0" not in said, said)
     ok, said = ask_glass(DONOR, DONOR)
     check("selftest: the glass gate refuses q2dm1 itself", not ok, said)
+    # brief 19 (04.11): a room copied whole is an annex - its far end the middle of the room it copied; a passage is not
+    shapes = [{"shape": s_, "from": [0, 0, 0], "to": [256, 0, 0]} for s_ in ("room-copy", "room-of", "tunnel+lift", "stair")]
+    marked_ = mark_own_rooms([dict(d) for d in shapes], [])
+    got_ = {d["shape"]: d.get("own_room_end") for d in marked_}
+    check("selftest: a room-copy and a room-of end in their own room; a tunnel and a stair do not",
+          got_ == {"room-copy": "to", "room-of": "to", "tunnel+lift": None, "stair": None}, str(got_))
     # row 334: round 40's seed-7 map - a hall of 768 whose middle is 432 from its doorway
     r7 = ROUND40_S7 / "deliver" / "candidate.bsp"
     if evidence("selftest: round 40's seed-7 map and job are there",

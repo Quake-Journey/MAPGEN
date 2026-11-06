@@ -34,7 +34,8 @@ REPO = TOOLS.parent
 sys.path.insert(0, str(TOOLS))
 STUDIO = TOOLS / "mapgen_studio" / "MapgenStudio"
 OUT = Path(r"O:\Claude2\_agent_temp\claude\mapgen_release")
-ROOTS = ["mapgen_delivery_gates.py", "mapgen_room_light.py", "mapgen_light_autofit.py", "mapgen_destroy.py"]
+ROOTS = ["mapgen_delivery_gates.py", "mapgen_room_light.py", "mapgen_light_autofit.py", "mapgen_destroy.py",
+         "mapgen_scratch.py", "check_mapgen_not_a_copy.py"]   # brief 19: a map from scratch and its two checks
 
 
 def version() -> str:
@@ -129,6 +130,9 @@ def build(out: Path) -> Path:
     (stage / "tools").mkdir()
     for n in script_closure():
         shutil.copy2(TOOLS / n, stage / "tools" / n)
+    # the licences of the code the tools carry (3.45: Procedural-PBR's noise, MIT - its licence goes with it)
+    if (TOOLS / "third_party").is_dir():
+        shutil.copytree(TOOLS / "third_party", stage / "tools" / "third_party")
     doc = stage / "doc"
     shutil.copytree(REPO / "doc" / "mapgen_studio", doc, ignore=shutil.ignore_patterns("*.tmp"))
     for lang in ("ru", "en"):

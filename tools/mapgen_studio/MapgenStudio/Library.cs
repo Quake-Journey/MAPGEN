@@ -13,12 +13,24 @@ public sealed record MapEntry(string Name, string BspPath, DateTime Made, long B
     /// <summary>The PO, 11.10 (the library's tiles): the base its run was made from, from the run's record.</summary>
     public string? Donor { get; init; }
 
+    /// <summary>Brief 19 D8: «с нуля» (and the style's maps) for a map made from scratch; null otherwise.</summary>
+    public string? Scratch { get; init; }
+
     /// <summary>How far its run took it from the base and what was asked, tenths of a percent; -1 unknown.</summary>
     public int Difference { get; init; } = -1;
     public int Target { get; init; } = -1;
 
+    /// <summary>Brief 24 D1.5: how long its run took, the stages' seconds of its record summed; -1 for a map without them.</summary>
+    public int BuiltSeconds { get; init; } = -1;
+
     /// <summary>The checks passed, of those run.</summary>
     public int GatesPassed => Gates.Count(g => g.pass);
+
+    /// <summary>Brief 27: what each check measured (the gates file's words after « -- »), in the checks' order.</summary>
+    public IReadOnlyList<string> Said { get; init; } = Array.Empty<string>();
+
+    /// <summary>Brief 27: the failed checks that mean the map cannot be played (<see cref="Library.Blocking"/>).</summary>
+    public int GatesBlocking => Gates.Count(g => !g.pass && Library.Blocking(g.what));
 }
 
 public static class Library
@@ -33,15 +45,19 @@ public static class Library
         {
             var name = Path.GetFileNameWithoutExtension(bsp);
             var info = new FileInfo(bsp);
-            var (donor, difference, target) = RunFacts(s, name);
+            var (donor, difference, target, scratch) = RunFacts(s, name);
+            var gates = GateLines(s, name);
             list.Add(new MapEntry(name, bsp, Made(s, name) ?? info.LastWriteTime, info.Length, Cover(s, name),
-                                  Description(s, name), Gates(s, name))
+                                  Description(s, name), gates.Select(g => (g.pass, g.what)).ToList())
             {
+                Said = gates.Select(g => g.said).ToList(),
                 Shots = Shots(s, name),
                 Base = BaseOf(s, name),
                 Donor = donor,
+                Scratch = scratch,
                 Difference = difference,
                 Target = target,
+                BuiltSeconds = BuiltSeconds(s, name),
             });
         }
         return list.OrderByDescending(m => m.Made).ToList();
@@ -51,10 +67,10 @@ public static class Library
     /// The map's run, from its record in data\runs: the base (request.txt) and the difference it reached of the one
     /// asked (the ledger's last «divergence N of target M»). Nothing known for a map made elsewhere.
     /// </summary>
-    private static (string? donor, int difference, int target) RunFacts(Settings s, string name)
+    private static (string? donor, int difference, int target, string? scratch) RunFacts(Settings s, string name)
     {
         var dir = Path.Combine(s.RunsPath, name);
-        string? donor = null;
+        string? donor = null, scratch = null;
         int difference = -1, target = -1;
         try
         {
@@ -63,6 +79,8 @@ public static class Library
                 foreach (var line in File.ReadLines(request))
                     if (line.StartsWith("donor="))
                         donor = line[6..].Trim();
+                    else if (line.StartsWith("scratch=") && line.Length > 9)
+                        scratch = ScratchParams.LabelOf(line[8..]);
             var ledger = Path.Combine(dir, "ledger.txt");
             if (File.Exists(ledger))
             {
@@ -77,7 +95,7 @@ public static class Library
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or FormatException)
         {
         }
-        return (donor, difference, target);
+        return (donor, difference, target, scratch);
     }
 
     /// <summary>Every picture of the map, in name order.</summary>
@@ -177,6 +195,24 @@ public static class Library
         return target;
     }
 
+    /// <summary>Brief 24 D1.5: the seconds its run's stages took (`stage.KEY=SECONDS` of NAME.info.txt); -1 without them.</summary>
+    private static int BuiltSeconds(Settings s, string name)
+    {
+        var p = Path.Combine(s.DescriptionsPath, $"{name}.info.txt");
+        if (!File.Exists(p))
+            return -1;
+        var sum = 0;
+        var any = false;
+        foreach (var line in File.ReadAllLines(p))
+            if (line.StartsWith("stage.", StringComparison.Ordinal) && line.IndexOf('=') is var eq && eq > 0
+                && int.TryParse(line[(eq + 1)..], out var sec))
+            {
+                sum += sec;
+                any = true;
+            }
+        return any ? sum : -1;
+    }
+
     /// <summary>When a map made here was finished (S-5): `NAME.info.txt` beside its description.</summary>
     private static DateTime? Made(Settings s, string name)
     {
@@ -198,7 +234,9 @@ public static class Library
             return null;
         var first = File.ReadLines(p).FirstOrDefault() ?? "";
         var m = System.Text.RegularExpressions.Regex.Match(first, @"donor ([^\s,)]+?)(\.bsp)?[,)]");
-        return m.Success ? m.Groups[1].Value : null;
+        // a map from scratch is checked against its own skeleton's base, named as the map: that is no base (05.11, the
+        // home page said «основа mg_new_duel» of mg_new_duel when its run record was not beside it)
+        return m.Success && !string.Equals(m.Groups[1].Value, name, StringComparison.OrdinalIgnoreCase) ? m.Groups[1].Value : null;
     }
 
     private static string? Description(Settings s, string name)
@@ -212,24 +250,46 @@ public static class Library
         return null;
     }
 
-    /// <summary>The delivery gates' report kept beside the map (<c>name.gates.txt</c>): each PASS/FAIL line.</summary>
-    private static IReadOnlyList<(bool, string)> Gates(Settings s, string name)
+    /// <summary>
+    /// Brief 27 (the PO 06.11: «Карта готова, в неё можно играть … никак не жирный красный статус»): the checks whose
+    /// failure means the map cannot be played - a start in the rock, an item lost at a spawn, a place one cannot leave,
+    /// a major item no spawn reaches, fewer spawns than asked. Every other failed check is a measure of taste or a
+    /// planned edit not built: the map plays. By the check's key (<see cref="Loc.GateKey"/>).
+    /// </summary>
+    private static readonly HashSet<string> BlockingKeys = new()
+    {
+        "gate.starts", "gate.pickups.spawn", "gate.traps", "gate.traps-engine",
+        "gate.every major item reachable from the spawns", "gate.spawns as asked",
+    };
+
+    public static bool Blocking(string what) => BlockingKeys.Contains(Loc.GateKey(what));
+
+    /// <summary>The delivery gates' report kept beside the map (<c>name.gates.txt</c>): each PASS/FAIL line, its
+    /// words after « -- » kept (brief 27: the page shows what a failed check measured).</summary>
+    public static IReadOnlyList<(bool pass, string what, string said)> GateLines(Settings s, string name)
     {
         var p = Path.Combine(s.DescriptionsPath, $"{name}.gates.txt");
-        if (!File.Exists(p))
-            return Array.Empty<(bool, string)>();
-        var gates = new List<(bool, string)>();
-        foreach (var raw in File.ReadAllLines(p))
+        return File.Exists(p) ? ParseGates(File.ReadAllLines(p)) : Array.Empty<(bool, string, string)>();
+    }
+
+    public static IReadOnlyList<(bool pass, string what, string said)> ParseGates(IEnumerable<string> lines)
+    {
+        var gates = new List<(bool, string, string)>();
+        foreach (var raw in lines)
         {
             var line = raw.Trim();
             bool pass = line.StartsWith("PASS"), fail = line.StartsWith("FAIL");
             if (!pass && !fail)
                 continue;
             var what = line[4..].Trim();
+            var said = "";
             var cut = what.IndexOf(" -- ", StringComparison.Ordinal);
             if (cut > 0)
-                what = what[..cut];
-            gates.Add((pass, what));
+            {
+                said = what[(cut + 4)..].Trim();
+                what = what[..cut].Trim();
+            }
+            gates.Add((pass, what, said));
         }
         return gates;
     }

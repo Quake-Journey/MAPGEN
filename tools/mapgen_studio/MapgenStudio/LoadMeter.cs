@@ -36,13 +36,14 @@ public sealed class LoadMeter : Border
         _gpu = Row(rows, Loc.T("load.gpu"));
         _vram = Row(rows, Loc.T("load.vram"));
         GpuStats.Start();
-        _genCpu = Row(rows, Loc.T("load.gen.cpu"));
+        // brief 24 D2: what the generator's share is of, and why its edits use one CPU
+        _genCpu = Row(rows, Loc.T("load.gen.cpu"), Loc.T("load.gen.cpu.tip"));
         _genRam = Row(rows, Loc.T("load.gen.ram"));
         Child = rows;
         SampleMachine();      // the first sample is the base of the next
     }
 
-    private static (TextBlock, ProgressBar) Row(StackPanel rows, string label)
+    private static (TextBlock, ProgressBar) Row(StackPanel rows, string label, string? tip = null)
     {
         var name = new TextBlock { Text = label, FontSize = 13, Opacity = 0.8 };
         var value = new TextBlock { FontSize = 13, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Right };
@@ -52,10 +53,18 @@ public sealed class LoadMeter : Border
         head.Children.Add(value);
         var bar = new ProgressBar { Minimum = 0, Maximum = 100, Height = 6, MinHeight = 6, CornerRadius = new CornerRadius(3),
                                     Foreground = new SolidColorBrush(Color.FromRgb(0x22, 0xc5, 0x5e)) };
+        if (tip != null)
+        {
+            ToolTip.SetTip(head, tip);
+            ToolTip.SetTip(bar, tip);
+        }
         rows.Children.Add(head);
         rows.Children.Add(bar);
         return (value, bar);
     }
+
+    /// <summary>The generator's last share of the whole machine, percent (brief 24 D2: the load box's header); null when none runs.</summary>
+    public double? GeneratorShare { get; private set; }
 
     /// <summary>One beat: the machine since the last one, the run's job since its last one.</summary>
     public void Update(Generation? g)
@@ -84,6 +93,7 @@ public sealed class LoadMeter : Border
             Set(_genCpu, 0, "—");
             Set(_genRam, 0, "—");
             _jobCpu = -1;
+            GeneratorShare = null;
             return;
         }
         // the job's CPU time against the wall clock and every logical CPU: its share of the whole machine
@@ -98,6 +108,7 @@ public sealed class LoadMeter : Border
             {
                 var share = (t - _jobCpu) / 1e7 / wall / Environment.ProcessorCount * 100;
                 Set(_genCpu, share, $"{share:0}%");
+                GeneratorShare = share;
             }
         }
         _jobOf = g;

@@ -42,6 +42,40 @@ public static class GenerateCli
            `--minutes N` sets the time of this run alone */
         var minutes = Opt("--minutes") is { } mt && int.TryParse(mt, NumberStyles.Integer, CultureInfo.InvariantCulture, out var mn)
             ? mn : like?.TimeMinutes ?? s.TimeMinutes;
+        /* brief 19: `--scratch PARAMS.json` (the form's own parameters when the file is not given: `--scratch form`) - a
+           NEW map from scratch, its base made first; FIDELITY is how much the generator's edits dress it */
+        var scratchArg = Opt("--scratch");
+        if (scratchArg != null)
+        {
+            var ps = scratchArg == "form" ? s.Scratch.ToPython(Path.Combine(s.ClientDir, "baseq2"), Engine.DonorsDir)
+                                          : File.ReadAllText(scratchArg);
+            var missingS = Generation.Missing(s, "", scratch: true);
+            if (missingS != null)
+                return $"FAIL {missingS}\n";
+            // the PO, 04.11 («висящих в воздухе архитектурных штучек»): the engine's ornaments hung from a reference are
+                // not dealt on a map from scratch (Decor 1 = 0 %) - its own «Украшения на стенах» governs
+                var opts = s.Options with { WarpSize = 100, WarpShape = 0, WarpTurn = 0, WarpHeight = 100, WarpShift = 0, Decor = 1, Remodels = 0, Blocks = 0,
+                                            FloorShifts = -1, StairReshapes = -1 };
+            var rqS = new GenerationRequest(name, "", fidelity, seed, s.SkipFamilies, s.SaveMapSource,
+                                            MaxAttempts: minutes * 10, Options: opts, TimeMinutes: minutes, Scratch: ps);
+            var gs = Generation.Start(rqS, s);
+            while (gs.Running)
+            {
+                gs.Poll();
+                Thread.Sleep(500);
+            }
+            b.AppendLine($"{(gs.Error.Length == 0 ? "PASS" : "FAIL")} the generation from scratch ended {(gs.Error.Length == 0 ? "with a map" : "without one: " + gs.Error)}");
+            b.AppendLine($"result {gs.Result}, accepted {gs.Accepted}, divergence {gs.Divergence} of {gs.Target}, ended by {gs.EndedBy}");
+            b.AppendLine($"took {(gs.Ended!.Value - gs.Began):hh\\:mm\\:ss}");
+            foreach (var (pass, what) in gs.Gates)
+                b.AppendLine($"  {(pass ? "PASS" : "FAIL")}  gate: {what}");
+            if (gs.LibraryName.Length > 0)
+                b.AppendLine($"library {Path.Combine(s.BspPath, gs.LibraryName + ".bsp")}");
+            b.AppendLine("LOG");
+            foreach (var line in gs.Log)
+                b.AppendLine("  " + line);
+            return b.ToString();
+        }
         var request = like != null
             ? like with
             {

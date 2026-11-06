@@ -8,12 +8,19 @@ namespace MapgenStudio;
 public sealed record GenerationRequest(string Name, string Donor, int Fidelity, long Seed, IReadOnlyList<string> SkipFamilies,
                                        bool SaveMapSource, bool Draft = false, int MaxAttempts = 0, bool RunGates = true,
                                        IReadOnlyList<string>? Grafts = null, bool Cover = true,
-                                       GenerationOptions? Options = null, int TimeMinutes = 0);
+                                       GenerationOptions? Options = null, int TimeMinutes = 0, string Scratch = "")
+{
+    /// <summary>Brief 19: a map from scratch - its base is made first, by tools/mapgen_scratch.py, from these parameters.</summary>
+    public bool FromScratch => Scratch.Length > 0;
+
+    /// <summary>What the map is made from, for the labels: the donor, or «с нуля» (with the style's maps).</summary>
+    public string BaseLabel => FromScratch ? ScratchParams.LabelOf(Scratch) : Donor;
+}
 
 /// <summary>
 /// Row 410 (the PO, 05.10: «какие еще параметры добавить в генератор ... чтобы получать больше вариаций
 /// творчества»): the plan's own counts and sizes, 0 each for «По умолчанию» - the likeness decides.
-/// AnnexSize 0 default, 1 small, 2 medium, 3 large, 4 halls.
+/// AnnexSize 0 default, 1 small, 2 medium, 3 large, 4 halls, 5 niches (brief 13 W10).
 /// Decor (row 412, the PO: «украшения на стенах ... Можно также это вынести в параметры»): the base's own wall pieces
 /// - its lamps and the ornaments it repeats - on the generator's tunnels: 0 default, 1 none, 2 few, 3 many, 4 most.
 /// </summary>
@@ -174,7 +181,15 @@ public sealed class Generation
     public GenerationRequest Request { get; }
     public string RunDir { get; }
     public string JobDir => Path.Combine(RunDir, "job");
-    public DateTime Began { get; } = DateTime.Now;
+    /// <summary>Brief 19: where a map from scratch is made - its skeleton, base, measure and bands.</summary>
+    public string ScratchDir => Path.Combine(RunDir, "scratch");
+    /// <summary>The base the engine works on: the donor's file - or, for a map from scratch, the one made first.</summary>
+    public string BasePath => Request.FromScratch ? Path.Combine(ScratchDir, Request.Name + ".bsp") : Engine.DonorPath(Request.Donor);
+    public DateTime Began { get; internal set; } = DateTime.Now;
+    /// <summary>Brief 24 D1: the plan said it has nothing left to try (its edits are over); a new deal clears it.</summary>
+    public bool PlanExhausted { get; private set; }
+    /// <summary>The highest «Ход работы» percent shown: it never goes back within a run (brief 24 D1).</summary>
+    internal double ShownPercent { get; set; }
     public DateTime? Ended { get; private set; }
 
     public string Stage { get; private set; } = "start";          // start baseline plan attempt judge light finish gates done
@@ -455,6 +470,37 @@ public sealed class Generation
     private NativeJob? _gatesJob;
     private string _gatesOut = "";
 
+    /// <summary>
+    /// The self-test's run of a map from scratch (the PO, 04.11: «проверяй всё такое»): a request at a stage, with
+    /// figures in every field the run page shows - nothing started, nothing written.
+    /// </summary>
+    internal static Generation ForSelfTest(Settings s, string stage, bool fromScratch = true)
+    {
+        // brief 24 D1: and a run of a map from a ready one (its page keeps «Отличие от основы»)
+        var r = new GenerationRequest(fromScratch ? "mg_new_selftest" : "mg_base_selftest", fromScratch ? "" : "q2dm1", 70, 7,
+                                      Array.Empty<string>(), false,
+                                      Options: new GenerationOptions(Decor: 1, Remodels: 0, Blocks: 0), TimeMinutes: 60,
+                                      Scratch: fromScratch ? s.Scratch.ToPython(Path.Combine(s.ClientDir, "baseq2"), Engine.DonorsDir) : "");
+        var g = new Generation(r, s, Path.Combine(Path.GetTempPath(), "mapgen_selftest_scratch_run"))
+        {
+            Stage = stage, Budget = 250, Target = 300, Divergence = 80, Accepted = 3, Compiles = 5, Attempts = 18,
+            Offered = 30, PlanCan = 330, PlanBuilds = 40, PlanFirstCan = 330, LastFamily = "reshape-room",
+            LastVerdict = "ACCEPTED",
+        };
+        var order = new[] { "scratch", "start", "baseline", "plan", "attempt", "judge", "light", "gates", "cover", "done" };
+        var at = Array.IndexOf(order, stage);
+        for (var k = 0; k <= Math.Max(0, at); k++)
+            g.StageBegan[order[k]] = DateTime.Now.AddMinutes(k - order.Length);
+        if (stage == "done")
+        {
+            g.Ended = DateTime.Now;
+            g.Result = "ERR_TARGET_UNREACHABLE";
+            g.EndedBy = "plan";
+            g.LibraryName = r.Name;
+        }
+        return g;
+    }
+
     private Generation(GenerationRequest r, Settings s, string? runDir = null)
     {
         Request = r;
@@ -501,6 +547,8 @@ public sealed class Generation
             $"checkpoints={(_s.KeepCheckpoints ? 1 : 0)}",
             // brief 16 D6: the minutes the run may take
             $"time_minutes={r.TimeMinutes}",
+            // brief 19: the parameters of a map from scratch (one line of JSON)
+            $"scratch={r.Scratch}",
             $"began={DateTime.Now:O}",
         });
     }
@@ -531,7 +579,7 @@ public sealed class Generation
                                                            L("floor_shifts"), L("stair_reshapes"),
                                                            D("warp_size", 100), I("warp_shape"),
                                                            I("warp_turn"), D("warp_height", 100), I("warp_shift")),
-                                     I("time_minutes"));
+                                     I("time_minutes"), kv.GetValueOrDefault("scratch", ""));
     }
 
     /// <summary>
@@ -800,7 +848,7 @@ public sealed class Generation
         var args = new List<string>
         {
             Path.Combine(Engine.Dir, "q2tool.exe"),
-            Engine.DonorPath(r.Donor),
+            g.BasePath,
             g.JobDir, "q2mg", r.Fidelity.ToString(CultureInfo.InvariantCulture), r.Seed.ToString(CultureInfo.InvariantCulture),
             "--moddir", Path.Combine(s.ClientDir, "baseq2"),
         };
@@ -813,17 +861,38 @@ public sealed class Generation
             args.AddRange(new[] { "--time-budget", r.TimeMinutes.ToString(CultureInfo.InvariantCulture) });
         foreach (var f in r.SkipFamilies)
             args.AddRange(new[] { "--skip-family", f });
+        /* brief 19 D3/D5: a map from scratch has its items and spawns placed by the mechanics - nobody shuffles them -
+           and its windows and liquids are what its parameters asked: the edits that add more are not dealt */
+        if (r.FromScratch)
+            /* 04.11: the engine's digs on a base from scratch left a passage closed at one end and a stair's fixture
+               in a room's air (the static and digwalls gates), and its wall moves (remodel, push-wall) carry the spawns
+               standing before a wall forward with it - one ended 215 u from another, in its sight (brief 19 §4: none
+               under 300). Engine work for the next brief; until then a run from scratch deals none of them (its
+               skeleton has its rooms, storeys, stairways and spawns already) */
+            /* the PO, 04.11 (blocks among «висящих в воздухе архитектурных штучек ... в картах людей такого нет») */
+            /* brief 21 D4, the PO 05.11 («такие вот башенки … из уровня в уровень - это же бред»): the engine's floor
+               shifts raised stepped mounds and round pedestals in the middle of the rooms (mg_new_style's three, the
+               duel's two of 3.43, the ledgers), and its room reshapes move walls as push-wall does - off on a base
+               from scratch too */
+            /* 3.45, the PO 05.11 («и вот этот блок, он вообще о чём, когда речь о новой карте?»): none of «Что можно
+               менять» either - stairs-to-lift added lifts no parameter asked, relevel and the connectors moved its
+               floors and doorways; the card is not on the from-scratch page */
+            foreach (var f in new[] { "swap-item", "move-spawn", "window", "flood", "dig", "span", "remodel", "push-wall",
+                                      "block", "floor-shift", "stair-reshape", "reshape-room", "stairs-to-lift", "relevel",
+                                      "widen-connector", "turn-bundle", "open-connector" }
+                         .Where(f => !r.SkipFamilies.Contains(f)))
+                args.AddRange(new[] { "--skip-family", f });
         // the other maps chosen with the base: rooms may be brought in from them (the generator's graft pass)
         foreach (var d in r.Grafts ?? Array.Empty<string>())
             args.AddRange(new[] { "--donor", Engine.DonorPath(d) });
         /* row 400: a donor whose own walk fails the absolutes is held to itself; on q2dm1 this changes nothing */
         args.Add("--hold-to-donor");
         /* row 405: the donor's light calibration, written beside it by the engine's builder (cor, q3t2) */
-        var light = Path.ChangeExtension(Engine.DonorPath(r.Donor), ".light.txt");
+        var light = Path.ChangeExtension(g.BasePath, ".light.txt");
         if (File.Exists(light) && File.ReadAllText(light).Trim() is { Length: > 0 } flags)
             args.AddRange(new[] { "--light-flags", flags });
         /* row 410: and the donor's sun as the light tool must be told it (its colour, its angle) */
-        var lightKeys = Path.ChangeExtension(Engine.DonorPath(r.Donor), ".light_keys.txt");
+        var lightKeys = Path.ChangeExtension(g.BasePath, ".light_keys.txt");
         if (File.Exists(lightKeys) && File.ReadAllText(lightKeys).Trim() is { Length: > 0 } keys)
             args.AddRange(new[] { "--light-keys", keys });
         // row 410: the creative options, the same on a resume (the replay must deal the same plan)
@@ -854,13 +923,19 @@ public sealed class Generation
     }
 
     /// <summary>What the engine needs: its programs, the donor, and a client whose baseq2 holds the textures.</summary>
-    public static string? Missing(Settings s, string donor, IEnumerable<string>? grafts = null)
+    public static string? Missing(Settings s, string donor, IEnumerable<string>? grafts = null, bool scratch = false)
     {
         var engine = Engine.Dir;
         foreach (var f in new[] { "pipeline.exe", "q2tool.exe" }
-                     .Concat(new[] { donor }.Concat(grafts ?? Array.Empty<string>()).Select(d => Path.Combine("donors", d + ".bsp"))))
+                     .Concat(new[] { donor }.Concat(grafts ?? Array.Empty<string>()).Where(d => d.Length > 0)
+                                 .Select(d => Path.Combine("donors", d + ".bsp"))))
             if (!File.Exists(Path.Combine(engine, f)))
                 return Loc.F("run.missing.engine", Path.Combine(engine, f));
+        /* brief 19: a map from scratch is made by the program's own Python tools first */
+        if (scratch && Engine.Python == null)
+            return Loc.T("scratch.missing.python");
+        if (scratch && Engine.Repo == null)
+            return Loc.T("scratch.missing.tools");
         if (!Settings.CheckClient(s.ClientDir).ok)
             return Loc.T("run.missing.client");
         return null;
@@ -871,12 +946,203 @@ public sealed class Generation
         var g = new Generation(r, s);
         Directory.CreateDirectory(g.JobDir);
         g.SaveRequest();
+        if (r.FromScratch)
+        {
+            g.StartScratch();
+            Current = g;
+            return g;
+        }
         Launch(g, s, resume: false);
         return g;
     }
 
+    private NativeJob? _scratchJob;
+
+    /* brief 25 item 1: the skeleton's candidates in their order of merit (scratch\order.json) - the engine is handed the
+       first; when it refuses one as a base (ERR_BASELINE), the next is made the base (`mapgen_scratch.py --promote K`)
+       and the engine started again. 3.50 probed the chosen one with the engine first (ly3: ~270 s of a 309-s stage),
+       and the engine then did the same rebuild again at its own start */
+    private List<int> _scratchOrder = new();
+    private int _scratchAt;
+
+    /// <summary>The candidates the engine was handed (1 when it took the first).</summary>
+    public int EngineTried => _scratchAt + 1;
+
+    /// <summary>The engine refused the base made from scratch: the next candidate made the base, the engine again.</summary>
+    private bool NextCandidate()
+    {
+        if (_scratchAt + 1 >= _scratchOrder.Count || Engine.Python == null || Engine.Repo == null)
+            return false;
+        var was = _scratchOrder[_scratchAt];
+        _scratchAt++;
+        var k = _scratchOrder[_scratchAt];
+        Event(Loc.F("run.scratch.next", was, k, _scratchAt + 1, _scratchOrder.Count));
+        Log.Add(Loc.F("run.scratch.next", was, k, _scratchAt + 1, _scratchOrder.Count));
+        Result = "";
+        BaselineAxes = "";
+        BaselineWhat = "";
+        try
+        {
+            if (Directory.Exists(JobDir))
+                Directory.Delete(JobDir, true);
+            Directory.CreateDirectory(JobDir);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Log.Add(e.Message);
+            return false;
+        }
+        _read = 0;
+        var tool = Path.Combine(Engine.Repo!, "tools", "mapgen_scratch.py");
+        var code = "import runpy,sys;" +
+                   $"sys.argv=[r'{tool}',r'{ScratchDir}','--name','{Request.Name}','--promote','{k}'];" +
+                   $"sys.stdout=open(r'{Path.Combine(ScratchDir, "promote.txt")}','a',encoding='utf-8',buffering=1);" +
+                   "sys.stderr=sys.stdout;" +
+                   $"runpy.run_path(r'{tool}',run_name='__main__')";
+        _scratchJob = new NativeJob();
+        _sharePercent = -1;
+        ApplyShare();
+        _scratchJob.Start(Engine.Python!, new[] { "-c", code }, RunDir);
+        return true;
+    }
+
+    /// <summary>
+    /// Brief 19: the first step of a map from scratch - the skeleton (many seeds, the best by the human bands), the
+    /// base's brushes, its compile, its measure (tools/mapgen_scratch.py). The engine then dresses that base as any
+    /// other, and the run goes on as every run does.
+    /// </summary>
+    private void StartScratch()
+    {
+        Stage = "scratch";
+        StageBegan["scratch"] = DateTime.Now;
+        /* brief 24 D1.6: the engine's start is when its first line comes, after the skeleton - the constructor's mark
+           would stay (a stage begun is never begun again), and the edits' clock and the record would count the skeleton */
+        StageBegan.Remove("start");
+        Directory.CreateDirectory(ScratchDir);
+        var paramsPath = Path.Combine(ScratchDir, "params.json");
+        File.WriteAllText(paramsPath, Request.Scratch);
+        var tool = Path.Combine(Engine.Repo!, "tools", "mapgen_scratch.py");
+        var game = Path.Combine(_s.ClientDir, "baseq2");
+        /* brief 24 D3.4: the plans' and the candidates' processes are the CPUs the job's mask gives at this hour's share
+           (3.49: min(day share of every CPU, 8) - 8 asked of 12 allowed, by night more than allowed) */
+        var threads = ThreadsFor(ShareNow());
+        var code = "import os,runpy,sys;" +
+                   $"os.environ['MAPGEN_Q2TOOL']=r'{Path.Combine(Engine.Dir, "q2tool.exe")}';" +
+                   $"sys.argv=[r'{tool}',r'{ScratchDir}','--params',r'{paramsPath}','--seed','{Request.Seed}'," +
+                   $"'--name','{Request.Name}','--game',r'{game}','--threads','{threads}','--candidates','10','--tries','100'," +
+                   $"'--engine',r'{Path.Combine(Engine.Dir, "pipeline.exe")}'];" +
+                   $"sys.stdout=open(r'{Path.Combine(ScratchDir, "scratch.txt")}','w',encoding='utf-8',buffering=1);" +
+                   "sys.stderr=sys.stdout;" +
+                   $"runpy.run_path(r'{tool}',run_name='__main__')";
+        _scratchJob = new NativeJob();
+        _sharePercent = -1;
+        ApplyShare();
+        _scratchJob.Start(Engine.Python!, new[] { "-c", code }, RunDir);
+        WriteOwner(RunDir);
+        Event(Loc.T("stage.scratch.now"));
+    }
+
+    /// <summary>
+    /// Brief 24 D1: how far the skeleton stage is, from its own log (scratch.txt, line-buffered): 0..1 and its words.
+    /// The textures 5 %, the plans to 55 % («plans: k of N»), the candidates to 95 % («candidates built: k of N»), the
+    /// candidate the engine accepts 98 %, the tool's last line (its JSON result) 100 %.
+    /// </summary>
+    public static (double fraction, string said) ScratchProgressOf(string text)
+    {
+        var f = 0.0;
+        var said = "";
+        foreach (var raw in text.Split('\n'))
+        {
+            var line = raw.Trim();
+            System.Text.RegularExpressions.Match m;
+            if (line.StartsWith("the Studio's textures:", StringComparison.Ordinal))
+            {
+                f = Math.Max(f, 0.05);
+                said = Loc.T("run.progress.scratch.textures");
+            }
+            else if ((m = System.Text.RegularExpressions.Regex.Match(line, @"^plans: (\d+) of (\d+)$")).Success)
+            {
+                var (d, n) = (int.Parse(m.Groups[1].Value), Math.Max(1, int.Parse(m.Groups[2].Value)));
+                f = Math.Max(f, 0.05 + 0.50 * d / n);
+                said = Loc.F("run.progress.scratch.plans", d, n);
+            }
+            else if (line.StartsWith("skeletons:", StringComparison.Ordinal))
+                f = Math.Max(f, 0.55);
+            else if ((m = System.Text.RegularExpressions.Regex.Match(line, @"^candidates built: (\d+) of (\d+)$")).Success)
+            {
+                var (d, n) = (int.Parse(m.Groups[1].Value), Math.Max(1, int.Parse(m.Groups[2].Value)));
+                f = Math.Max(f, 0.55 + 0.40 * d / n);
+                said = Loc.F("run.progress.scratch.cands", d, n);
+            }
+            else if (line.StartsWith("candidates in order of merit:", StringComparison.Ordinal)
+                     || System.Text.RegularExpressions.Regex.IsMatch(line, @"^cand\d+: the engine accepts it"))
+            {
+                f = Math.Max(f, 0.98);
+                said = Loc.T("run.progress.scratch.chosen");
+            }
+            else if (line.StartsWith("{\"ok\"", StringComparison.Ordinal))
+                f = 1.0;
+        }
+        return (f, said);
+    }
+
+    /// <summary>The skeleton stage's progress read now (brief 24 D1); 0 and "" before its log has a line.</summary>
+    public double ScratchFraction { get; private set; }
+    public string ScratchSaid { get; private set; } = "";
+
+    /// <summary>The skeleton's log read as it grows (the tool writes it line by line; read shared).</summary>
+    internal void ReadScratchProgress()
+    {
+        try
+        {
+            var said = Path.Combine(ScratchDir, "scratch.txt");
+            if (!File.Exists(said))
+                return;
+            using var fs = new FileStream(said, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var rd = new StreamReader(fs);
+            (ScratchFraction, ScratchSaid) = ScratchProgressOf(rd.ReadToEnd());
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    private void PollScratch()
+    {
+        ReadScratchProgress();
+        if (_scratchJob == null || !_scratchJob.Exited(out _))
+            return;
+        _scratchJob.Dispose();
+        _scratchJob = null;
+        var said = Path.Combine(ScratchDir, "scratch.txt");
+        if (File.Exists(said))
+            foreach (var line in File.ReadAllLines(said).TakeLast(12))
+                Log.Add(line);
+        if (!File.Exists(BasePath))
+        {
+            Error = Loc.T("result.ERR_SYNTHESIS");
+            Finish();
+            return;
+        }
+        if (_scratchOrder.Count == 0)
+        {
+            try
+            {
+                var order = Path.Combine(ScratchDir, "order.json");
+                if (File.Exists(order))
+                    _scratchOrder = System.Text.Json.JsonSerializer.Deserialize<List<int>>(File.ReadAllText(order)) ?? new();
+            }
+            catch (Exception e) when (e is IOException or System.Text.Json.JsonException)
+            {
+                _scratchOrder = new();
+            }
+            Event(Loc.T("scratch.base.made"));
+        }
+        Launch(this, _s, resume: false);
+    }
+
     /// <summary>The share of the CPU for this hour (day / night, R5), applied to the job when it changes.</summary>
-    private void ApplyShare()
+    internal void ApplyShare()
     {
         var hour = DateTime.Now.Hour;
         var share = hour >= _s.DayFrom && hour < _s.DayTo ? _s.CpuDayShare : _s.CpuNightShare;
@@ -886,13 +1152,24 @@ public sealed class Generation
         var cpus = Math.Max(1, (int)Math.Floor(Environment.ProcessorCount * share / 100.0));
         _job?.Limit(cpus, _s.Priority);
         _gatesJob?.Limit(cpus, _s.Priority);
-        // row 404: what the job actually got - performance cores only
-        var fast = NativeJob.PerformanceCpus().Count;
-        var used = fast > 0 ? Math.Min(cpus, fast) : cpus;
-        Log.Add(Loc.F("run.share", share, used, Environment.ProcessorCount));
+        _scratchJob?.Limit(cpus, _s.Priority);
+        // row 404: what the job actually got - performance cores only. Brief 24 D2: the mask's own count (3.49 said
+        // min(cpus, fast) = 16 at 80 % where the mask gives 12: floor(25 x 16 / 32))
+        CpuThreads = ThreadsFor(share);
+        Log.Add(Loc.F("run.share", share, CpuThreads, Environment.ProcessorCount));
     }
 
     public int CpuShare => _sharePercent;
+
+    /// <summary>The logical CPUs the job may use at this share (the bits of its affinity mask), brief 24 D2.</summary>
+    public int CpuThreads { get; private set; }
+
+    /// <summary>The bits of the mask a share gives: what the job gets and what the skeleton's workers number.</summary>
+    public static int ThreadsFor(int share) =>
+        System.Numerics.BitOperations.PopCount(NativeJob.Mask(Math.Max(1, (int)Math.Floor(Environment.ProcessorCount * share / 100.0))));
+
+    /// <summary>This hour's share (day or night).</summary>
+    private int ShareNow() => DateTime.Now.Hour >= _s.DayFrom && DateTime.Now.Hour < _s.DayTo ? _s.CpuDayShare : _s.CpuNightShare;
 
     /// <summary>
     /// What the window reads and what the polling writes are kept apart by this lock (row 410, the PO 05.10: «студия
@@ -939,6 +1216,11 @@ public sealed class Generation
             return;
         }
         ApplyShare();
+        if (_scratchJob != null)
+        {
+            PollScratch();
+            return;
+        }
         if (_gatesJob != null)
         {
             PollGates();
@@ -958,6 +1240,8 @@ public sealed class Generation
             _job = null;
             if (Crashed || string.IsNullOrEmpty(Artifact) || !File.Exists(Artifact))
             {
+                if (!Crashed && Request.FromScratch && Result == "ERR_BASELINE" && Error.Length == 0 && NextCandidate())
+                    return;
                 if (Error.Length == 0)
                     Error = Crashed ? Loc.F("run.crashed", CrashAttempts())
                                     : Result == "ERR_BASELINE" ? BaselineSaid()
@@ -1132,6 +1416,7 @@ public sealed class Generation
                 break;
             case "redeal":
                 AtEdit = -1;               // a new plan: its edits are still to come
+                PlanExhausted = false;
                 break;
             case "plan-value":
                 // brief 16 D2: what the plan can give, said before its first build and after each new deal
@@ -1139,9 +1424,14 @@ public sealed class Generation
                 PlanBuilds = I("builds");
                 if (PlanFirstCan < 0)
                     PlanFirstCan = PlanCan;
-                Event(PlanWord());
+                // brief 24 D1: a map from scratch does not speak of its difference on the scheme - the log keeps it
+                if (Request.FromScratch)
+                    Log.Add(PlanWord());
+                else
+                    Event(PlanWord());
                 break;
             case "plan-exhausted":
+                PlanExhausted = true;
                 Event(Loc.T("run.plan.exhausted"));
                 break;
             case "warp":
@@ -1235,7 +1525,7 @@ public sealed class Generation
         // from), then the gates script, both outputs into gates.txt, inside the job
         var script = Path.Combine(repo, "tools", "mapgen_delivery_gates.py");
         var rooms = Path.Combine(repo, "tools", "mapgen_room_light.py");
-        var donor = Engine.DonorPath(Request.Donor);
+        var donor = BasePath;
         /* the base's frame: what the map is held to - its pickups, glass, water, stairways, rooms' light - is the warped
            base it was built on, the donor's places moved (q2dm3 at 150 %: «fixed glass beyond the donor's» 91 against
            75, a stairway «on the donor's rock»); the light's calibration stays the donor's own */
@@ -1252,6 +1542,7 @@ public sealed class Generation
         // brief 13 W1: the checks, the light and the ruin against THIS client's game - the tools had the authors' own
         // folder hard-wired, and the light step never worked on any other machine
         var env = "import os;" + $"os.environ['MAPGEN_GAME']=r'{Path.Combine(_s.ClientDir, "baseq2")}';" +
+                  $"os.environ['MAPGEN_DONORS']=r'{Engine.DonorsDir}';" +
                   (Directory.Exists(helpers) ? $"os.environ['MAPGEN_HELPERS']=r'{helpers}';" : "") +
                   $"os.environ['MAPGEN_Q2TOOL']=r'{Path.Combine(Engine.Dir, "q2tool.exe")}';" +
                   // brief 11 D2: the released Studio's texture pack (engine/textures/mapgen)
@@ -1274,12 +1565,32 @@ public sealed class Generation
          */
         var checks = string.Join(",", new[] { "pickups", "glass", "hall", "annex", "storeys", "stairways", "clips",
                                               "digwalls", "sky", "eye", "stair", "finished", "water", "reach", "axes",
-                                              "static", "starts" });
+                                              "static", "starts" }
+                                     // brief 19: the PO's eye and the stair are q2dm1's places - a map from scratch has neither
+                                     .Where(c => !Request.FromScratch || c is not ("eye" or "stair")));
+        /* brief 19 D6/D7: a map from scratch is also measured as people's maps were (its parameters asked of it) and
+           proved not a copy of any map the generator knows - on the map as the generation finished it */
+        /* brief 24 D3.3: the three scripts of a map from scratch run side by side - each reads the finished map and the
+           skeleton's request and plan; `--final` writes only its record into the scratch folder, the other two write
+           nothing (read 06.11); their words joined in the same order as before. Brief 29 D2: in the LAST step (the
+           light's), after the ruin and the relight - the map as the library gets it */
+        var scratchStart = !Request.FromScratch ? "" :
+            $"s0=P([sys.executable,r'{Path.Combine(repo, "tools", "mapgen_scratch.py")}','--final',r'{candidate}',r'{ScratchDir}']);" +
+            $"s1=P([sys.executable,r'{Path.Combine(repo, "tools", "check_mapgen_new_map.py")}',r'{candidate}'," +
+            $"'--asked',r'{Path.Combine(ScratchDir, "request.json")}','--plan',r'{Path.Combine(ScratchDir, "skeleton.txt")}']);" +
+            $"s2=P([sys.executable,r'{Path.Combine(repo, "tools", "check_mapgen_not_a_copy.py")}',r'{candidate}'," +
+            $"'--asked',r'{Path.Combine(ScratchDir, "request.json")}']);";
+        var scratchEnd = !Request.FromScratch ? "" :
+            "s0.communicate();o1,e1=s1.communicate();o2,e2=s2.communicate();" +
+            "t+='\\nFROM SCRATCH\\n'+o1+e1+'\\nNOT A COPY\\n'+o2+e2;" +
+            "rc=rc or s1.returncode or s2.returncode;";
         var gatesCode = env + "import subprocess,sys;" +
-                        $"r=subprocess.run([sys.executable,r'{script}',r'{candidate}','--job',r'{JobDir}'," +
-                        $"'--donor',r'{checkDonor}'{second},'--only','{checks}'],capture_output=True,text=True);" +
-                        $"open(r'{_gatesOut}','w',encoding='utf-8').write(r.stdout+r.stderr);" +
-                        "sys.exit(r.returncode)";
+                        "P=lambda a:subprocess.Popen(a,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True);" +
+                        $"r=P([sys.executable,r'{script}',r'{candidate}','--job',r'{JobDir}'," +
+                        $"'--donor',r'{checkDonor}'{second},'--only','{checks}']);" +
+                        "o,e=r.communicate();t=o+e;rc=r.returncode;" +
+                        $"open(r'{_gatesOut}','w',encoding='utf-8').write(t);" +
+                        "sys.exit(rc)";
         var ruinOut = Path.Combine(RunDir, "destruction.txt");
         var destroyCode = env + "import subprocess,sys,os;" +
               $"d=subprocess.run([sys.executable,r'{destroy}',r'{candidate}','--donor',r'{checkDonor}','--destruction','{pct}'," +
@@ -1312,10 +1623,15 @@ public sealed class Generation
                    "capture_output=True,text=True) if 'REFITTED' in g.stdout else None;" +
                    $"r=subprocess.run([sys.executable,r'{script}',r'{candidate}','--job',r'{JobDir}'," +
                    $"'--donor',r'{donor}'{second},'--only','light'],capture_output=True,text=True);" +
+                   // brief 29 D2: a map from scratch measured as people's maps and proved not a copy on the map as it
+                   // goes to the library - after the ruin and the light, the last steps that change it (3.54 measured
+                   // it before them: «lit» 0 % in the run, 2 % on the delivered map)
+                   "P=lambda a:subprocess.Popen(a,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True);t='';rc=0;" +
+                   scratchStart + scratchEnd +
                    $"open(r'{lightOut}','w',encoding='utf-8').write('LIGHT ON THE FINISHED MAP\\n'+r.stdout+r.stderr" +
                    "+'\\nLIGHT FIT\\n'+f.stdout+f.stderr+'\\nROOM LIGHT\\n'+l.stdout+l.stderr" +
-                   "+'\\nLIGHT REFIT\\n'+g.stdout+g.stderr+('\\nROOM LIGHT AGAIN\\n'+l2.stdout+l2.stderr if l2 else ''));" +
-                   "sys.exit(r.returncode)";
+                   "+'\\nLIGHT REFIT\\n'+g.stdout+g.stderr+('\\nROOM LIGHT AGAIN\\n'+l2.stdout+l2.stderr if l2 else '')+t);" +
+                   "sys.exit(r.returncode or rc)";
         _steps.Clear();
         _steps.Enqueue(("gates", gatesCode, _gatesOut));
         if (pct > 0)
@@ -1458,6 +1774,7 @@ public sealed class Generation
             var dir = RunDir;
             var settings = _s;
             KeepEvidence();
+            RecordStageSeconds();
             Task.Run(() =>
             {
                 var bytes = FolderBytes(dir);
@@ -1465,6 +1782,67 @@ public sealed class Generation
                 lock (Sync)
                     Log.Add(why.Length == 0 ? Loc.F("run.cleaned", Size(bytes)) : Loc.F("delete.failed", why));
             });
+        }
+    }
+
+    /// <summary>
+    /// Brief 24 D1: what each stage took, seconds of work (a pause aside) - from its start to the next stage's, the last
+    /// one's to the end. A new deal and a resume are the edits', the engine's finishing the light's (RunProgress.Canonical).
+    /// </summary>
+    public Dictionary<string, int> StageSeconds()
+    {
+        var order = StageBegan.Where(kv => kv.Key is not ("done" or "failed" or "stopped")).OrderBy(kv => kv.Value).ToList();
+        var end = Ended ?? DateTime.Now;
+        var d = new Dictionary<string, int>();
+        for (var i = 0; i < order.Count; i++)
+        {
+            var to = i + 1 < order.Count ? order[i + 1].Value : end;
+            var key = RunProgress.Canonical(order[i].Key);
+            d[key] = d.GetValueOrDefault(key) + (int)Math.Round(Worked(order[i].Value, to).TotalSeconds);
+        }
+        return d;
+    }
+
+    /// <summary>The cover is to be taken after the checks (the run asked it and the settings take covers).</summary>
+    public bool CoverPlanned => Request.Cover && _s.AutoCovers;
+
+    /// <summary>The players of a map from scratch (its request's), 0 for a map from a ready one.</summary>
+    public int ScratchPlayers
+    {
+        get
+        {
+            if (!Request.FromScratch)
+                return 0;
+            try
+            {
+                return System.Text.Json.Nodes.JsonNode.Parse(Request.Scratch)?["players"]?.GetValue<int>() ?? 2;
+            }
+            catch (Exception e) when (e is System.Text.Json.JsonException or InvalidOperationException or FormatException)
+            {
+                return 2;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Brief 24 D1: the stages' seconds into the map's record (NAME.info.txt), after the cover - the next run of the same
+    /// kind expects its stages from them (RunHistory), the library says «Построена за …».
+    /// </summary>
+    private void RecordStageSeconds()
+    {
+        try
+        {
+            var info = Path.Combine(_s.DescriptionsPath, $"{LibraryName}.info.txt");
+            if (!File.Exists(info))
+                return;
+            var lines = File.ReadAllLines(info).Where(l => !l.StartsWith("stage.", StringComparison.Ordinal)).ToList();
+            lines.AddRange(StageSeconds().Select(kv => $"stage.{kv.Key}={kv.Value}"));
+            File.WriteAllLines(info, lines);
+            RunHistory.Forget();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Log.Add(e.Message);
         }
     }
 
@@ -1489,6 +1867,13 @@ public sealed class Generation
                          (Path.Combine(JobDir, "progress.txt"), "progress.txt"),
                          (Path.Combine(JobDir, "progress_before_resume.txt"), "progress_before_resume.txt"),
                          (Path.Combine(JobDir, "plan.txt"), "plan.txt"),
+                         /* brief 19: a map from scratch keeps its skeleton, its picture, its record and its candidates */
+                         (Path.Combine(ScratchDir, "skeleton.txt"), "scratch_skeleton.txt"),
+                         (Path.Combine(ScratchDir, "plan.png"), "scratch_plan.png"),
+                         (Path.Combine(ScratchDir, "record.json"), "scratch_record.json"),
+                         (Path.Combine(ScratchDir, "candidates.txt"), "scratch_candidates.txt"),
+                         (Path.Combine(ScratchDir, "request.json"), "scratch_request.json"),
+                         (Path.Combine(ScratchDir, "style.txt"), "scratch_style.txt"),
                          // brief 15 D3: each family asked, dealt and why not more, by round
                          (Path.Combine(JobDir, "plan_said.txt"), "plan_said.txt"),
                          (Path.Combine(RunDir, "request.txt"), "request.txt"),
@@ -1545,6 +1930,9 @@ public sealed class Generation
             File.WriteAllLines(Path.Combine(_s.DescriptionsPath, $"{LibraryName}.info.txt"), new[]
             {
                 $"made={(Ended ?? DateTime.Now):O}", $"began={Began:O}", $"donor={Request.Donor}",
+                // brief 24 D1: what kind of run it was, for the next one's expectation of its stages
+                $"scratch={(Request.FromScratch ? 1 : 0)}", $"players={ScratchPlayers}", $"minutes={Request.TimeMinutes}",
+                $"engine_tried={EngineTried}",
             });
         }
         catch (Exception ex)
@@ -1635,6 +2023,26 @@ public static class Engine
 
     public static string DonorPath(string name) => Path.Combine(DonorsDir, name + ".bsp");
 
+    /// <summary>A Quake II map's head: «IBSP», version 38.</summary>
+    public static bool IsQ2Bsp(byte[] head) =>
+        head.Length >= 8 && head[0] == (byte)'I' && head[1] == (byte)'B' && head[2] == (byte)'S' && head[3] == (byte)'P'
+        && BitConverter.ToInt32(head, 4) == 38;
+
+    /// <summary>
+    /// Brief 23 D1: a map for the style of a map from scratch is read where it lies, never copied into the donors (the
+    /// PO, 06.11: «Добавить можно, удалить нельзя») - only its head is asked. Throws with the user's words when it is not
+    /// a Quake II map.
+    /// </summary>
+    public static void CheckBsp(string path)
+    {
+        var head = new byte[8];
+        using (var f = File.OpenRead(path))
+            if (f.Read(head, 0, 8) < 8)
+                head = Array.Empty<byte>();
+        if (!IsQ2Bsp(head))
+            throw new InvalidOperationException(Loc.F("gen.donor.notq2", Path.GetFileName(path)));
+    }
+
     /// <summary>The maps a generation may start from: every .bsp in the engine's donors folder, q2dm1 first.</summary>
     public static List<string> Donors() =>
         Directory.Exists(DonorsDir)
@@ -1650,8 +2058,7 @@ public static class Engine
     public static string AddDonor(string path)
     {
         var bytes = File.ReadAllBytes(path);
-        if (bytes.Length < 8 || bytes[0] != (byte)'I' || bytes[1] != (byte)'B' || bytes[2] != (byte)'S' || bytes[3] != (byte)'P'
-            || BitConverter.ToInt32(bytes, 4) != 38)
+        if (!IsQ2Bsp(bytes))
             throw new InvalidOperationException(Loc.F("gen.donor.notq2", Path.GetFileName(path)));
         Directory.CreateDirectory(DonorsDir);
         var stem = new string(Path.GetFileNameWithoutExtension(path).ToLowerInvariant()

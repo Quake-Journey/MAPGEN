@@ -49,8 +49,21 @@ public static class Describe
         var b = new StringBuilder();
         var end = g.Ended ?? DateTime.Now;
         var took = end - g.Began;
-        b.AppendLine(ru ? $"Карта {g.Request.Name} сделана из {g.Request.Donor}."
-                        : $"Map {g.Request.Name}, made from {g.Request.Donor}.");
+        // the PO, 04.11: «откуда например Переделка основы в новой карте? ... проверяй всё такое» - brief 20 D6: a map
+        // from scratch is described as what it is, its skeleton and the skeleton's dressing; no base, no plan of a base
+        var sc = g.Request.FromScratch;
+        if (sc)
+        {
+            // brief 19 D5/D8: the player count, the style, the mechanics, what was asked and what came out
+            b.AppendLine(ru ? $"Карта {g.Request.Name} сделана с нуля: планировку, уровни, переходы и места предметов генератор построил сам по параметрам."
+                            : $"Map {g.Request.Name}, made from scratch: the generator laid out its plan, levels, ways and the places of its items itself, by the parameters.");
+            var record = Path.Combine(g.ScratchDir, $"record.{(ru ? "ru" : "en")}.txt");
+            if (File.Exists(record))
+                b.Append(File.ReadAllText(record));
+        }
+        else
+            b.AppendLine(ru ? $"Карта {g.Request.Name} сделана из {g.Request.Donor}."
+                            : $"Map {g.Request.Name}, made from {g.Request.Donor}.");
         if (g.Request.Grafts is { Count: > 0 } grafts)
         {
             // brief 9 D4: what the second map gave, in the map's own words
@@ -64,14 +77,23 @@ public static class Describe
         }
         b.AppendLine(ru ? $"Генерация: начало {g.Began:dd.MM.yyyy HH:mm}, конец {end:dd.MM.yyyy HH:mm}, длилась {Duration(took, ru)} (местное время)."
                         : $"Generation: began {g.Began:yyyy-MM-dd HH:mm}, ended {end:yyyy-MM-dd HH:mm}, took {Duration(took, ru)} (local time).");
-        b.AppendLine(ru ? $"Похожесть на основу: {g.Request.Fidelity}%, номер варианта {g.Request.Seed}."
-                        : $"Likeness to the base: {g.Request.Fidelity}%, variant number {g.Request.Seed}.");
+        if (g.Request.FromScratch)
+            // brief 20 D6: one line for the dressing - what was asked of it and what it did
+            b.AppendLine(ru ? $"Отделка правками: похожесть на каркас {g.Request.Fidelity}%, номер варианта {g.Request.Seed}; принято правок {g.Accepted}, карта каркаса изменена на {Pct(Math.Max(0, g.Divergence))}% (заказано {Pct(Math.Max(0, g.Target))}%)."
+                            : $"Dressing by edits: likeness to the skeleton {g.Request.Fidelity}%, variant number {g.Request.Seed}; {g.Accepted} edit(s) accepted, the skeleton's map changed by {Pct(Math.Max(0, g.Divergence))}% ({Pct(Math.Max(0, g.Target))}% asked).");
+        else
+            b.AppendLine(ru ? $"Похожесть на основу: {g.Request.Fidelity}%, номер варианта {g.Request.Seed}."
+                            : $"Likeness to the base: {g.Request.Fidelity}%, variant number {g.Request.Seed}.");
         /*
          * Brief 15 D1 (the PO 08.10: «100% качество подготовки, но снова около 60% похожести»): the reason said as it
          * was - a run whose plan ran out with builds left was told «больше за отведённые пробные сборки не вышло»
          * while 86 of 140 builds were never used.
          */
-        if (g.Target > 0)
+        if (sc)
+        {
+            // said with the dressing's settings above
+        }
+        else if (g.Target > 0)
         {
             if (g.Divergence >= g.Target)
                 b.AppendLine(ru ? $"Отличие от основы: просили {Pct(g.Target)}%, получилось {Pct(g.Divergence)}%."
@@ -93,7 +115,7 @@ public static class Describe
         }
         // row 410: the generator says «-» when nothing ended the edits early - «[ended.-]» went into the description
         else if (Loc.Has($"ended.{g.EndedBy}"))
-            b.AppendLine(Loc.Language == lang ? Loc.T($"ended.{g.EndedBy}") : EndedIn(g.EndedBy, ru));
+            b.AppendLine(Loc.Language == lang ? Loc.Ts($"ended.{g.EndedBy}", sc) : EndedIn(g.EndedBy, ru));
         /* the base's own frame, changed before the first edit (the PO, 10.10: «хочется именно менять донора») */
         if (g.WarpArea > 0)
         {
@@ -147,17 +169,22 @@ public static class Describe
             "стен основы сдвинуто, повёрнуто или с террасой", "wall(s) of the base moved, turned or with a terrace");
         Add(families.GetValueOrDefault("block"), "блок в комнате основы", "блока в комнатах основы", "блоков в комнатах основы", "block(s) in the base's rooms");
         Add(families.GetValueOrDefault("floor-shift"), "изменение пола (помост или канал)", "изменения пола (помосты или каналы)", "изменений пола (помосты или каналы)", "floor change(s) (a dais or a channel)");
-        Add(families.GetValueOrDefault("stair-reshape"), "лестница основы переделана", "лестницы основы переделаны", "лестниц основы переделано", "stair(s) of the base rebuilt");
+        if (sc)
+            Add(families.GetValueOrDefault("stair-reshape"), "лестница переделана", "лестницы переделаны", "лестниц переделано", "stair(s) rebuilt");
+        else
+            Add(families.GetValueOrDefault("stair-reshape"), "лестница основы переделана", "лестницы основы переделаны", "лестниц основы переделано", "stair(s) of the base rebuilt");
         Add(families.GetValueOrDefault("swap-item"), "перестановка предметов", "перестановки предметов", "перестановок предметов", "pickup swap(s)");
         Add(families.GetValueOrDefault("move-spawn"), "перенесённая точка появления", "перенесённые точки появления", "перенесённых точек появления", "moved spawn point(s)");
         b.AppendLine();
         b.AppendLine(ru ? "Что нового:" : "What is new:");
         b.AppendLine(news.Count > 0 ? "  " + string.Join(ru ? ";\n  " : ";\n  ", news) + "."
+                                    : sc ? (ru ? "  ничего — карта такая, какой её построил каркас." : "  nothing - the map is as its skeleton built it.")
                                     : ru ? "  ничего — карта совпадает с основой." : "  nothing - the map is the base.");
         if (pickups.Count > 0)
             b.AppendLine(ru ? $"В новых комнатах: {string.Join(", ", pickups)}." : $"In the new rooms: {string.Join(", ", pickups)}.");
         // brief 15 D3: each large family - asked, made, and why not more - in words
-        var askedMade = AskedAndMade(g, families, shapes, ru);
+        // a map from scratch: what was asked and made is its record's table above - the families of a base's remake are not its
+        var askedMade = sc ? new List<string>() : AskedAndMade(g, families, shapes, ru);
         if (askedMade.Count > 0)
         {
             b.AppendLine(ru ? "Заказано и сделано:" : "Asked and made:");

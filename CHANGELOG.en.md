@@ -1,5 +1,179 @@
 # MAPGEN Studio by ly — change log
 
+## 3.57 — 07.11.2026
+
+- A new map's Russian description says everything in words: the mode, the dressing, the layout, decorations, bridges, the pads' reach, where the powerups are and the weapons' and armours' names - the form's words, not keys
+- A failed check of a map from a base or from scratch says its measure in words too: digs, panes, invisible walls, sight through the sky, mechanics, sight lines, shared routes
+- «Open space» and «Tower»: the form no longer offers what they never have - water, lava, slime, pits, round shapes, stairs, lifts, doors and windows (and wall decorations in open space); the map's description leaves them out, and when an older preset asks for them it says they are not built
+- The form's cards on a wide screen are dealt more evenly: when the columns come out uneven, every card may move
+- The guide in Russian and English brought up to this version: presets, open space and tower, styles and the Studio's own textures, checks as a count, the map's page, the generation screen's tabs, the window; every picture new
+- A space map's description measures the islands and pads on the finished map: the pads' reach is no longer «0»
+
+## 3.56 — 06.11.2026
+
+- «Start generating» works on the first press. At the screen's foot a tooltip lay right under the pointer and took the press - every tooltip at the screen's foot did; now it stands above the pointer
+- A map's page on a wide screen: the cover across the left column, the shots and the description under it; the facts, the buttons and the checks on the right - no blank stripes. One column on a narrow window
+- The generation screen: the log a tab again, after «Parameters»; the scheme takes the whole right side
+- A big map from scratch (an 8-player «Open space» of a large area, say) no longer runs over the edge of Quake II's world and is built: the map stands in the world's middle, not in one half of it
+
+## 3.55 — 06.11.2026
+
+- The window opens where it was closed again: in 3.54 a window not maximised went to the top-left corner after a close
+- A map from scratch is no longer relit after its checks: the light it was built and checked with stays to the end - after «Destruction» too
+- A new map from scratch is checked as the library gets it - after the ruin and the light, not as a draft
+- A failed check on a map's page says in words what was measured and what it should be
+
+## 3.54 — 06.11.2026
+
+- A map's checks in the list and on its page as a count: «checks passed» in green, «checks: 85 of 86» in quiet grey when the map plays. Red «cannot be played» only when it truly cannot: a spawn point in a wall or not to be stepped off, a pickup lost or a spawn under a moving part, a place with no way out, a main item out of reach, fewer spawns than asked
+- On a map's page the failed checks come first, each with what was measured and what people's maps have
+- A «Check again» button on a new map's page: measures the finished map again with this version's checks, a minute or two, no generation
+- The cards of the generation settings, the home page, the settings and a map's page are laid out in columns even in height; three columns on a wide screen. The settings of «Open space» and «Tower» are a card of their own beside «Size and shape»
+- The window remembers its size and place and opens maximised on the first start on a wide screen
+- On the generation screen on a wide monitor the build scheme is larger and the log stands beside it, not on a tab of its own
+
+## 3.53 — 06.11.2026
+
+- Jump pads and teleporters look as on people's maps: a lit disc on a plinth for a jump up, a slanted plate with arrows for a flight away, arrows running over it the way one flies; a teleporter stands in a frame of two posts with a shimmering portal and glow
+- A new map's covers show a jump pad and a teleporter when it has them
+
+## 3.52 — 06.11.2026
+
+- A new layout «Open space»: islands hang in the void with no walls, jump pads, bridges and teleporters between them, a step off the edge is death. Its own settings: how many islands, how many only a jump pad reaches, open or railed edges, the height spread, the pads' reach, bridges
+- A new layout «A tower»: whole storeys over each other round an atrium under the sky. Jump pads and shafts lead up, one jumps down, and over the top storey there are ledges only a jump pad reaches. Its own settings: how many storeys, the storey height, how many shafts, how many ledges at the top
+- «Ships in the sky» (the «Style» group): up to three ships of the single-player game fly over the map - in open space over the islands or under them, in a tower over the atrium, on a usual map over the tall courts. With no fitting court the map's description says why
+- New-map presets: 24 new factory ones - 13 in «Open space» and 11 in «Tower», 184 in all
+
+## 3.51 — 06.11.2026
+
+- «Random variant» (on by default): every generation takes a new variant number by itself, another map each time; the number box is hidden. The number is in the map's name - to make a map again, switch it off and type the number
+- The generate page: the header «Load - the generator may use up to …» is no longer cut, it wraps to a second line
+- A new map is built a few minutes faster: the chosen skeleton variant is no longer checked by the generator twice. If the generator does not take a variant as its base, the next best is taken by itself
+
+## 3.50 — 06.11.2026
+
+- New map: the generate page shows «Progress» in place of «Dressing: difference from the skeleton» - the whole build's percent, the time left and when it ends, the stage under way (e.g. «Stage 5 of 11: Edits»). The same in the strip over the other pages. The estimate learns from your earlier maps with the same players and time
+- New-map presets: 160 factory ones in 13 groups instead of 18 - duels, 3-4 players, free-for-all, big maps, team games, worlds, water and lava, weapons, ways between places, mechanics, look. Each was checked: maps are made from it
+- A new map's skeleton is built on every processor thread allowed: the plans and the map variants side by side, the finished map's checks together. The same request and number now always make the same map - before they could make different ones
+- Computer load: the header says how many threads the generator may use and how much it uses. The map's edits are still built on one thread - so the same map comes out the same
+- The edits' «Time: N of M min» counts from the generator's start, not from the skeleton's
+- Library: a new map says «Built in …» in place of its difference from the skeleton
+
+## 3.49 — 06.11.2026
+
+- The presets' «Load» button opens its menu: the categories, the factory's and your presets in them (3.48 opened an empty narrow frame)
+- The list of «The chosen maps» fits its drop-down whole: the scroll bar and «Add maps…» are no longer cut on the right
+
+## 3.48 — 06.11.2026
+
+- Presets of the generation's parameters: right of the page's title - the preset in use and «Load», «Create», «Change», «Delete». A new map and a map from a ready one each have their own. The factory's: 18 for new maps (default, duels, free-for-all, worlds with the Studio's own textures), 10 for maps from ready ones; your own - as many as you like, in categories of your own or the factory's. A factory preset cannot be changed or deleted, yours are deleted after a question. Parameters changed after a load show «(changed)» beside the name
+- Map from scratch, «The chosen maps»: one button with a list of every map of the game, a search and a tick each in place of rows of ticks. A map from another folder is read where it lies and no longer copied into the Studio's bases; untick it and it leaves the list
+- The annex size «Niches» no longer turns into «Halls» after the Studio restarts
+- Map from scratch: the mechanics' default ticks show what the generator makes («Two halves» on a map of two halves), and ticked back as they were they count as the default again
+
+## 3.47 — 06.11.2026
+
+- Map from scratch: the buttons that open a powerup's door are no longer sunk into lamp posts, pilasters, decor panels or chamfers - the wall under a button stays bare; skirting and pilasters keep off rounded corners too
+- Map from scratch: the «clock» (body armour and mega 5-9 seconds apart) counts the powerups' nooks - an item in a nook stands further, and the generator places the pair closer beforehand
+- The Studio's own textures: a chosen colour for snow, forest, city, planet, fantasy, desert and hell turns the hue, not the brightness - snow in «cold» stays light
+- The generate page opens at its top after a run
+- Round shapes: a kind that could not be made is named by the check, and the map's description says why
+- From-scratch check: the powerups' buttons are free
+- Library: a long label on a map's cover (say «from scratch, own textures: Snow and ice») ends in an ellipsis, the whole of it in its tip
+
+## 3.46 — 05.11.2026
+
+- The running generation's page: a new tab «Parameters» - what the run was started with, in the same cards as the generate page, to look at only (a run resumed after a restart of the Studio too)
+- The generate page no longer jumps to its top when a choice shows or hides rows (the Studio's own textures, a custom stack, the player count) or the language changes: it stays where it was scrolled to
+- A map from scratch's run page: the title «Map skeleton» no longer lies over the grey «The scheme will appear…»
+- The skeleton's picture: its legend in Russian letters, not boxes
+- Map from scratch: «Sky overhead» says the right default with the Studio's own textures (30 %), and follows the style
+- The run page after a language change - all in the new language
+- The Studio's own textures: seven themes more - snow and ice, forest, city, another planet, fantasy, desert, hell. Each its own materials (snow, ice, bark, moss, planks, cobbles, facades with windows, asphalt with road markings, craters, crystals, glowing veins, runes, gold ornament, rippled sand, sandstone, lava rock), its own colours and light
+- Map from scratch: «Round shapes» as on medusa_b1 - rounded room corners, half-round hall ends and octagonal raised platforms a step or two high (under an item of the hall or on open floor); how many - a few, some or many, and which of the three
+
+## 3.45 — 05.11.2026
+
+- Map from scratch: the quad, mega, invulnerability and body armour get places of their own. A new parameter «How hard the powerups are to get»: easy - on a pedestal under its own coloured light; medium - in a nook in the wall, every other one raised over the floor (jump in); hard - in a nook behind a door a button on the wall opens (a second button inside, so nobody is shut in); mixed (the default) - the most valuable hard, the next medium, the rest easy
+- Map from scratch: «Armour and mega taking turns in one nook» - the body armour and the mega (and on a free-for-all a power shield) appear in turn in one place, as on q2dm8
+- Map from scratch: textures «Made by the Studio» - the Studio paints its own set: metal panels and rivets, gratings, tiles, brick, stone, concrete, rock, trims with hazard stripes. Parameters: theme (tech, gothic, factory, base), colour, wear, size of the detail, relief and what they dress (everything, only the detail, or walls and floors). The noise is the open generator Procedural-PBR's (MIT licence)
+- Map from scratch finish: any maps for it - one or several from the list (people's maps, bases) or any Quake II map from the disk by «Add maps…»; no hardcoded list of names in the settings any more
+- The from-scratch page: no «What may change» card any more - those are edits of a ready map; a map from scratch has its lifts, rooms, windows, liquids and items from its parameters, and the generator applies nothing of that card to it
+- From-scratch check: every powerup in a lit place of its own, as hard to reach as asked
+
+## 3.44 — 05.11.2026
+
+- Map from scratch: no dead ends - two doorways or more into every room; a room over a room is made only with a second way out (another flight or an opening to drop into the hall); a room with no second way becomes a bay of its neighbour
+- Map from scratch: lifts never run into each other (on the styled map two lifts shared a cell and flickered)
+- Map from scratch: a surplus sight line is closed by a jog of the wall, a column only as a last resort: one per room (two in a large hall), four per map, none in a narrow room
+- Map from scratch: no stepped mounds in the middle of halls - neither in the skeleton nor in the dressing; doorways off each other's axis
+- Map from scratch: no bare boxes - a room with no terrace gets a window to its neighbour, a long hall an arcade along its wall
+- Map from scratch for a free-for-all: the default set holds a quad (body armour, mega, combat armour and quad); «Body armour, mega and quad» in the list too
+- From-scratch check: lifts apart, no dead ends, no bare boxes
+
+## 3.43 — 05.11.2026
+
+- Map from scratch: more textures - up to four wall textures of the chosen people's map (the spaces take them in turn), rooms and corridors with their own floors; columns, beams, doorway frames and steps in its small textures (supports, gratings, panels). A duel wears 8-15 textures instead of 4-8
+- Map from scratch: lamps on the walls - under the cornice, on posts by the wall, over doorways on their lintel; a lamp in the middle of a ceiling only where no wall lamp reaches
+- Map from scratch: real corridors two cells wide with a turn (an L or a U) between the halls; the corridor share as on people's maps
+- Map from scratch: rooms over rooms - a second room over a low one, entered from a neighbour's balcony or up a flight of steps
+- From-scratch check: the number of textures, floor over floor and corridors with a turn
+
+## 3.42 — 05.11.2026
+
+- Map from scratch: the default finish is like people's maps. The generator takes one of q2dm, q2duel, ztn2dm, koldduel1, omf, ptrip, match1, kaktus and dresses the map in its wall, floor and ceiling textures, its trims and lamps; halls, rooms and corridors in different textures
+- Map from scratch: the light is tinted as on the chosen people's map, not white
+- Map from scratch: the generator's old texture set is no longer used - it was grey and three times lighter than people's textures, the maps came out washed out. In «Mixed» ceilings and trims take only its dark coloured textures
+- From-scratch check: colour, texture brightness, on-screen brightness, the largest texture's share and the light's colour - banded on people's maps
+
+## 3.41 — 05.11.2026
+
+- The «A new map from scratch» page on a wide window: the cards no longer run over each other; the «Base remodels» card is gone from it
+- Every screen of a map from scratch - the Generate page, its run, the strip, the home page, its card in the library, the scheme and the description - says nothing of a base: its skeleton and the skeleton's dressing instead
+- The home page and the guide: the Studio makes maps from existing ones and from scratch; the guide's chapter «A new map from scratch»
+- Map from scratch: no place one cannot get out of - checked by a walk with the game's own movement too; an asked dead end is allowed only inside its own room
+- Map from scratch: light as on people's maps - floors and walls not burnt white (a softer sun, weaker lamps in the courts)
+- Map from scratch: the walls finished - skirting, cornice, pilasters, beams under a high ceiling, doorway frames and arches; nothing hangs in the air (a check)
+- Map from scratch: a pool takes a third of its hall at most and is not a plain rectangle; a duel's long sight lines as many as asked or one more; not every spawn at height
+- Map from scratch: other parameters - another layout (before, one variant number gave one layout)
+
+## 3.40 — 04.11.2026
+
+- Map from scratch: steps lead out of every part of a pit - a bridge across it no longer leaves one half with no way out; the check «no place one can get into and not out of»
+- Map from scratch: the base's remodels and room blocks are no longer tried (on such a base none was ever built, and the map's description said «0 of 3»)
+
+## 3.39 — 04.11.2026
+
+- Map from scratch: every liquid asked gets a pit of its own - lava no longer takes every pit from the water
+- The check of a map from scratch no longer stops half way on a sign the Windows console cannot print
+
+## 3.38 — 04.11.2026
+
+- Map from scratch: the generator hangs none of its ornaments on the walls, whatever their setting for maps from a base - a map from scratch has its own «Wall decorations» setting
+
+## 3.37 — 04.11.2026
+
+- Map from scratch: a lift no longer stands on a stair's steps, and at rest its plat is flush with the floor, no flicker
+- A teleporter's exit stands a few steps from its pad; no spawn beside a teleporter, its exit or a jump pad
+- Water lies only in hollows and fills them over their steps; rooms flooded over their floor only with «Let water stand above the floor» (off)
+- Nothing hangs in the air: a lamp only set into a ceiling over its light; wall panels off by default; no blocks in the rooms of a map from scratch
+
+## 3.36 — 04.11.2026
+
+- The checks of a map from scratch are named in plain words on the map's card - in Russian and English
+
+## 3.35 — 04.11.2026
+
+- A new map from scratch: the third way to start a map on the Generate page - no base map, its own plan by the parameters
+- Parameters of a map from scratch: players and mode (duel, free for all, team against team), spawns, size, height levels, vertical span, corridors and open places, sky, long sight lines, layout (two halves, one arena, a ring)
+- Ways between levels as asked: stairs, ramps, lifts, jump pads, teleporters, ladders, drops, doors, windows of several outlines and glass colours
+- Water, lava and slime as shares of the floor; deadly chasms with a bridge or a jump pad across
+- Weapons one by one, armour and stack sets or your own set, shards, ammo and health per player, major items at height
+- Mechanics from people's maps: a stack on a clock, two halves, a gun on a ledge, route asymmetry, small health, spawn pressure, a dead-end stack, three approaches, a teleport to a mirrored stack, a jump pad over a chasm, a lift as exposure, a ladder under an item
+- Style: the generator's textures, the chosen maps' (only their skins, none of their buildings) or mixed; wall decorations, sun, warm or cold light
+- The map's skeleton shows on the run page before the first wall; the map's description says what was asked and what was made
+- A map from scratch is checked by people's maps' measures and proved not a copy of any known map
+
 ## 3.34 — 13.10.2026
 
 - The «Site» link on the home page leads to MAPGEN's page: q2pro-x.com/mapgen
