@@ -359,7 +359,7 @@ def write_record(out: Path, q: dict, m: dict, r: dict, pal: dict, res: list, fin
         ("vertical_span", "Вертикальный размах", "Vertical span", q.get("vertical_span") or "-", r.get("vertical_span")),
         ("sky", "Небо над головой", "Sky overhead", f"{float(q['sky']):.0%}", f"{float(r.get('sky_share') or 0):.0%}"),
         ("long_lines", "Длинных линий прострела", "Long sight lines",
-         ("≤4 как у людей" if q.get("players", 2) <= 2 else "≤6 как у людей") if q.get("long_lines_default") else q["long_lines"],
+         words_mod.known("≤4" if q.get("players", 2) <= 2 else "≤6") if q.get("long_lines_default") else q["long_lines"],
          r.get("long_lines")),
         ("shape", "Форма", "Shape", q["shape"], q["shape"]),
         ("stairs", "Лестниц (пролётов)", "Flights of steps", q["stairs"], m.get("stairs_got")),
@@ -373,16 +373,12 @@ def write_record(out: Path, q: dict, m: dict, r: dict, pal: dict, res: list, fin
         ("windows", "Окон", "Windows", q["windows"], m.get("windows_got")),
         # brief 21+: where the powerups lie, asked → made (in words)
         ("powerup_access", "Главные предметы", "Powerups",
-         {"easy": "просто", "medium": "в нишах", "hard": "за дверями с кнопками", "mixed": "смешанно"}.get(q.get("powerup_access"), q.get("powerup_access"))
-         + (", по очереди в одной нише" if q.get("powerup_cycle") else ""),
-         ", ".join(f"{c.replace('item_', '').replace('health_mega', 'мега').replace('armor_body', 'красная броня').replace('quad', 'квад').replace('invulnerability', 'неуязвимость').replace('power_shield', 'силовой щит')} — "
-                   + words_mod.pick(words_mod.SITES, k, True)
-                   for c, k in (m.get("powerup_sites") or []))),
+         words_mod.access(q.get("powerup_access"), bool(q.get("powerup_cycle"))),
+         words_mod.powerup_sites(m.get("powerup_sites") or [])),
         # 3.46: medusa_b1's round shapes, asked → made
         ("round", "Скругления", "Round shapes",
-         {"few": "немного", "some": "заметно", "many": "много"}.get(q.get("round") or "", "нет"),
-         (lambda rm: f"углов {rm.get('corners', 0)}, полукруглых торцов {rm.get('apses', 0)}, возвышений {rm.get('podiums', 0)}"
-          if rm else "-")(m.get("round") or {})),
+         words_mod.ROUND.get(q.get("round") or "", words_mod.NONE),
+         words_mod.round_made(m.get("round") or {})),
         # brief 21: the new pieces of the skeleton, said in the description
         ("rooms_over", "Комнат над комнатами", "Rooms over rooms", m.get("stacked_asked", "-"), m.get("stacked_rooms", 0)),
         ("corridor_turns", "Коридоров с поворотом", "Corridors with a turn", "≥1", m.get("corridor_turns", 0)),
@@ -397,7 +393,7 @@ def write_record(out: Path, q: dict, m: dict, r: dict, pal: dict, res: list, fin
         ("openness", "Коридоры / залы / открытые", "Corridors / halls / open",
          "/".join(f"{float(v):.0%}" for v in q["openness"]) if q.get("openness") else "-",
          "/".join(f"{float(r.get(k) or 0):.0%}" for k in ("share_corridor", "share_medium", "share_open"))),
-        ("spawns_at_height", "Точек появления на высоте", "Spawns at height", "≥50% (план 67%)",
+        ("spawns_at_height", "Точек появления на высоте", "Spawns at height", ("≥50% (план 67%)", "≥50% (plan 67%)"),
          f"{float(r.get('spawns_at_height') or 0):.0%}"),
         ("shards", "Осколков брони", "Armour shards", q.get("shards"), (r.get("sites") or {}).get("item_armor_shard", 0)),
         ("ammo_per_spawn", "Патронов на точку появления", "Ammo per spawn", q.get("ammo_per_spawn"),
@@ -411,26 +407,27 @@ def write_record(out: Path, q: dict, m: dict, r: dict, pal: dict, res: list, fin
     look = r.get("look") or {}
     if look.get("coloured") is not None:
         rows += [
-            ("coloured", "Цветных поверхностей", "Coloured surfaces", "как у людей 50..100%", f"{float(look['coloured']):.0%}"),
-            ("seen", "Яркость на экране (середина)", "On-screen brightness (median)", "как у людей 7..25",
+            ("coloured", "Цветных поверхностей", "Coloured surfaces", words_mod.known("50..100%"), f"{float(look['coloured']):.0%}"),
+            ("seen", "Яркость на экране (середина)", "On-screen brightness (median)", words_mod.known("7..25"),
              f"{float(look['seen_p50']):.0f}"),
-            ("textures", "Текстур", "Textures", "как у людей 9..38", look.get("textures")),
+            ("textures", "Текстур", "Textures", words_mod.known("9..38"), look.get("textures")),
         ]
     if r.get("stacked_share") is not None:
         rows.append(("stacked", "Пол над полом", "Floor over floor",
-                     "не меньше 50%" if q.get("shape") == "tower" else "как у людей 0..64%",
+                     ("не меньше 50%", "50% at least") if q.get("shape") == "tower" else words_mod.known("0..64%"),
                      f"{float(r['stacked_share']):.0%}"))
     if q.get("shape") == "space":
         # brief 25 A4: the open space's own, asked → made (the survey's part when measured, else the plan's)
         sp = r.get("space") or {}
         isl = sp.get("islands") or {}
-        edges = {"open": ("открытые", "open"), "some": ("местами перила", "railings in places"),
-                 "railings": ("в основном перила", "mostly railings")}
+        edges = words_mod.EDGES
         rows += [
             ("islands", "Островов", "Islands", q.get("islands"), isl.get("count_over_0.02mu2", m.get("islands"))),
             ("pad_only", "Только по джампаду (не меньше)", "Only by a jump pad (at least)", q.get("pad_only"),
              isl.get("reached_only_by_pad_or_teleport", m.get("pad_only"))),
-            ("edges", "Края", "Edges", edges.get(q.get("edges"), ("-", "-"))[0], f"{float(sp.get('outline_void_share', 1.0)):.0%} края над пустотой"),
+            ("edges", "Края", "Edges", edges.get(q.get("edges"), ("-", "-")),
+             (f"{float(sp.get('outline_void_share', 1.0)):.0%} края над пустотой",
+              f"{float(sp.get('outline_void_share', 1.0)):.0%} of the edge over the void")),
             ("height_spread", "Разброс высот", "Height spread", q.get("height_spread"), r.get("vertical_span")),
             ("pad_reach", "Дальность джампадов", "Jump pads' reach", q.get("pad_reach"),
              max((p_.get("across", 0) for p_ in sp.get("pads") or []), default=0)),
@@ -483,7 +480,7 @@ def write_record(out: Path, q: dict, m: dict, r: dict, pal: dict, res: list, fin
                      if ru else ("Asked → made, on the finished map:" if final else "Asked → made, on the skeleton (before the dressing edits):"))
         # the sun's and the light's values in words, not the request's keys (05.11: «Цвет света: style → people»)
         words = {"style": ("по стилю", "by the style"), "yes": ("есть", "yes"), "no": ("нет", "no"),
-                 "people": ("как у карты людей", "as the people's map"), "neutral": ("белый", "white"),
+                 "people": ("как у известной карты", "as on the well-known map"), "neutral": ("белый", "white"),
                  "warm": ("тёплый", "warm"), "cold": ("холодный", "cold"), None: ("по стилю", "by the style")}
 
         def said(key, v):
@@ -516,7 +513,9 @@ def write_record(out: Path, q: dict, m: dict, r: dict, pal: dict, res: list, fin
             lines.append("Проверка карты с нуля: всё прошло." if ru else "From-scratch check: all passed.")
         (out / f"record.{lang}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     (out / "record.json").write_text(json.dumps({"asked": {k: v for k, v in q.items() if k != "style"},
-                                                 "rows": [{"key": k, "asked": a, "got": g} for k, _, _, a, g in rows],
+                                                 "rows": [{"key": k, "asked": a[0] if isinstance(a, tuple) else a,
+                                                           "got": g[0] if isinstance(g, tuple) else g}
+                                                          for k, _, _, a, g in rows],
                                                  "failed": failed}, ensure_ascii=False, indent=1, default=str),
                                      encoding="utf-8")
 

@@ -183,8 +183,8 @@ the generation cancelled.
 
 At the top of the Generate page the card **Where the map comes from** has two buttons: «From existing maps» (all that
 is described above) and «A new map from scratch». From scratch the generator takes nobody's map: it lays out a
-skeleton itself — rooms, levels, the ways between them, the places of weapons, armour and spawns — by the rules seen
-on the maps people make, builds a real map from the skeleton, dresses it with its edits and checks it.
+skeleton itself — rooms, levels, the ways between them, the places of weapons, armour and spawns — by the rules of
+well-known maps, builds a real map from the skeleton, dresses it with its edits and checks it.
 
 The easiest start is a preset: «Load» → a category (duels, free for all, big maps, team games, worlds, water and lava,
 weapons, ways, mechanics, look, open space, tower — 184 factory presets in all) → a preset; then «Start generating».
@@ -230,7 +230,7 @@ the player count; which one is said in brackets.
   under its own light; medium — in a nook in a wall, every other one raised (jump in); hard — in a nook behind a door
   a button on the wall opens; mixed. **«Armour and mega taking turns in one nook»** — the red armour and the mega
   appear by turns in one place, as on q2dm8.
-- **Style** — **textures**: «Like people's maps» (the default: the generator takes one of q2dm, q2duel, ztn2dm,
+- **Style** — **textures**: «Like well-known maps» (the default: the generator takes one of q2dm, q2duel, ztn2dm,
   koldduel1, omf, ptrip, match1, kaktus and dresses the map in its wall, floor and ceiling textures, its trims, lamps
   and tinted light), «The chosen maps» (a button with every map of the game, a search and ticks; only their dressing
   is taken, none of their walls or rooms), «Mixed» or «Made by the Studio» — the Studio draws a texture set itself in
@@ -262,8 +262,8 @@ The finished map goes through the same checks as a map from a base, and two more
 
 ![A map from scratch in the library](screens/en/map_scratch.png)
 
-A map from scratch's description starts with «Made from scratch: 4 players, free for all, dressed as people's map
-q2dm1» and a table «Asked → made, on the finished map» for every parameter; then the mechanics, and everything that
+A map from scratch's description starts with «Made from scratch: 4 players, free for all, dressed as the well-known
+map q2dm1» and a table «Asked → made, on the finished map» for every parameter; then the mechanics, and everything that
 did not come out named in words with its reason. Its tile and card say «from scratch» (and the style, when taken from
 maps).
 
@@ -376,7 +376,7 @@ level with the cover, the checks. On a narrow window it all goes in one column.
 - **Description** — the base it was made from (or what was asked and what came out, for a map from scratch), the maps
   that gave rooms, likeness and variant number, what was built, how long the run took.
 - **The map's checks** — the header says «N of M passed»; the failed ones come first, each with what was measured and
-  what it should be, in words: e.g. «floor burnt white 2.0 % (people's maps 1 % at most)». A check play needs is marked
+  what it should be, in words: e.g. «floor burnt white 2.0 % (well-known maps 1 % at most)». A check play needs is marked
   «- cannot be played».
 - **Check again** (a map from scratch) — measures the finished map anew with this Studio's checks: a minute or two, no
   generation. The generator's own checks stay as they were.

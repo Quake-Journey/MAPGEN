@@ -24,6 +24,18 @@ SITES = {"easy": ("на постаменте", "on a pedestal"), "medium": ("в 
          "hard (jump in)": ("за дверью с кнопкой, приподнятой над полом", "behind a door with a button, raised over the floor"),
          "easy (no nook)": ("на постаменте (ниша не поместилась)", "on a pedestal (no nook fitted)")}
 REACH = {"short": ("короткие", "short"), "medium": ("средние", "medium"), "long": ("длинные", "long")}
+# 3.58 addendum (the English description carried these in Russian): how the powerups were asked to lie, by the form's
+# words; the powerups by their short names in the row «Главные предметы»; the round shapes asked; an open space's edges
+ACCESS = {"easy": ("просто", "in the open"), "medium": ("в нишах", "in nooks"),
+          "hard": ("за дверями с кнопками", "behind doors with buttons"), "mixed": ("смешанно", "mixed")}
+CYCLE = (", по очереди в одной нише", ", in turns in one nook")
+POWERUP_SHORT = {"item_health_mega": ("мега", "mega"), "item_armor_body": ("красная броня", "body armour"),
+                 "item_quad": ("квад", "quad"), "item_invulnerability": ("неуязвимость", "invulnerability"),
+                 "item_power_shield": ("силовой щит", "power shield")}
+ROUND = {"few": ("немного", "a few"), "some": ("заметно", "noticeably"), "many": ("много", "many")}
+NONE = ("нет", "none")
+EDGES = {"open": ("открытые", "open"), "some": ("местами перила", "railings in places"),
+         "railings": ("в основном перила", "mostly railings")}
 ITEMS = {"item_armor_body": ("Красная броня", "Body armour"), "item_armor_combat": ("Жёлтая броня", "Combat armour"),
          "item_armor_jacket": ("Зелёная броня", "Jacket armour"), "item_health_mega": ("Мега", "Mega health"),
          "item_quad": ("Квад", "Quad damage"), "item_invulnerability": ("Неуязвимость", "Invulnerability"),
@@ -33,7 +45,7 @@ ITEMS = {"item_armor_body": ("Красная броня", "Body armour"), "item_
          "weapon_grenadelauncher": ("Гранатомёт", "Grenade launcher"), "weapon_rocketlauncher": ("Ракетница", "Rocket launcher"),
          "weapon_hyperblaster": ("Гипербластер", "Hyperblaster"), "weapon_railgun": ("Рельса", "Railgun"),
          "weapon_bfg": ("BFG", "BFG")}
-SOURCES = {"people": ("отделка как у карты людей", "dressed as people's map"),
+SOURCES = {"people": ("отделка как у известной карты", "dressed as the well-known map"),
            "maps": ("отделка по выбранным картам", "dressed as the chosen maps"),
            "mixed": ("отделка смешанная", "mixed dressing"),
            "generator": ("отделка генератора", "the generator's dressing"),
@@ -71,8 +83,20 @@ def players(n: int, ru: bool) -> str:
     return f"{n} {word}"
 
 
+# 3.58 (the PO 07.11 on the guide: «карты людей» reads as our own jargon): the maps the generator is measured against
+# are «известные карты» / «well-known maps» in everything a player reads; the record said «как у людей» in both languages
+KNOWN = ("как у известных карт", "as well-known maps")
+
+
+def known(band: str) -> tuple[str, str]:
+    """A band of the well-known maps as a row's asked value, in both languages («как у известных карт 50..100%»)."""
+    return (f"{KNOWN[0]} {band}", f"{KNOWN[1]} {band}")
+
+
 def value(key: str, v, ru: bool):
     """A request's value in words where it is a key of the form; else as it is."""
+    if isinstance(v, tuple) and len(v) == 2:
+        return v[0 if ru else 1]          # said in both languages (known())
     if not isinstance(v, str):
         return v
     if key == "shape":
@@ -84,6 +108,29 @@ def value(key: str, v, ru: bool):
     if key == "pad_reach":
         return pick(REACH, v, ru)
     return v
+
+
+def access(key, cycle: bool) -> tuple[str, str]:
+    """«Главные предметы» asked: «в нишах, по очереди в одной нише» / «in nooks, in turns in one nook»."""
+    a = ACCESS.get(key, (str(key), str(key)))
+    return (a[0] + (CYCLE[0] if cycle else ""), a[1] + (CYCLE[1] if cycle else ""))
+
+
+def powerup_sites(sites) -> tuple[str, str]:
+    """«Главные предметы» made: «мега — в нише, красная броня — на постаменте» in both languages."""
+    def one(cls, kind, ru):
+        short = POWERUP_SHORT.get(cls)
+        name = short[0 if ru else 1] if short else cls.replace("item_", "").replace("_", " ")
+        return f"{name} — {pick(SITES, kind, ru)}"
+    return tuple(", ".join(one(c, k, ru) for c, k in sites) for ru in (True, False))
+
+
+def round_made(rm: dict) -> tuple[str, str] | str:
+    """«Скругления» made: «углов 2, полукруглых торцов 1, возвышений 0» / «rounded corners 2, round ends 1, podiums 0»."""
+    if not rm:
+        return "-"
+    c, a, p = rm.get("corners", 0), rm.get("apses", 0), rm.get("podiums", 0)
+    return (f"углов {c}, полукруглых торцов {a}, возвышений {p}", f"rounded corners {c}, round ends {a}, podiums {p}")
 
 
 def item(cls: str, ru: bool) -> str:

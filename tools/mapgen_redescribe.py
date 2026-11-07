@@ -5,6 +5,17 @@ some», «Дальность джампадов: medium», «Режим: ffa»),
 space's rows it has no part in left out, the failed rows' English names replaced by where they are said in words. Only
 the words change: every measured number stays. The file is kept once as `<file>.before_words`.
 
+3.58 (the PO 07.11 on the guide; brief 31): «карты людей» is our own word - the maps the generator is measured against
+are «известные карты» / «well-known maps». The descriptions say «как у людей 50..100%», «≤4 как у людей», «отделка как
+у карты людей q2dm1», «Цвет света: … → как у карты людей» (and the English ones carried the Russian bands): said as
+`mapgen_scratch.write_record` says them now. Numbers untouched.
+
+3.58 addendum: the English descriptions carried more Russian, written into both languages since 3.45 - the powerups'
+row («смешанно → мега — в нише, красная броня — на постаменте»), «Скругления» («нет», «углов 2, полукруглых торцов 1,
+возвышений 0»), an open space's edges («открытые → 80% края над пустотой»), «≥50% (план 67%)», a tower's «не меньше
+50%»: said in English as the record says them now (`mapgen_scratch_words`: ACCESS, CYCLE, POWERUP_SHORT, SITES, ROUND,
+EDGES). Numbers untouched.
+
     python tools/mapgen_redescribe.py DATA_DIR [--dry]
 
 DATA_DIR is a Studio's `data` folder (its `descriptions` and `runs`).
@@ -36,6 +47,66 @@ def theme_of(runs: Path, name: str) -> str | None:
     return (st.get("gen") or {}).get("theme") if isinstance(st, dict) else None
 
 
+KNOWN_BAND = re.compile(r"(≤\d+) как у людей")
+
+
+def known_words(ln: str, ru: bool) -> str:
+    """3.58: «как у людей …» / «как у карты людей» / «people's map» as the record says them now (w.known, w.SOURCES)."""
+    if "людей" not in ln and "people's" not in ln:
+        return ln
+    ln = KNOWN_BAND.sub(lambda m: f"{w.KNOWN[0 if ru else 1]} {m.group(1)}", ln)
+    ln = ln.replace("как у людей ", w.KNOWN[0 if ru else 1] + " ")
+    if ru:
+        return ln.replace("как у карты людей", "как у известной карты")
+    return ln.replace("dressed as people's map", "dressed as the well-known map").replace("as the people's map",
+                                                                                        "as on the well-known map")
+
+
+ROUND_MADE = re.compile(r"углов (\d+), полукруглых торцов (\d+), возвышений (\d+)")
+
+
+def _pairs(*tables) -> list[tuple[str, str]]:
+    """(ru, en) of the tables' values, the longest Russian first (a phrase never cut by a shorter one inside it)."""
+    out = {}
+    for tb in tables:
+        for v in (tb.values() if isinstance(tb, dict) else [tb]):
+            if v[0] and v[0] != v[1]:
+                out[v[0]] = v[1]
+    return sorted(out.items(), key=lambda x: -len(x[0]))
+
+
+POWERUP_WORDS = _pairs(w.SITES, w.POWERUP_SHORT, w.ACCESS, w.CYCLE)
+ROUND_WORDS = _pairs(w.ROUND, w.NONE)
+EDGE_WORDS = _pairs(w.EDGES)
+
+
+def english_rows(ln: str) -> str:
+    """3.58 addendum: an English description's rows that the record wrote in Russian, in English (numbers kept)."""
+    def swap(text: str, pairs) -> str:
+        for a, b in pairs:
+            text = text.replace(a, b)
+        return text
+    m = ROW.match(ln)
+    if not m:
+        return ln
+    label, a, b = m.group(1), m.group(2), m.group(3)
+    if label == "Powerups":
+        a, b = swap(a, POWERUP_WORDS), swap(b, POWERUP_WORDS)
+    elif label == "Round shapes":
+        a = swap(a, ROUND_WORDS)
+        b = ROUND_MADE.sub(lambda x: f"rounded corners {x.group(1)}, round ends {x.group(2)}, podiums {x.group(3)}", b)
+    elif label == "Edges":
+        a = swap(a, EDGE_WORDS)
+        b = b.replace(" края над пустотой", " of the edge over the void")
+    elif label == "Spawns at height":
+        a = a.replace("(план ", "(plan ")
+    elif label == "Floor over floor":
+        a = re.sub(r"^не меньше (\d+%)$", r"\1 at least", a)
+    else:
+        return ln
+    return f"  {label}: {a} → {b}"
+
+
 def redo(text: str, ru: bool, theme: str | None) -> str:
     lines = text.split("\n")
     shapes = [ROW.match(ln).group(2).strip() for ln in lines
@@ -44,6 +115,9 @@ def redo(text: str, ru: bool, theme: str | None) -> str:
     label_key = {v[0 if ru else 1]: k for k, v in w.LABELS.items()}
     out = []
     for ln in lines:
+        ln = known_words(ln, ru)
+        if not ru:
+            ln = english_rows(ln)
         if ln.startswith("  Главные предметы:") or ln.startswith("  Powerups:"):
             ln = SITES.sub(lambda x: " — " + w.pick(w.SITES, x.group(1), ru), ln)
         m = HEAD.match(ln)

@@ -1,5 +1,11 @@
 # MAPGEN Studio by ly — change log
 
+## 3.58 — 07.11.2026
+
+- In the Studio, in a new map's description and in its checks the Quake II maps the generator is tuned on and compares a new map with are called simply «well-known maps»; the dressing choice is «Like well-known maps»
+- A new map's English description is in English throughout: the well-known maps' bands, where the powerups lie, round shapes, the islands' edges and the spawns at height are no longer written in Russian
+- The guide: the «In future versions» section removed - what it promised is in the Studio already
+
 ## 3.57 — 07.11.2026
 
 - A new map's Russian description says everything in words: the mode, the dressing, the layout, decorations, bridges, the pads' reach, where the powerups are and the weapons' and armours' names - the form's words, not keys

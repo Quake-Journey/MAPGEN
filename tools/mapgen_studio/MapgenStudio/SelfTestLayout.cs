@@ -558,7 +558,13 @@ public sealed partial class MainWindow
                     $"the library's chips disagree with the checks that stop play: {string.Join(", ", wrong.Take(6))}");
                 // 3.57 (the PO 07.11: «в русском описании … есть анг формулировки в студии»): on this library, a map's Russian
                 // description, its checks' names and what a failed one measured hold no English word - the names of maps,
-                // of the game and of the Studio aside
+                // of the game and of the Studio aside.
+                // 3.58 (brief 31; the PO on the guide, 07.11: «карты людей» is our own word): nor «людей» - the maps the
+                // generator is measured against are «известные карты». RED: a copy of his library before
+                // tools/mapgen_redescribe.py (his descriptions said «отделка как у карты людей», «как у людей 50..100%»)
+                var peopleWord = new System.Text.RegularExpressions.Regex(@"[^\n]{0,24}(?:людей|люди\b|people's)[^\n]{0,12}",
+                                                                          System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                IEnumerable<string> People(string text) => peopleWord.Matches(text).Select(t => t.Value.Trim()).Distinct();
                 {
                     var keepLangE = Loc.Language;
                     Loc.Language = "ru";
@@ -572,24 +578,86 @@ public sealed partial class MainWindow
                     IEnumerable<string> Latin(string text) => token.Matches(text).Select(t => t.Value.Trim('.', '\'', '-'))
                         .Where(t => t.Count(char.IsLetter) >= 3 && !t.Any(char.IsDigit) && !t.Contains('_') && !t.Contains('.') && !t.Contains('/')
                                     && t.All(c => c < 128) && !names.Contains(t));
+                    var people = 0;
                     foreach (var m in Library.Scan(s))
                     {
                         if (m.Description != null)
+                        {
                             foreach (var t in Latin(m.Description).Distinct().Take(3))
                                 english.Add($"{m.Name} description: «{t}»");
+                            foreach (var t in People(m.Description).Take(3))
+                            {
+                                english.Add($"{m.Name} description: «{t}»");
+                                people++;
+                            }
+                        }
                         for (var i = 0; i < m.Gates.Count; i++)
                         {
                             if (m.Gates[i].pass)
                                 continue;
                             var measure = i < m.Said.Count ? SaidWords(m.Gates[i].what, m.Said[i]) : "";
-                            foreach (var t in Latin(Loc.Gate(m.Gates[i].what) + " " + measure).Distinct().Take(2))
+                            var row = Loc.Gate(m.Gates[i].what) + " " + measure;
+                            foreach (var t in Latin(row).Distinct().Take(2))
                                 english.Add($"{m.Name} {Loc.GateKey(m.Gates[i].what)}: «{t}»");
+                            foreach (var t in People(row).Take(2))
+                            {
+                                english.Add($"{m.Name} {Loc.GateKey(m.Gates[i].what)}: «{t}»");
+                                people++;
+                            }
                         }
                     }
                     Loc.Language = keepLangE;
-                    Row(english.Count == 0, "the library in Russian: no English in a map's description, its failed checks or their measures",
-                        $"the library in Russian, English left ({english.Count}): {string.Join("; ", english.Take(8))}");
+                    Row(english.Count == 0, "the library in Russian: no English and no «карты людей» in a map's description, its failed checks or their measures",
+                        $"the library in Russian, English or «людей» left ({english.Count}, «людей» {people}): {string.Join("; ", english.Take(8))}");
                     File.WriteAllLines(Path.Combine(Settings.ProgramDir, "selftest_english.txt"), english);
+                }
+                // 3.58: the English side of the same - the English descriptions carried the Russian «как у людей 50..100%» and
+                // «dressed as people's map» (RED on the same copy); the failed checks' words in English say «well-known maps».
+                // 3.58 addendum (the coordinator, 07.11): and no Russian word at all - the powerups' row («смешанно → мега — в
+                // нише»), the round shapes, the edges, «план 67%» were written into both languages; the names of maps, of the
+                // game and of the Studio are Latin, so any Cyrillic letter is a find. RED: a copy of his library before
+                // tools/mapgen_redescribe.py's English pass
+                {
+                    var keepLangP = Loc.Language;
+                    Loc.Language = "en";
+                    var left = new List<string>();
+                    var scanned = 0;
+                    var cyrillic = new System.Text.RegularExpressions.Regex(@"[^\n]{0,16}[Ѐ-ӿ][^\n]{0,24}");
+                    IEnumerable<string> Russian(string text) => cyrillic.Matches(text).Select(t => t.Value.Trim()).Distinct();
+                    var russian = 0;
+                    foreach (var m in Library.Scan(s))
+                    {
+                        scanned++;
+                        if (m.Description != null)
+                        {
+                            left.AddRange(People(m.Description).Take(3).Select(t => $"{m.Name} description: «{t}»"));
+                            var ru = Russian(m.Description).Where(t => !People(t).Any()).Take(4).ToList();
+                            russian += ru.Count;
+                            left.AddRange(ru.Select(t => $"{m.Name} description: «{t}»"));
+                        }
+                        for (var i = 0; i < m.Gates.Count; i++)
+                            if (!m.Gates[i].pass)
+                            {
+                                var row = Loc.Gate(m.Gates[i].what) + " " + (i < m.Said.Count ? SaidWords(m.Gates[i].what, m.Said[i]) : "");
+                                var finds = People(row).Concat(Russian(row).Where(t => !People(t).Any())).Take(2).ToList();
+                                russian += finds.Count(t => cyrillic.IsMatch(t));
+                                left.AddRange(finds.Select(t => $"{m.Name} {Loc.GateKey(m.Gates[i].what)}: «{t}»"));
+                            }
+                    }
+                    Loc.Language = keepLangP;
+                    Row(left.Count == 0, $"the library in English: no Russian word and no «people's maps» in a map's description, its failed checks or their measures ({scanned} maps)",
+                        $"the library in English, Russian or «people's» left ({left.Count}, Russian {russian}): {string.Join("; ", left.Take(8))}");
+                    File.AppendAllLines(Path.Combine(Settings.ProgramDir, "selftest_english.txt"), left.Select(x => "en " + x));
+                }
+                // 3.58: the Studio's own words - no «карты людей» in its Russian table, no «people's maps» in its English one
+                {
+                    var ru = Loc.Table("ru").Where(x => People(x.text).Any()).Select(x => x.key).ToList();
+                    var en = Loc.Table("en").Where(x => People(x.text).Any() || x.text.Contains("people make")
+                                                        || System.Text.RegularExpressions.Regex.IsMatch(x.text, @"[Ѐ-ӿ]"))
+                                            .Select(x => x.key).ToList();
+                    Row(ru.Count + en.Count == 0,
+                        $"the Studio's own words say «известные карты» / «well-known maps»: {Loc.Table("ru").Count()} Russian and {Loc.Table("en").Count()} English texts, none says «людей» or «people's», no English one holds a Russian letter",
+                        $"the Studio's own words still say «людей» ({ru.Count}: {string.Join(", ", ru.Take(6))}) or «people's» / Russian in English ({en.Count}: {string.Join(", ", en.Take(6))})");
                 }
             }
         }

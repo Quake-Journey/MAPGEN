@@ -11,6 +11,19 @@ public static class Versions
 
     public static readonly Entry[] All =
     {
+        new("3.58", "07.11.2026",
+            new[]
+            {
+                "В студии, в описании новой карты и в её проверках карты Quake II, по которым настроен генератор и с которыми он сравнивает новую карту, называются просто «известные карты»; выбор отделки — «Как у известных карт»",
+                "Английское описание новой карты — целиком по-английски: мерки известных карт, места главных предметов, скругления, края островов и доля точек появления на высоте больше не написаны по-русски",
+                "Руководство: убран раздел «В следующих версиях» — то, что он обещал, в студии уже есть",
+            },
+            new[]
+            {
+                "In the Studio, in a new map's description and in its checks the Quake II maps the generator is tuned on and compares a new map with are called simply «well-known maps»; the dressing choice is «Like well-known maps»",
+                "A new map's English description is in English throughout: the well-known maps' bands, where the powerups lie, round shapes, the islands' edges and the spawns at height are no longer written in Russian",
+                "The guide: the «In future versions» section removed - what it promised is in the Studio already",
+            }),
         new("3.57", "07.11.2026",
             new[]
             {
