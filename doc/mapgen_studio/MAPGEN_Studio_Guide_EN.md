@@ -219,10 +219,10 @@ the player count; which one is said in brackets.
   steps up. «Let water stand above the floor» (off) lets rooms be flooded over the floor when more water is asked
   than the pits hold; without it the shortfall is said in the description.
 - **Ways** — stairs, ramps, lifts, jump pads, teleporters, ladders, drops, doors and windows between rooms. Jump pads
-  and teleporters look as on people's maps: a lit disc on a plinth for a jump up, a slanted plate with arrows for a
+  and teleporters look as on well-known maps: a lit disc on a plinth for a jump up, a slanted plate with arrows for a
   flight away, arrows running over it the way one flies; a teleporter stands in a frame of two posts with a
   shimmering portal.
-- **Mechanics** — ways of play taken from people's maps: a stack on the clock, two halves, a gun on a ledge, route
+- **Mechanics** — ways of play from well-known maps: a stack on the clock, two halves, a gun on a ledge, route
   asymmetry, many small health spots, spawn pressure, a dead-end stack, three approaches, a teleporter to the mirror
   stack, a jump pad over a pit, a lift as a weak spot, a ladder under an item. The check looks for each one turned on.
 - **Weapons and items** — how many of each weapon, the armour and the stack (sets or your own), shards, ammo and
@@ -242,8 +242,8 @@ the player count; which one is said in brackets.
 
 ![A new map from scratch: a tower](screens/en/generate_scratch_tower.png)
 
-While the run goes, its first stage on its page is **The map's skeleton**: of many variants the best by people's
-measures is chosen, and its picture — the places, the levels (the lighter, the higher), the ways, weapons and items —
+While the run goes, its first stage on its page is **The map's skeleton**: of many variants the best by the
+measures of well-known maps is chosen, and its picture — the places, the levels (the lighter, the higher), the ways, weapons and items —
 appears before the first wall. Over it all — **Progress**: the percent of the whole build, how long is left and when
 it will end, which stage is on («Stage 5 of 11: Edits»).
 
@@ -252,7 +252,7 @@ in one half of it, so it is built however much room its islands take.
 
 The finished map goes through the same checks as a map from a base, and two more:
 
-- **From scratch** — it is measured as people's maps are (size, levels, the ways' width, visibility, ways out of item
+- **From scratch** — it is measured as well-known maps are (size, levels, the ways' width, visibility, ways out of item
   places, light, the textures' colour and brightness, for an open space the islands and the pads' flights), and it has
   all its parameters and mechanics asked for. It has no place one can get into and not out of; lifts ride only through
   air; spawns stand away from teleporters and jump pads; water does not stand above a floor. It is checked as the
@@ -437,11 +437,6 @@ are; below, the versions' history as cards: what changed in each, the newest on 
 - **A map says «cannot be played»** — its page shows which check failed and where (a spawn point not in the open, for
   one). Better make it again with another variant number.
 - **A map from scratch made by an older Studio** — «Check again» on its page measures it with this version's checks.
-
-## In future versions
-
-- **Maps from scratch** — new layouts and mechanics of people's maps, the Studio's own textures nearer people's colours.
-- What comes next is decided by the players' word: write in Telegram — https://t.me/Q2PROX.
 
 ## Where the files are
 
