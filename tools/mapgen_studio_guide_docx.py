@@ -94,6 +94,9 @@ def build(md: Path) -> Path:
             para.append(s.strip())
     flush()
     out = md.with_suffix(".docx")
+    # the source it was built from (mapgen_studio_guide_html.source_stamp): the guide guard compares it with now
+    from mapgen_studio_guide_html import source_stamp
+    doc.core_properties.comments = f"mapgen-source {source_stamp(md)}"
     doc.save(out)
     links_up_to_date(out)
     return out

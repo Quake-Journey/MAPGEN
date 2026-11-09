@@ -121,6 +121,9 @@ NAMES = {  # key: (ru, en) - the Russian ones are Fable's table, the PO reads th
     "tower_quad": ("Квад на верхушке", "The quad at the top"), "tower_tech": ("Техно-башня", "A tech tower"),
     "tower_8": ("Башня на 8 с тремя шахтами", "A tower for 8 with three shafts"),
     "tower_4": ("Четыре этажа на 8", "Four storeys for 8"), "tower_16": ("Высотка на 16", "A high-rise for 16"),
+    # brief 34 (the PO 08.11: «лифты в башне - пример параметра … и пресеты под это делать новые заводские»)
+    "tower_skyscraper": ("Небоскрёб: лифты и лестницы", "Skyscraper: lifts and stairs"),
+    "tower_pads": ("Башня на джампадах", "A tower of jump pads"), "tower_stairs": ("Башня с лестницами", "A tower of stairs"),
 }
 
 THEME = {"tech": ("Техника", "Tech"), "gothic": ("Готика", "Gothic"), "industrial": ("Завод", "Factory"),
@@ -425,7 +428,7 @@ def replace_between(text: str, begin: str, end: str, body: str) -> str:
 
 def write() -> int:
     rows = read_oracle()
-    assert len(rows) == 184, len(rows)
+    assert len(rows) == 187, len(rows)       # brief 34: three of the tower
     missing = [k for _, k, *_ in rows if k not in KEEP and k not in NAMES]
     if missing:
         raise SystemExit(f"no names for {missing}")

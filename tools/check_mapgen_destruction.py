@@ -16,7 +16,9 @@ Also the generated map at 25 and 50 with every kind, its map stage sealed.
 RED, two: the start keep-out taken out (`DESTROY_STARTS_KEEP` 0): at 100 something stands within 96 of a start; the
 sky's brushes counted as rock again: at 50 a breach leaks (row 412l's first ruined q2dm1: the breach that counted the
 sky over a courtyard as rock) - each case above goes red. (The rule that only air with a visibility cluster is the
-level's own stays as a second guard of the seal; on this map, the sky's rule in place, it is not the one that holds.)
+level's own stays as a second guard of the seal; on this map, the sky's rule in place, it is not the one that holds.
+The carve undone when it leaves a piece hanging (3.60, the PO's mg_new_594) is a third one: the leaking breach of the
+sky's RED leaves one, so the RED runs with it off - MAPGEN_DESTROY_KEEP_HANGING=1 - to show the sky's rule alone.)
 
     python tools/check_mapgen_destruction.py [--work DIR] [--no-compile] [--no-red]
 """
@@ -41,8 +43,10 @@ WORK = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\destruction")
 GENERATED = Path(r"O:\Claude2\_agent_temp\claude\mapgen1-20260918\fixtures\gen_q2dm1_20_42.bsp")
 
 
-def sealed_at(exe: Path, work: Path, pack: Path, d: int, tag: str) -> tuple[bool, str]:
-    """The generated map ruined at D with every kind, its map stage compiled: sealed (no leak)?"""
+def sealed_at(exe: Path, work: Path, pack: Path, d: int, tag: str, keep_hanging: bool = False) -> tuple[bool, str]:
+    """The generated map ruined at D with every kind, its map stage compiled: sealed (no leak)? `keep_hanging`: the
+    carves that leave a piece hanging kept (the engine's MAPGEN_DESTROY_KEEP_HANGING) - for the sky's RED alone."""
+    import os
     from mapgen_pinned_compiler import pinned_compiler
     into = work / f"{tag}_into"
     md.install(into, pack)
@@ -53,7 +57,8 @@ def sealed_at(exe: Path, work: Path, pack: Path, d: int, tag: str) -> tuple[bool
     mp = work / f"{tag}_gen_{d}.map"
     r = subprocess.run([str(exe), str(GENERATED), str(mp), "--destruction", str(d), "--seed", "42", "--pack", str(plist),
                         "--needs", str(work / f"{tag}_needs.txt"), "--game", str(md.GAME), "--skip", "0"],
-                       capture_output=True, text=True, errors="replace", timeout=3600)
+                       capture_output=True, text=True, errors="replace", timeout=3600,
+                       env=dict(os.environ, MAPGEN_DESTROY_KEEP_HANGING="1") if keep_hanging else None)
     said = md.DESTROYED.search(r.stdout)
     q2tool, threads = pinned_compiler()
     c = subprocess.run([str(q2tool), "-bsp", "-threads", threads, "-moddir", str(into), "-basedir", str(md.GAME),
@@ -208,7 +213,7 @@ def main() -> int:
                         sexe = md.driver(a.work / "red_sky")
                     finally:
                         md.REPO = saved
-                    ok, how = sealed_at(sexe, a.work / "red_sky", pack, 50, "red")
+                    ok, how = sealed_at(sexe, a.work / "red_sky", pack, 50, "red", keep_hanging=True)
                     check("RED: with the sky counted as rock a breach leaks at 50 - the case above goes red", not ok,
                           how)
         finally:

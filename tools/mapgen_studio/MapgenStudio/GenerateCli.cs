@@ -52,12 +52,11 @@ public static class GenerateCli
             var missingS = Generation.Missing(s, "", scratch: true);
             if (missingS != null)
                 return $"FAIL {missingS}\n";
-            // the PO, 04.11 («висящих в воздухе архитектурных штучек»): the engine's ornaments hung from a reference are
-                // not dealt on a map from scratch (Decor 1 = 0 %) - its own «Украшения на стенах» governs
-                var opts = s.Options with { WarpSize = 100, WarpShape = 0, WarpTurn = 0, WarpHeight = 100, WarpShift = 0, Decor = 1, Remodels = 0, Blocks = 0,
-                                            FloorShifts = -1, StairReshapes = -1 };
-            var rqS = new GenerationRequest(name, "", fidelity, seed, s.SkipFamilies, s.SaveMapSource,
-                                            MaxAttempts: minutes * 10, Options: opts, TimeMinutes: minutes, Scratch: ps);
+            // brief 33: as the window builds it (Generation.ScratchRequest) from the parameters given (their stairway annexes
+            // too - not the form's), the ruin and the rows both pages share from the settings; FIDELITY the likeness
+            var given = new Settings { ClientDir = s.ClientDir, Options = s.Options, SaveMapSource = s.SaveMapSource,
+                                       Scratch = ScratchParams.FromPython(ps, fidelity) };
+            var rqS = Generation.ScratchRequest(given, name, seed, minutes * 10, minutes) with { Fidelity = fidelity, Scratch = ps };
             var gs = Generation.Start(rqS, s);
             while (gs.Running)
             {

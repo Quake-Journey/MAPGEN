@@ -126,6 +126,10 @@ public sealed partial class MainWindow
                                           Loc.T("scr.mode.ffa"), Loc.T("scr.mode.tdm") },
               Array.IndexOf(modes, p.Mode), i => DefaultsMove(() => p.Mode = modes[i]));
         Count(people, "scr.spawns", Enumerable.Range(2, 23).ToArray(), p.Spawns, ScratchParams.DefaultSpawns(p.Players).ToString(), v => p.Spawns = v);
+        // brief 32: a plate under every spawn - none by default, as before
+        Combo(people, "scr.spawn_plate", new[] { Def(Loc.T("scr.none").ToLowerInvariant()) }.Concat(ScratchParams.PlateChoices.Select(v => $"{v} %")).ToArray(),
+              p.SpawnPlateSize <= 0 ? 0 : Array.IndexOf(ScratchParams.PlateChoices, p.SpawnPlateSize) is var pi_ && pi_ >= 0 ? pi_ + 1 : -1,
+              i => p.SpawnPlateSize = i == 0 ? 0 : ScratchParams.PlateChoices[i - 1]);
         // size and shape
         Combo(shape, "scr.size", SizeChoices.Select(v => v == 100 ? Def($"{ScratchParams.DefaultFloor(p.Players):0.0} {Loc.T("scr.mu2")}") : $"{v} %").ToArray(),
               Array.IndexOf(SizeChoices, p.SizePercent), i => p.SizePercent = SizeChoices[i]);
@@ -189,10 +193,31 @@ public sealed partial class MainWindow
             Count(moves, "scr.lifts", new[] { 0, 1, 2, 3, 4, 6, 8 }, p.Lifts, "2", v => p.Lifts = v);
             Count(moves, "scr.pads", new[] { 0, 1, 2, 3, 4, 6 }, p.Pads, p.Players <= 2 ? "0" : "1", v => p.Pads = v);
         }
+        // brief 34 (the PO 08.11: «можно же лестницы строить, лифты, а не напихивать джампады ради джампадов»; «лифты как
+        // в небоскрёбах»): a tower climbs by a flight a storey, a lift stopping on every storey and one express pad - its
+        // own three rows (the values the rooms' rows have, so a shape changed keeps what it can show)
+        if (p.Shape == "tower")
+        {
+            Count(moves, "scr.tower.stairs", new[] { 0, 1, 2, 3, 4, 6, 8, 12, 16, 24 }, p.Stairs, Loc.T("scr.tower.stairs.def"), v => p.Stairs = v);
+            Count(moves, "scr.tower.lifts", new[] { 0, 1, 2, 3, 4, 6, 8 }, p.Lifts, "1", v => p.Lifts = v);
+            Count(moves, "scr.tower.pads", new[] { 0, 1, 2, 3, 4, 6 }, p.Pads, "1", v => p.Pads = v);
+        }
         Count(moves, "scr.teleporters", new[] { 0, 1, 2, 3, 4 }, p.Teleporters, p.Players <= 2 ? "0" : "1", v => p.Teleporters = v);
+        // brief 32: how big the pads and the teleporters' frames are - «По умолчанию (100 %)» as before; an open space's and a
+        // tower's pads too (theirs come from their own card)
+        void Size(string key, int current, Action<int> set) =>
+            Combo(moves, key, new[] { Def("100 %") }.Concat(ScratchParams.SizeChoices.Select(v => $"{v} %")).ToArray(),
+                  current == 100 ? 0 : Array.IndexOf(ScratchParams.SizeChoices, current) is var at_ && at_ >= 0 ? at_ + 1 : -1,
+                  i => set(i == 0 ? 100 : ScratchParams.SizeChoices[i - 1]));
+        Size("scr.pad_disc_size", p.PadDiscSize, v => p.PadDiscSize = v);
+        Size("scr.pad_wedge_size", p.PadWedgeSize, v => p.PadWedgeSize = v);
+        Size("scr.tele_frame_size", p.TeleFrameSize, v => p.TeleFrameSize = v);
         if (!space)
         {
             Count(moves, "scr.ladders", new[] { 0, 1, 2, 3, 4, 6, 8 }, p.Ladders, "0", v => p.Ladders = v);
+            // brief 33: the engine's stairway annexes - this page's own row (the other page's no longer reaches here)
+            Combo(moves, "scr.stair_annexes", Enumerable.Range(0, 11).Select(n => n == 0 ? Loc.T("gen.stairways.none") : n.ToString()).ToArray(),
+                  Math.Clamp(p.StairAnnexes, 0, 10), i => p.StairAnnexes = i);
             Count(moves, "scr.drops", new[] { 0, 1, 2, 3, 4, 6, 8, 12 }, p.Drops, Loc.T("scr.bylevels"), v => p.Drops = v);
             Count(moves, "scr.doors", new[] { 0, 1, 2, 3, 4, 6, 8 }, p.Doors, "0", v => p.Doors = v);
             Count(moves, "scr.windows", new[] { 0, 2, 4, 6, 8, 12 }, p.Windows, "4", v => p.Windows = v);

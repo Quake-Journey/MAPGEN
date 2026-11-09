@@ -43,6 +43,10 @@ public static class GateSaid
         }
         if (Off)
             return said;
+        // brief 34: «pad 5 (band ..2)» - which like things and how many stand together
+        var rep = M(said, @"^([a-z]+) (\d+) \(band \.\.(\d+)\)$");
+        if (rep.Success && Loc.Has($"lib.gates.said.kind.{rep.Groups[1].Value}"))
+            return Loc.F("lib.gates.said.repetition", Loc.T($"lib.gates.said.kind.{rep.Groups[1].Value}"), rep.Groups[2].Value);
         return Known(what, said) ?? said;
     }
 
@@ -143,8 +147,30 @@ public static class GateSaid
                     return Loc.F("lib.gates.said.ledge", m.Groups[1].Value, m.Groups[2].Value);
                 break;
             case "gate.nothing hanging":
-                if ((m = M(said, @"^(\d+): stands out of a wall at (-?\d+ -?\d+ -?\d+)")).Success)
-                    return Loc.F("lib.gates.said.hanging", m.Groups[1].Value, m.Groups[2].Value);
+                // 3.60: every piece in words - «hangs from the ceiling» and «in the air» too (the PO's mg_new_594 on a
+                // Russian page: «hangs», «from»)
+                if ((m = M(said, @"^(\d+): (.+)$")).Success)
+                {
+                    var words = new List<string>();
+                    foreach (var piece in Regex.Split(m.Groups[2].Value,
+                                                      @", (?=(?:stands out of a wall|hangs from the ceiling|in the air) at )"))
+                    {
+                        var pm = M(piece, @"^(stands out of a wall|hangs from the ceiling|in the air) at (-?\d+ -?\d+ -?\d+)$");
+                        if (!pm.Success)
+                        {
+                            words.Clear();
+                            break;
+                        }
+                        words.Add(Loc.F(pm.Groups[1].Value switch
+                        {
+                            "stands out of a wall" => "lib.gates.said.hanging.wall",
+                            "hangs from the ceiling" => "lib.gates.said.hanging.ceiling",
+                            _ => "lib.gates.said.hanging.air",
+                        }, pm.Groups[2].Value));
+                    }
+                    if (words.Count > 0)
+                        return Loc.F("lib.gates.said.hanging.n", m.Groups[1].Value) + ": " + string.Join("; ", words);
+                }
                 break;
             case "gate.plain rooms":
                 if ((m = M(said, @"^(\d+) halls or rooms with nothing but walls and doorways")).Success)
@@ -172,6 +198,19 @@ public static class GateSaid
                 if ((m = M(said, @"^(\d+) \(people's: (\d+) at most\)")).Success)
                     return Loc.F("lib.gates.said.lines", m.Groups[1].Value, m.Groups[2].Value);
                 break;
+            // 3.60: his tower mg_new_18619 failed these with English words on a Russian page (the self-test, 08.11)
+            case "gate.mechanic «dead-end stack»":
+                if ((m = M(said, @"^\[([\d, ]*)\]$")).Success)
+                    return Loc.F("lib.gates.said.deadend", m.Groups[1].Value);
+                break;
+            case "gate.pads apart":
+                if (said == "no two on one floor")
+                    return Loc.T("lib.gates.said.nopadpairs");
+                break;
+            case "gate.not a copy, item graph":
+                if ((m = M(said, @"^([\d.]+) s from (\S+)$")).Success)
+                    return Loc.F("lib.gates.said.copygraph", m.Groups[1].Value, m.Groups[2].Value);
+                break;
             case "gate.not a copy, routes":
                 if ((m = M(said, @"^([\d.]+) with (\S+)")).Success)
                     return Loc.F("lib.gates.said.copyroutes", m.Groups[1].Value, m.Groups[2].Value);
@@ -197,6 +236,9 @@ public static class GateSaid
             return Loc.F("lib.gates.said.seconds", m.Groups[1].Value);
         if ((m = M(said, @"^(-?[\d.]+)x$")).Success)
             return Loc.F("lib.gates.said.times", m.Groups[1].Value);
+        // 3.60: «none» as a row's whole measure (a mechanic «lift as exposure» with no major item only a lift reaches)
+        if (said == "none")
+            return Loc.T("lib.gates.said.none");
         return null;
     }
 

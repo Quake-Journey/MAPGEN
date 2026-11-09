@@ -19,6 +19,23 @@ h3{margin-top:24px}img{max-width:100%;border:1px solid #ccc;border-radius:6px;ma
 code{background:#eee;padding:1px 4px;border-radius:3px}li{margin:3px 0}"""
 
 
+def source_stamp(md: Path, text: str | None = None) -> str:
+    """What an HTML or DOCX guide is built from: the Markdown and every picture it shows (Fable's review of 3.60, 08.11:
+    the Studio opened HTML and DOCX built at 20:02 while the Markdown had changed twice since - «у двери на галерею»,
+    «джампад ставится всегда»). Written into both; check_mapgen_studio_guide.py compares it with the files of now."""
+    import hashlib
+    text = md.read_text(encoding="utf-8") if text is None else text
+    h = hashlib.sha256(text.encode("utf-8"))
+    for pic in sorted(set(re.findall(r"!\[[^\]]*\]\(([^)]+)\)", text))):
+        f = md.parent / pic
+        h.update(pic.encode("utf-8"))
+        h.update(f.read_bytes() if f.is_file() else b"missing")
+    return h.hexdigest()[:16]
+
+
+STAMP = re.compile(r"mapgen-source ([0-9a-f]{16})")
+
+
 def inline(text: str) -> str:
     out = html.escape(text, quote=False)
     out = re.sub(r"`([^`]+)`", r"<code>\1</code>", out)
@@ -26,7 +43,7 @@ def inline(text: str) -> str:
     return out
 
 
-def convert(md: str, title: str) -> str:
+def convert(md: str, title: str, stamp: str = "") -> str:
     body, para, items = [], [], []
 
     def flush():
@@ -61,7 +78,8 @@ def convert(md: str, title: str) -> str:
             para.append(s.strip())
     flush()
     return (f"<!doctype html><html><head><meta charset='utf-8'><title>{html.escape(title)}</title>"
-            f"<style>{STYLE}</style></head><body>\n" + "\n".join(body) + "\n</body></html>\n")
+            + (f"<meta name='generator' content='mapgen-source {stamp}'>" if stamp else "")
+            + f"<style>{STYLE}</style></head><body>\n" + "\n".join(body) + "\n</body></html>\n")
 
 
 def main() -> int:
@@ -69,7 +87,7 @@ def main() -> int:
         md = DOC / f"MAPGEN_Studio_Guide_{lang}.md"
         text = md.read_text(encoding="utf-8")
         first = next((l.lstrip("# ").strip() for l in text.splitlines() if l.startswith("# ")), "MAPGEN Studio")
-        md.with_suffix(".html").write_text(convert(text, first), encoding="utf-8")
+        md.with_suffix(".html").write_text(convert(text, first, source_stamp(md, text)), encoding="utf-8")
         print(md.with_suffix(".html"))
     return 0
 

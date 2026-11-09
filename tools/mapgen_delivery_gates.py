@@ -829,9 +829,13 @@ def ask_stairways(bsp: Path, job: Path, donor: Path, work: Path) -> tuple[bool, 
     def accepted(s: dict) -> bool:
         # brief 18: and in height - mg_b18_q2dm3's first-round stairway (top 127, refused) sat in the plan of the
         # later one accepted beside it (top 63)
+        # brief 33 (Opus 08.11): the listing's landing reaches 8 under the floor it stands on (its footing) while the
+        # ledger's box starts at that floor - on a map from scratch every accepted stairway missed by those 8 and the
+        # description said «стоит 0 из 4» over two that stood (mg_b33_stairs; his mg_new_38706, 4 accepted). The top
+        # stays strict (brief 18's case is the top: 127 against 63)
         L = s["landing"]
         return any(b[0] - 1 <= L[0] and L[3] <= b[3] + 1 and b[1] - 1 <= L[1] and L[4] <= b[4] + 1
-                   and b[2] - 1 <= L[2] and L[5] <= b[5] + 1 for b in boxes)
+                   and b[2] - 9 <= L[2] and L[5] <= b[5] + 1 for b in boxes)
 
     mine = [s for s in planned if accepted(s)]
     cand, don = Bsp(bsp), Bsp(donor)

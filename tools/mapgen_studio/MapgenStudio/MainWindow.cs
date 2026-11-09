@@ -1434,23 +1434,8 @@ public sealed partial class MainWindow : Window
                    the edits of a ready map - not on this page; the run from scratch skips every family
                    (Generation.cs), the user's ticks for maps from a base stay as they were */
                 var sdn = (long)(double.IsNaN(seed.Value) ? 0 : seed.Value);
-                // brief 19: no frame for a base made from scratch - its size is its own parameter
-                // the PO, 04.11 («висящих в воздухе архитектурных штучек»): the engine's ornaments hung from a reference are
-                // not dealt on a map from scratch (Decor 1 = 0 %) - its own «Украшения на стенах» governs; the base's
-                // remodels and blocks neither (Fable 04.11: the skipped families still came as planned edits, 0 of 3 built)
-                var opts = S.Options with { WarpSize = 100, WarpShape = 0, WarpTurn = 0, WarpHeight = 100, WarpShift = 0, Decor = 1, Remodels = 0, Blocks = 0,
-                                            FloorShifts = -1, StairReshapes = -1 };
-                /* brief 25 A2: islands in the void - the engine's building edits are rooms' (annexes, stairways, storeys,
-                   spans, halls, digs, floor moves, new liquids): none of them on an open space; it only rebuilds, lights
-                   and delivers (a ruin, when asked, stays) */
-                // brief 25 B: nor on a tower - an annex, a storey, a dig or a floor moved would cut into the storeys
-                // over it and the pads' landings
-                if (S.Scratch.Shape is "space" or "tower")
-                    opts = opts with { Digs = 0, Annexes = 0, AnnexSize = 0, Storeys = 0, Spans = 0, Halls = 0, Liquids = "", Stairways = 0,
-                                       FloorShifts = 0, StairReshapes = 0, NewWater = 0, NewSlime = 0, NewLava = 0 };
-                var rq = new GenerationRequest(mapName, "", S.Scratch.Fidelity, sdn, skip, S.SaveMapSource,
-                                               MaxAttempts: S.Builds, TimeMinutes: S.TimeMinutes, Options: opts,
-                                               Scratch: S.Scratch.ToPython(Path.Combine(S.ClientDir, "baseq2"), Engine.DonorsDir));
+                // brief 33: this page's rows only (Generation.ScratchRequest) - nothing of the «Из готовых карт» page
+                var rq = Generation.ScratchRequest(S, mapName, sdn, S.Builds, S.TimeMinutes);
                 var saidS = Generation.NameTaken(S, rq.Name, out var heldS);
                 if (saidS.Length > 0)
                 {
@@ -1489,15 +1474,8 @@ public sealed partial class MainWindow : Window
             var sd = (long)(double.IsNaN(seed.Value) ? 0 : seed.Value);
             // one base: the map; several: a map from each, one after another - or ONE map from the first with rooms
             // offered from the others
-            var requests = _chosen.Count == 1 || _graftMode
-                ? new List<GenerationRequest>
-                  {
-                      new(mapName, _chosen[0], fid, sd, skip, S.SaveMapSource, MaxAttempts: S.Builds, TimeMinutes: S.TimeMinutes,
-                          Grafts: _chosen.Skip(1).ToList(), Options: S.Options),
-                  }
-                : _chosen.Select(d => new GenerationRequest($"{mapName}_{d}", d, fid, sd, skip, S.SaveMapSource,
-                                                         MaxAttempts: S.Builds, Options: S.Options,
-                                                         TimeMinutes: S.TimeMinutes)).ToList();
+            // brief 33: this page's rows only (Generation.BaseRequests) - nothing of the «Новая карта с нуля» page
+            var requests = Generation.BaseRequests(S, _chosen, _graftMode, mapName, fid, sd, skip);
             // the PO, 11.10: a name already taken is asked about first - write over, correct the name, or not start
             var taken = new List<string>();
             var takenSaid = new List<string>();
@@ -2862,6 +2840,7 @@ reshaping families dropped at the plan (their own rules refuse them on this map)
         // brief 23: the style maps' list, the six annex sizes, the presets
         PresetsSelfTest(b);
         ProgressSelfTest(b);
+        PagesSelfTest(b);       // brief 33: each run its page's rows, presets every row
         Loc.Language = keepLang;
         App.ApplyTheme(keepTheme);
         App.Settings.ScratchMode = keepScratch;
@@ -2898,6 +2877,16 @@ reshaping families dropped at the plan (their own rules refuse them on this map)
         catch (Exception ex)
         {
             b.AppendLine($"FAIL the asked-and-made description: {ex.GetType().Name}: {ex.Message}");
+        }
+        /* brief 32 (the PO 08.11, mg_new_84162 «Карта не собралась» after a good skeleton): a run from scratch deals none of
+           the engine's families that move, add or swap parts - every family of «Что можно менять» and the bundle swaps
+           are skipped. RED: the 3.58 list (17 names, no bundle swaps) fails this row */
+        {
+            var must = Families.Values.SelectMany(x => x).Concat(new[] { "swap-bundles", "recompose-bundles" }).Distinct().ToList();
+            var lacking = must.Where(f => !Generation.ScratchSkips.Contains(f)).ToList();
+            b.AppendLine(lacking.Count == 0
+                ? $"PASS a run from scratch deals none of the engine's moving families ({Generation.ScratchSkips.Length} skipped, the bundle swaps among them)"
+                : "FAIL a run from scratch deals none of the engine's moving families -- not skipped: " + string.Join(", ", lacking));
         }
         foreach (var dir in new[] { live, dead })
             try

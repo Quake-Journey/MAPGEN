@@ -32,9 +32,14 @@ UP = pm.UP
 SLAB = 16
 GRAVITY = 800.0
 
+# brief 34 (the PO 08.11: «можно же лестницы строить, лифты, а не напихивать джампады ради джампадов - всё хорошо в
+# меру»; «лифты как в небоскрёбах - едут между этажами, останавливаются там»): a tower climbs by a flight of steps per
+# storey («stairs» -1: one a storey), a lift stopping on every storey in a shaft («lifts»: shafts that hold one) and
+# one express pad from a corner of the atrium to the top («pads»: pads beside the stairs and lifts); the perches by
+# pads (only a pad reaches them, by design)
 TOWER_DEFAULTS = {"storeys": 3, "storey_height": 192, "shafts": 2, "perches": 2, "openness": [0.28, 0.47, 0.25],
-                  "pits": 0, "water": 0.0, "lava": 0.0, "slime": 0.0, "windows": 0, "lifts": 0, "ladders": 0,
-                  "ramps": 0, "stairs": 0, "drops": 0, "doors": 0, "round": "", "decor": "none", "sky": 0.05,
+                  "pits": 0, "water": 0.0, "lava": 0.0, "slime": 0.0, "windows": 0, "lifts": 1, "ladders": 0,
+                  "ramps": 0, "stairs": -1, "pads": 1, "drops": 0, "doors": 0, "round": "", "decor": "none", "sky": 0.05,
                   "items_at_height": 0.8}
 # TOWER_DEFAULTS' openness is the one the tower gives (06.11, 24 candidates of six towers: corridor 0.16..0.31, medium 0.37..0.56, open 0.16..0.33;
 # pro_q2t4 0.20 / 0.65 / 0.16) - its atrium and galleries, not a rooms map's split
@@ -56,7 +61,7 @@ def tower_defaults(q: dict, params: dict) -> None:
     # 3.57: what a tower never builds (its own card says so: «Лестницы, лифты, окна и жидкости здесь не строятся») - the
     # form no longer offers them, and a request that still asks (an older preset) is told
     import mapgen_scratch_space as space_mod
-    forced = [k for k in space_mod.SPACE_FORCED if k != "decor"]
+    forced = [k for k in space_mod.SPACE_FORCED if k not in ("decor", "stairs", "lifts")]       # brief 34: its own
     asked = [k for k in forced if q.get(k) not in (None, TOWER_DEFAULTS.get(k), 0, 0.0, "", "none")]
     for k in forced:
         q[k] = TOWER_DEFAULTS.get(k, 0)
@@ -64,12 +69,20 @@ def tower_defaults(q: dict, params: dict) -> None:
         ru = ", ".join(space_mod.SPACE_FORCED_WORDS[k][0] for k in asked)
         en = ", ".join(space_mod.SPACE_FORCED_WORDS[k][1] for k in asked)
         q["refused"] = list(q.get("refused") or []) + [
-            f"{ru}: в башне не строятся - этажи вокруг атриума, наверх джампадами и шахтами ¦ {en}: not built in a tower - storeys round an atrium, up by pads and shafts"]
+            f"{ru}: в башне не строятся - этажи вокруг атриума, наверх лестницами, лифтами и джампадами ¦ {en}: not built in a tower - storeys round an atrium, up by stairs, lifts and pads"]
+    for k_ in ("stairs", "lifts", "pads"):
+        if q.get(k_) is None:
+            q[k_] = TOWER_DEFAULTS[k_]
 
 
 def key(c, k: int):
     """Cell c of storey k as the plan keys it."""
     return (c[0], c[1] + k * UP) if k else c
+
+
+# brief 34: a perch's pad from the atrium's rim keeps three cells from the corners no perch is over (the express's);
+# off only for check_mapgen_tower_ways.py's RED
+KEEP_FREE_CORNERS = True
 
 
 def flight_ok(P: pm.Plan, a, t, za: int, zt: int, vx: float, vy: float, vz: float, T: float, top: int,
@@ -102,8 +115,10 @@ def flight_ok(P: pm.Plan, a, t, za: int, zt: int, vx: float, vy: float, vz: floa
     return False
 
 
-def pad(P: pm.Plan, a_key, t_key, top: int, reach: float = 1100) -> bool:
-    """A pad on cell a_key landing on t_key (plan keys; their storeys' floors), if a flight clears."""
+def pad(P: pm.Plan, a_key, t_key, top: int, reach: float = 1100, margin: bool = False) -> bool:
+    """A pad on cell a_key landing on t_key (plan keys; their storeys' floors), if a flight clears. `margin` (brief 34:
+    a perch's pad from the top gallery): the flight clears from 30 higher too - the people's survey launches it 24 over
+    the planned take-off, and a short throw under a perch's slab missed by that much (the fixtures check, 08.11)."""
     a, t = pm.phys(a_key), pm.phys(t_key)
     za = P.spaces[P.owner[a_key]].floor[a_key][0] if a_key in P.owner else P._door_z[a_key]
     zt = P.spaces[P.owner[t_key]].floor[t_key][0] if t_key in P.owner else P._door_z[t_key]
@@ -121,7 +136,8 @@ def pad(P: pm.Plan, a_key, t_key, top: int, reach: float = 1100) -> bool:
         ux, uy = (dxu / D, dyu / D) if D > 0 else (0.0, 0.0)
         steep = math.degrees(math.atan2(vz, max(vh, 1e-6))) >= pm.PAD_STEEP
         if flight_ok(P, a, t, za, zt, ux * vh, uy * vh, vz, T, top) and (
-                steep or flight_ok(P, a, t, za, zt, ux * vh, uy * vh, vz, T, top, pm.PAD_WEDGE_LIFT)):
+                steep or flight_ok(P, a, t, za, zt, ux * vh, uy * vh, vz, T, top, pm.PAD_WEDGE_LIFT)) and (
+                not margin or flight_ok(P, a, t, za, zt, ux * vh, uy * vh, vz, T, top, 30.0)):
             P.pads.append((a_key, t_key, T + 0.1, round(sp / 10.0, 1), round(math.degrees(math.atan2(vz, max(vh, 1e-6))), 2),
                            round(math.degrees(math.atan2(dyu, dxu)), 2) if D > 0 else 0.0, za))
             P.no_items.update({a_key, t_key})
@@ -171,7 +187,13 @@ def plan(P: pm.Plan, rnd: random.Random) -> None:
     # from each other - a 2 x 2 shaft in a deeper band left a strip of floor a cell wide round it (06.11); in a
     # compact tower at a band's end (a shaft in its middle cut a room two cells wide off, 06.11)
     shafts = []
-    for _ in range(q["shafts"] - 1):
+    sides = []                       # brief 34: each shaft's band («y0» … «x1»): its gallery end
+    # brief 34: a lift asked brings its shaft (the PO's «Небоскрёб» needs no shaft asked first); a shaft with neither a
+    # lift nor a pad is not built (no pads asked, no lifts: «Башня с лестницами»)
+    n_shafts = max(q["shafts"] - 1, max(0, int(q.get("lifts") or 0)))
+    if not int(q.get("lifts") or 0) and not int(q.get("pads") or 0):
+        n_shafts = 0
+    for _ in range(n_shafts):
         for _try in range(200):
             band = rnd.choice(("y0", "y1", "x0", "x1") if x_band else ("y0", "y1"))
             if band in ("y0", "y1"):
@@ -186,7 +208,15 @@ def plan(P: pm.Plan, rnd: random.Random) -> None:
                 continue
             if all(pm_gap(r, o) >= 3 for o in shafts):
                 shafts.append(r)
+                sides.append(band)
                 break
+    # brief 34: the first «lifts» shafts hold a lift stopping on every storey - the shaft two cells square at its
+    # gallery end (the cabin's size), the rest of the band its rooms'
+    n_lifts = max(0, min(int(q.get("lifts") or 0), len(shafts)))
+    for i in range(n_lifts):
+        r, band = shafts[i], sides[i]
+        shafts[i] = {"y0": pm.Rect(r.x0, G.y0 - 3, r.x0 + 2, G.y0 - 1), "y1": pm.Rect(r.x0, G.y1 + 1, r.x0 + 2, G.y1 + 3),
+                     "x0": pm.Rect(G.x0 - 3, r.y0, G.x0 - 1, r.y0 + 2), "x1": pm.Rect(G.x1 + 1, r.y0, G.x1 + 3, r.y0 + 2)}[band]
     P.spaces = []
     sid = 0
 
@@ -261,6 +291,114 @@ def plan(P: pm.Plan, rnd: random.Random) -> None:
     for r in shafts:
         s = new_space("shaft", r, 0, set(r.cells()), top)
         shaft_spaces.append(s)
+    # brief 34: the lifts' doorways - one on every storey, the cabin's width, onto the gallery (the cells in front of
+    # them kept off the stairs)
+    lift_doors = []
+    for i in range(n_lifts):
+        s_, band = shaft_spaces[i], sides[i]
+        r = s_.rect
+        if band in ("y0", "y1"):
+            wall_y, out_y = (G.y0 - 1, G.y0) if band == "y0" else (G.y1, G.y1 - 1)
+            wall_cells = [(r.x0, wall_y), (r.x0 + 1, wall_y)]
+            fronts = [(r.x0, out_y), (r.x0 + 1, out_y)]
+        else:
+            wall_x, out_x = (G.x0 - 1, G.x0) if band == "x0" else (G.x1, G.x1 - 1)
+            wall_cells = [(wall_x, r.y0), (wall_x, r.y0 + 1)]
+            fronts = [(out_x, r.y0), (out_x, r.y0 + 1)]
+        lift_doors.append((s_, wall_cells, fronts))
+    keep_free = {c for (_s, _w, fr) in lift_doors for c in fr}
+    # brief 34: a flight of steps from each storey's gallery up to the next one's (along the gallery's outer side, under
+    # an opening in the floor above, two storeys tall), alternate storeys on opposite sides - the climb walks round
+    n_stairs = n - 1 if int(q.get("stairs") if q.get("stairs") is not None else -1) < 0 else max(0, min(int(q["stairs"]), n - 1))
+    run = SH // pm.RISE_PER_CELL
+    stairs_made = []
+
+    def doorable(k_, taken: set) -> dict:
+        """Brief 34: each room of storey k_ - how many wall cells could hold its doorway onto the gallery (a room behind
+        a stair's run lost them all and was left with one way in: 7 of 12 «Небоскрёб» plans, 08.11)."""
+        gal = storeys[k_]["gallery"]
+        out_ = {}
+        for rs in storeys[k_]["rooms"]:
+            n_ = 0
+            for w in storeys[k_]["wall"]:
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    a_, b_ = (w[0] - dx, w[1] - dy), (w[0] + dx, w[1] + dy)
+                    if key(a_, k_) in rs.floor and key(b_, k_) in gal.floor and b_ not in taken:
+                        n_ += 1
+                        break
+            out_[rs.id] = n_
+        return out_
+    side_order = ["y0", "y1", "x0", "x1"] if rnd.random() < 0.5 else ["x0", "x1", "y0", "y1"]
+    for k in range(n_stairs):
+        gal_lo, gal_hi = storeys[k]["gallery"], storeys[k + 1]["gallery"]
+        ceil_hi = storeys[k + 1]["ceil"]
+        placed_flight = False
+        # the gallery's outer row first (the stair along the wall), then its middle row (a stair in the wide gallery,
+        # a row to walk on each side of it) - an outer row the rooms' doorways need is left to them
+        lines_ = []
+        for depth in (0, 1):
+            for side in side_order[k % 2::2] + side_order[(k + 1) % 2::2]:
+                if side in ("y0", "y1"):
+                    y = G.y0 + depth if side == "y0" else G.y1 - 1 - depth
+                    lines_.append([(x, y) for x in range(G.x0, G.x1)])
+                else:
+                    x = G.x0 + depth if side == "x0" else G.x1 - 1 - depth
+                    lines_.append([(x, y) for y in range(G.y0, G.y1)])
+        for line in lines_:
+            if rnd.random() < 0.5:
+                line.reverse()
+            for st0 in range(1, len(line) - run - 1):
+                cells = line[st0:st0 + run]
+                bottom, arrival = line[st0 - 1], line[st0 + run]
+                if any(c in keep_free for c in cells + [bottom, arrival]):
+                    continue
+                if not all(key(c, k) in gal_lo.floor and key(c, k + 1) in gal_hi.floor for c in cells):
+                    continue
+                if key(bottom, k) not in gal_lo.floor or key(arrival, k + 1) not in gal_hi.floor:
+                    continue
+                # every room behind the run keeps three cells for its doorways on both storeys (or what it had)
+                spoils = False
+                for k_ in (k, k + 1):
+                    before, after = doorable(k_, set(keep_free)), doorable(k_, set(keep_free) | set(cells))
+                    if any(after[i] < min(3, before[i]) for i in before):
+                        spoils = True
+                        break
+                if spoils:
+                    continue
+                ux, uy = cells[1][0] - cells[0][0], cells[1][1] - cells[0][1]
+                for c in cells:
+                    del gal_lo.floor[key(c, k)]
+                    del P.owner[key(c, k)]
+                    del gal_hi.floor[key(c, k + 1)]
+                    del P.owner[key(c, k + 1)]
+                    P._air[c] = [iv for iv in P._air.get(c, []) if iv[0] not in (k * SH, (k + 1) * SH)] + [(k * SH, ceil_hi)]
+                xs, ys = [c[0] for c in cells], [c[1] for c in cells]
+                sw = pm.Space(sid, "stair", pm.Rect(min(xs), min(ys), max(xs) + 1, max(ys) + 1), base=k * SH, ceil=ceil_hi)
+                sw.floor = {key(c, k): (k * SH + pm.RISE_PER_CELL * j, "stair", ux, uy) for j, c in enumerate(cells)}
+                P.spaces.append(sw)
+                for c_ in sw.floor:
+                    P.owner[c_] = sid
+                sid += 1
+                # walked onto at its foot from this storey, off at its top onto the next (two layers of the plan: the
+                # graph's own arithmetic never steps between them)
+                P.air_edges += [(key(bottom, k), key(cells[0], k), 0.25), (key(cells[0], k), key(bottom, k), 0.25),
+                                (key(cells[-1], k), key(arrival, k + 1), 0.25), (key(arrival, k + 1), key(cells[-1], k), 0.25)]
+                P.flights.append(set(sw.floor))
+                # the opening in the floor over the stair is air there: a lamp by its edge would hang (the fixtures check)
+                P.voids.update(key(c, k + 1) for c in cells)
+                P.no_items.update(set(sw.floor) | {key(bottom, k), key(arrival, k + 1)})
+                keep_free.update(cells + [bottom, arrival])
+                stairs_made.append(k)
+                P.reasons.append(("stair", f"лестница с этажа {k} на этаж {k + 1}"))
+                placed_flight = True
+                break
+            if placed_flight:
+                break
+    P.metrics["stairs_got"] = len(stairs_made)
+    if len(stairs_made) < n_stairs:
+        P.metrics["refused"] = list(P.metrics.get("refused") or []) + [pm.say(
+            f"лестниц между этажами {len(stairs_made)} из {n_stairs}: вдоль галерей не нашлось места, где пролёт не закрыл бы двери комнат",
+            f"stairs between storeys {len(stairs_made)} of {n_stairs}: no room along the galleries where a flight would not close the rooms' doors")]
     # doors: each room to its gallery (one or two), some rooms to a neighbour, each shaft to a room on the ground
     doors_made = 0
 
@@ -319,12 +457,30 @@ def plan(P: pm.Plan, rnd: random.Random) -> None:
             if ways(rs) < 2:
                 P.failed = f"tower: a room of storey {k} with one way in"
                 return
-    for s in shaft_spaces:
+    for s in shaft_spaces[n_lifts:]:
         st0 = storeys[0]
         cells_wall = {c for c in pm.Rect(s.rect.x0 - 1, s.rect.y0 - 1, s.rect.x1 + 1, s.rect.y1 + 1).cells() if not s.rect.has(c)}
         for rs in st0["rooms"] + [st0["gallery"]]:
             if door_between(s, rs, 0, cells_wall):
                 break
+    # brief 34: the lifts - a cabin two cells square riding the shaft, stopping on every storey at its doorway (a
+    # func_train on path corners, the builder's), the doorway the cabin's width onto the gallery
+    for i, (s_, wall_cells, fronts) in enumerate(lift_doors):
+        doors_k = []
+        for k in range(n):
+            if not all(key(f_, k) in storeys[k]["gallery"].floor for f_ in fronts):
+                break
+            d = pm.Door(s_.id, storeys[k]["gallery"].id, [key(c, k) for c in wall_cells], za=k * SH, zb=k * SH, z=k * SH)
+            P.doors.append(d)
+            for c in wall_cells:
+                P._door_z[key(c, k)] = k * SH
+                P._air.setdefault(c, []).append((k * SH, k * SH + pm.DOOR_H))
+            doors_k.append(key(wall_cells[0], k))
+        if len(doors_k) == n:
+            P.trains.append((sorted(s_.floor), [k * SH for k in range(n)], doors_k, f"lift{i}"))
+            P.no_items.update(key(f_, k) for f_ in fronts for k in range(n))
+            P.reasons.append(("func_train", f"лифт в шахте: остановки на всех {n} этажах"))
+    P.metrics["lifts_got"] = len(P.trains)
     # every room reached on its storey from its gallery (rooms behind rooms through their doors)
     nodes, edges = pm.plan_graph(P)
     for k, st in enumerate(storeys):
@@ -344,11 +500,24 @@ def plan(P: pm.Plan, rnd: random.Random) -> None:
                 n_ = (pc[0] + dx, pc[1] + dy)
                 if A.has(n_) and n_ in P.owner:
                     P.air_edges.append((c, n_, round(CELL / 300.0 + math.sqrt(2 * k * SH / GRAVITY), 2)))
-    # pads: from the atrium's floor up to each gallery; from each gallery across the atrium to the next one up
-    # every atrium cell a take-off (but under a perch): its inner cells only left a 4 x 4 atrium four, two of them
-    # under perches - the top of four storeys got no pad (06.11)
+    # pads (brief 34, the PO 08.11: five pads a cell apart on the atrium's floor - «как кучу … выкатили в одном месте»;
+    # pro_q2t4: one pad a corner, 527 u apart): from the atrium's corners only, one a corner, apart from each other;
+    # the perches from the top gallery when a flight clears, else from a corner
     atrium_floor = list(A.cells())
     rnd.shuffle(atrium_floor)
+
+    def z_of(c):
+        return P.spaces[P.owner[c]].floor[c][0] if c in P.owner else P._door_z[c]
+
+    def try_pads(srcs, tgts, why) -> bool:
+        for a in srcs:
+            if a in P.no_items or not pm.pad_spot_ok(P, a, z_of(a)):
+                continue
+            for t in tgts:
+                if pad(P, a, t, top, margin=why == "perch"):
+                    P.pad_why[(a, t)] = why
+                    return True
+        return False
 
     def gallery_landings(k):
         """Gallery cells of storey k next to the atrium's hole (the flight comes up through it and steps onto them)."""
@@ -372,19 +541,32 @@ def plan(P: pm.Plan, rnd: random.Random) -> None:
     rects = [pm.Rect(x, y, x + 2, y + 2) for (x, y) in corners[:min(q["perches"], len(corners))]]
     under = {c for r_ in rects for c in r_.cells()}
     atrium_floor[:] = [c for c in atrium_floor if c not in under]
+    # brief 34: every perch's slab in the air first - a pad planned for one perch flew under the next one's slab,
+    # put up after it (the fixtures check, 08.11: 2 of 3 pads landed)
+    kept, zps = [], {}
     for i, r in enumerate(rects):
         zp = ceil_top + 32 + rnd.choice((0, 16, 32))
-        if any(pm_gap(r, o.rect) < 1 for o in perch_spaces):
+        if any(pm_gap(r, o) < 1 for (_i, o) in kept):
             continue
+        kept.append((i, r))
+        zps[i] = zp
+    # brief 34: the corners no perch is over - the ground's lifts (the express); a perch's pad from the rim keeps three
+    # cells from them (his tower 08.11: the third perch's rim pad took the free corner's room, the express not made)
+    free_corners = [c for c in ((A.x0, A.y0), (A.x1 - 1, A.y0), (A.x0, A.y1 - 1), (A.x1 - 1, A.y1 - 1))
+                    if c in atrium_floor and not any(r.has(c) for (_i, r) in kept)]
+    was_all = {}
+    for i, r in kept:
+        for c in r.cells():
+            was_all[c] = list(P._air.get(c, []))
+            P.cell_ceil[c] = zps[i] - 32
+            # the perch's air from its floor up; the atrium's column under it air up to its slab
+            P._air[c] = [(lo, min(hi, zps[i] - 32)) for (lo, hi) in was_all[c] if lo < zps[i] - 32] + [(zps[i], top)]
+    for i, r in kept:
+        zp = zps[i]
         layer = n + i
         s = pm.Space(sid, "perch", r, base=zp, sky=True, ceil=top)
         s.floor = {key(c, layer): (zp, "flat", 0, 0) for c in r.cells()}
-        for c in r.cells():
-            P.cell_ceil[c] = zp - 32
-        # the perch's air from its floor up; the atrium's column under it air up to its slab
-        was = {c: list(P._air.get(c, [])) for c in r.cells()}
-        for c in r.cells():
-            P._air[c] = [(lo, min(hi, zp - 32)) for (lo, hi) in was[c] if lo < zp - 32] + [(zp, top)]
+        was = {c: was_all[c] for c in r.cells()}
         P.spaces.append(s)
         for c in s.floor:
             P.owner[c] = sid
@@ -392,7 +574,38 @@ def plan(P: pm.Plan, rnd: random.Random) -> None:
         # the pad lands on the perch's cell off the corner (the atrium's middle side)
         mx, my = (A.x0 + A.x1) / 2, (A.y0 + A.y1) / 2
         tgt = min(s.floor, key=lambda c: abs(c[0] + 0.5 - mx) + abs(pm.phys(c)[1] + 0.5 - my))
-        if any(pad(P, a, tgt, top) for a in atrium_floor[:30] if a not in P.no_items):
+        # brief 34: from the top gallery's edge over the atrium (the perch is a ledge over it), else from a corner
+        top_edge = sorted(gallery_landings(n - 1), key=lambda c: abs(pm.phys(c)[0] - pm.phys(tgt)[0]) + abs(pm.phys(c)[1] - pm.phys(tgt)[1]))
+        corner_cells = [c for c in ((A.x0, A.y0), (A.x1 - 1, A.y0), (A.x0, A.y1 - 1), (A.x1 - 1, A.y1 - 1)) if c in atrium_floor]
+        # the corners stay the ground's lifts (pro_q2t4's): a perch's pad from the atrium's rim beside it, not a corner
+        rim = sorted((c for c in atrium_floor if c not in corner_cells
+                      and (not KEEP_FREE_CORNERS
+                           or all(max(abs(c[0] - f[0]), abs(c[1] - f[1])) >= pm.PAD_APART for f in free_corners))),
+                     key=lambda c: abs(c[0] - pm.phys(tgt)[0]) + abs(c[1] - pm.phys(tgt)[1]))
+        # brief 34: from the top gallery beside the perch, up a well opened over that one cell to the sky (its
+        # ceiling would stop the flight - a gallery pad has to clear it in a hand's breadth); the atrium's floor stays
+        # the ground's (its corners: pro_q2t4's lifts)
+        flew = False
+        # the gallery's cells by the atrium within three cells of the perch, the nearer first - the flight rises over
+        # open air (the well, the atrium) and comes down onto the ledge from above, never under its slab
+        def gap_to_perch(c):
+            return max(max(r.x0 - c[0], 0, c[0] - (r.x1 - 1)), max(r.y0 - c[1], 0, c[1] - (r.y1 - 1)))
+        beside = sorted((pm.phys(c) for c in gallery_landings(n - 1) if 2 <= gap_to_perch(pm.phys(c)) <= 5), key=gap_to_perch)
+        for nb in beside:
+            kk = key(nb, n - 1)
+            if kk in P.no_items or not pm.pad_spot_ok(P, kk, (n - 1) * SH):
+                continue
+            was_air = list(P._air.get(nb, []))
+            P._air[nb] = [(lo, top if lo == (n - 1) * SH else hi) for (lo, hi) in was_air]
+            P.cell_ceil[kk] = top
+            if pad(P, kk, tgt, top, margin=True):
+                P.pad_why[(kk, tgt)] = "perch"
+                P.reasons.append(("trigger_push", f"на площадку над атриумом: с верхней галереи, в колодце к небу"))
+                flew = True
+                break
+            P._air[nb] = was_air
+            del P.cell_ceil[kk]
+        if flew or try_pads(rim[:30], [tgt], "perch"):
             perch_spaces.append(s)
             # a way off: a drop back into the atrium
             P.air_edges.append((tgt, atrium_floor[0], round(math.sqrt(2 * zp / GRAVITY) + 0.2, 2)))
@@ -404,31 +617,56 @@ def plan(P: pm.Plan, rnd: random.Random) -> None:
             for c in r.cells():
                 P._air[c] = was[c]
                 del P.cell_ceil[c]
-    made_up = {0}
+    corners = list(free_corners)
+    rnd.shuffle(corners)
+
+    def reach_k():
+        """The storeys a man on the ground's gallery walks, rides and flies to (stairs, lifts, pads so far)."""
+        nodes_, edges_ = pm.plan_graph(P)
+        got = pm.dijkstra(edges_, next(iter(storeys[0]["gallery"].floor)))
+        return {k for k in range(n) if any(c in got for c in storeys[k]["gallery"].floor)}
+
+    def corner_pad(k, why) -> bool:
+        lands = sorted(gallery_landings(k), key=lambda t: min(abs(pm.phys(t)[0] - c[0]) + abs(pm.phys(t)[1] - c[1]) for c in corners or [(0, 0)]))
+        return try_pads(corners, lands[:16], why)
+
+    want_pads = max(0, int(q.get("pads") or 0))
+    # 1. the express: a corner up to the top gallery (q3dm17's long pads), when pads are asked
+    made_pads = 0
+    if want_pads and n >= 2 and corner_pad(n - 1, "express"):
+        made_pads += 1
+        P.reasons.append(("trigger_push", f"экспресс: из угла атриума на этаж {n - 1}"))
+    # 2. a storey nothing else reaches: a pad up to it (a chain from the gallery under it, else a corner) - the only way
+    only = 0
     for k in range(1, n):
-        done = False
-        for t in gallery_landings(k)[:20]:
-            for a in atrium_floor[:20]:
-                if a in P.no_items:
-                    continue
-                if pad(P, a, t, top):
-                    done = True
-                    break
-            if done:
-                break
-        if done:
-            made_up.add(k)
-        # across the atrium from the storey below's gallery
-        if k >= 2:
-            for t in gallery_landings(k)[:12]:
-                srcs = [c for c in gallery_landings(k - 1) if c not in P.no_items][:12]
-                if any(pad(P, a, t, top) for a in srcs):
-                    break
-    if len(made_up) < n:
-        P.failed = f"tower: storeys no pad reaches ({n - len(made_up)})"
+        if k in reach_k():
+            continue
+        lower = [c for c in gallery_landings(k - 1)] if k - 1 in reach_k() and k >= 2 else []
+        if (lower and try_pads(lower[:16], gallery_landings(k)[:16], "chain")) or corner_pad(k, "chain"):
+            only += 1
+            P.reasons.append(("trigger_push", f"джампад на этаж {k}: другого пути туда нет"))
+    if only and not stairs_made and not P.trains:
+        P.metrics["refused"] = list(P.metrics.get("refused") or []) + [pm.say(
+            "наверх только джампадами: лестниц и лифтов не заказано", "up by jump pads only: no stairs and no lifts asked")]
+    # 3. more pads asked: a corner each, to a storey no pad reaches yet - never two to one storey
+    flown = {P.spaces[P.owner[t]].base // SH for (_a, t, *_r) in P.pads if t in P.owner}
+    for k in range(1, n):
+        if made_pads >= want_pads:
+            break
+        if k in flown:
+            continue
+        if corner_pad(k, "shortcut"):
+            made_pads += 1
+            flown.add(k)
+    if want_pads > made_pads:
+        P.metrics["refused"] = list(P.metrics.get("refused") or []) + [pm.say(
+            f"джампадов с пола атриума {made_pads} из {want_pads}: по одному в углу, не больше одного на этаж",
+            f"pads from the atrium's floor {made_pads} of {want_pads}: one a corner, one a storey at most")]
+    if reach_k() != set(range(n)):
+        P.failed = f"tower: storeys nothing reaches ({n - len(reach_k())})"
         return
-    # the shafts' pads: from the shaft's bottom up through it to a doorway on an upper storey
-    for s in shaft_spaces:
+    # the shafts' pads: from the shaft's bottom up through it to a doorway on an upper storey (a shaft with no lift)
+    for s in shaft_spaces[n_lifts:]:
         k = rnd.randint(1, n - 1)
         st = storeys[k]
         # a doorway in the shaft's wall at storey k, onto a room or the gallery there
@@ -448,6 +686,7 @@ def plan(P: pm.Plan, rnd: random.Random) -> None:
             far = (inside[0] - (c[0] - inside[0]), inside[1] - (c[1] - inside[1]))
             src = far if s.rect.has(far) else inside
             if pad(P, src, dk, top):
+                P.pad_why[(src, dk)] = "shaft"
                 P.doors.append(d)
                 break
             P._air[c].pop()
@@ -456,6 +695,12 @@ def plan(P: pm.Plan, rnd: random.Random) -> None:
     for k in range(1, n + q["perches"]):
         P.voids.update(key(c, k) for c in A.cells())
     P.metrics["perches"] = len(perch_spaces)
+    if len(perch_spaces) < q["perches"]:
+        P.metrics["refused"] = list(P.metrics.get("refused") or []) + [pm.say(
+            f"площадок над атриумом {len(perch_spaces)} из {q['perches']}: к остальным не нашлось ни полёта джампада с "
+            "верхней галереи, ни места на полу атриума в трёх клетках от других джампадов",
+            f"ledges over the atrium {len(perch_spaces)} of {q['perches']}: no pad's flight from the top gallery reaches "
+            "the rest, and the atrium's floor has no place three cells from the other pads")]
     P.metrics["shafts"] = 1 + len(shaft_spaces)
     P.metrics["storeys"] = n
     # every storey back down (drops) and up (pads): the whole tower strongly joined
@@ -475,10 +720,15 @@ def plan(P: pm.Plan, rnd: random.Random) -> None:
     place(P, rnd, storeys, perch_spaces, shaft_spaces)
     if P.failed:
         return
+    import mapgen_scratch_fixtures as fix_mod     # brief 32: the pads', frames' and plates' sizes
+    fix_mod.plan_sizes(P)
     # the rooms' own lamps (mapgen_scratch_plan.light_space: lamps at the walls until no floor is dark) - a grid of
     # lamps under the ceilings left 84 % of a tower's floor dark (06.11, no sky to fill in)
     for s_ in P.spaces:
-        pm.light_space(P, s_)
+        # brief 34: a stair's slot is lit from the two galleries it joins - lamps of its own made a tower's screen
+        # brighter than people's (his mg_new_18619 on 3.60: on screen 26, people's 7..25)
+        if s_.kind != "stair":
+            pm.light_space(P, s_)
     m = P.metrics
     m["floor_area"] = round(sum(len(s.floor) for s in P.spaces) * CELL * CELL / 1e6, 2)
     for k_ in ("stairs_got", "ramps_got", "drops_got", "windows_got", "stacked_rooms", "corridor_turns"):
@@ -486,6 +736,11 @@ def plan(P: pm.Plan, rnd: random.Random) -> None:
     m.setdefault("round", {})
     m.setdefault("mech_missing", [])
     m["pads"] = len(P.pads)
+    # brief 34: the ways up by kind (the description's «Наверх»)
+    m["ways"] = {"stairs": len(stairs_made), "lifts": len(P.trains),
+                 "pads": sum(1 for (a, t, *_r) in P.pads if P.pad_why.get((a, t)) != "perch"),
+                 "perch_pads": sum(1 for (a, t, *_r) in P.pads if P.pad_why.get((a, t)) == "perch")}
+    m["pads_no_reason"] = len(pm.pads_without_reason(P))
     m["score"] = round(score(P), 2)
     del P._air
     del P._door_z
@@ -498,6 +753,7 @@ def teleporters(P: pm.Plan, rnd: random.Random, storeys: list) -> None:
     if not want:
         P.metrics["teleporters"] = 0
         return
+    import mapgen_scratch_fixtures as fix_mod
     nodes, edges = pm.plan_graph(P)
     rooms = [(k, c) for k, st in enumerate(storeys) for r in st["rooms"] for c in r.floor
              if c in edges and c not in P.no_items]
@@ -527,6 +783,9 @@ def teleporters(P: pm.Plan, rnd: random.Random, storeys: list) -> None:
         P.reasons.append(("misc_teleporter", f"пара телепортов между этажами, {walk_s:.1f} с пешком"))
         made += 1
         rooms = [r for r in rooms if r[1] not in P.no_items]
+        # brief 34: no third teleporter within four cells of two
+        discs = [((pm.phys(c)[0] + 0.5) * CELL, (pm.phys(c)[1] + 0.5) * CELL, nodes[c][0]) for tp in P.teleports for c in tp[:2] if c in nodes]
+        rooms = [r for r in rooms if not fix_mod.crowded(discs, ((pm.phys(r[1])[0] + 0.5) * CELL, (pm.phys(r[1])[1] + 0.5) * CELL, nodes[r[1]][0]))]
     P.metrics["teleporters"] = made
 
 
@@ -703,5 +962,12 @@ def score(P: pm.Plan) -> float:
     pen = (1.5 * rel) if over > 0 and m.get("area_forced") else 6.0 * rel
     pen += 3.0 * max(0, q["perches"] - m.get("perches", 0))
     pen += 2.0 * max(0, q["shafts"] - m.get("shafts", 0))
-    pen += 1.0 * max(0, q["storeys"] - 1 - m.get("pads", 0))
+    # brief 34: the ways asked and not made - the stairs, the lifts, the pads from the atrium's floor (a candidate with
+    # more pads scored better here till 3.59: «джампады ради джампадов»)
+    w, n = m.get("ways") or {}, q["storeys"]
+    st = q.get("stairs")
+    st_want = n - 1 if st is None or int(st) < 0 else min(int(st), n - 1)
+    pen += 1.0 * max(0, st_want - w.get("stairs", 0))
+    pen += 1.0 * max(0, int(q.get("lifts") or 0) - w.get("lifts", 0))
+    pen += 1.0 * max(0, int(q.get("pads") or 0) - w.get("pads", 0))
     return pen

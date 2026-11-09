@@ -33,13 +33,20 @@ public static class Presets
     // ---- a form's body ------------------------------------------------------------------------------------------
 
     public static JsonObject BodyOf(Settings s, string kind) =>
-        kind == Scratch ? ScratchBody(s.Scratch, s.Minutes) : BaseBody(s.Fidelity, s.Minutes, s.SkipFamilies, s.GraftMode, s.Options);
+        kind == Scratch ? ScratchBody(s.Scratch, s.Minutes, s.Options.Destruction)
+                        : BaseBody(s.Fidelity, s.Minutes, s.SkipFamilies, s.GraftMode, s.Options);
 
-    public static JsonObject ScratchBody(ScratchParams p, int minutes) => new()
+    /// <summary>Brief 33 (the PO 08.11: presets carry every row of their page): the «Новая карта с нуля» page's rows -
+    /// its parameters, the minutes and the ruin («Разрушения» is on this page too; 3.58's presets left it out).</summary>
+    public static JsonObject ScratchBody(ScratchParams p, int minutes, int destruction = 0) => new()
     {
         ["scratch"] = JsonNode.Parse(p.Save()),
         ["minutes"] = minutes,
+        ["destruction"] = destruction,
     };
+
+    /// <summary>A scratch preset's ruin: 0 when it does not say (the factory's and 3.58's presets - no ruin).</summary>
+    public static int DestructionOf(JsonObject body) => Int(body, "destruction", 0, 10000, 0);
 
     public static JsonObject BaseBody(int fidelity, int minutes, IEnumerable<string> skip, bool graft, GenerationOptions o) => new()
     {
@@ -78,6 +85,7 @@ public static class Presets
         if (kind == Scratch)
         {
             s.Scratch = ScratchOf(body);
+            s.Options = s.Options with { Destruction = DestructionOf(body) };
             return;
         }
         s.Fidelity = Int(body, "fidelity", 1, 100, 20);
@@ -99,7 +107,7 @@ public static class Presets
             var p = ScratchOf(body);
             var py = JsonNode.Parse(p.ToPython()) as JsonObject ?? new JsonObject();
             py.Remove("lang");
-            return Sorted(py) + $"|dress={p.Fidelity}|min={MinutesOf(body)}";
+            return Sorted(py) + $"|dress={p.Fidelity}|min={MinutesOf(body)}|ruin={DestructionOf(body)}";
         }
         var o = JsonSerializer.SerializeToNode(OptionsOf(body));
         var skip = (body["skip_families"] as JsonArray)?.Select(n => n?.ToJsonString() ?? "").OrderBy(x => x, StringComparer.Ordinal) ?? Enumerable.Empty<string>();
@@ -333,6 +341,9 @@ public static class Presets
         ("tower_8", "tower", Sp(p => { p.Players = 8; p.Shape = "tower"; p.Shafts = 3; })),
         ("tower_4", "tower", Sp(p => { p.Players = 8; p.Shape = "tower"; p.Storeys = 4; })),
         ("tower_16", "tower", Sp(p => { p.Players = 16; p.Shape = "tower"; p.Storeys = 4; p.Shafts = 3; })),
+        ("tower_skyscraper", "tower", Sp(p => { p.Players = 4; p.Shape = "tower"; p.Storeys = 4; p.Lifts = 2; p.Pads = 1; })),
+        ("tower_pads", "tower", Sp(p => { p.Players = 4; p.Shape = "tower"; p.Stairs = 0; p.Lifts = 0; p.Pads = 3; })),
+        ("tower_stairs", "tower", Sp(p => { p.Shape = "tower"; p.Lifts = 0; p.Pads = 0; })),
         // </generated>
     };
 

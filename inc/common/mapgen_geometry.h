@@ -201,6 +201,9 @@ mapgen_geometry_result_t MapGenGeometry_Clone(const mapgen_geometry_t *src,
 
 void MapGenGeometry_Free(mapgen_geometry_t *g);
 
+/* Swap two geometries' contents (each keeps its address): an edit undone by swapping a clone taken before it back in. */
+void MapGenGeometry_Swap(mapgen_geometry_t *a, mapgen_geometry_t *b);
+
 uint32_t MapGenGeometry_NumBrushes(const mapgen_geometry_t *g);
 uint32_t MapGenGeometry_NumSides(const mapgen_geometry_t *g);
 uint32_t MapGenGeometry_NumModels(const mapgen_geometry_t *g);

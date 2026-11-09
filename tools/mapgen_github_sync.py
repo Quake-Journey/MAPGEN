@@ -108,7 +108,7 @@ README = """# MAPGEN by ly
 
 **MAPGEN** makes new Quake II maps two ways. **From scratch**: set the players and the mode, the size, the levels, the
 layout (two halves, one arena, a ring, an open space of islands in the void, a tower of storeys round an atrium), the
-ways, weapons, items and the mechanics of well-known maps — or pick one of 184 presets — and it lays the map out,
+ways, weapons, items and the mechanics of well-known maps — or pick one of 187 presets — and it lays the map out,
 dresses it as well-known maps are dressed (or in the Studio's own textures) and checks it against well-known maps. **From an
 existing map**: it digs passages through the rock, carries rooms over from another map, floods low ground, changes the
 finish, moves items. Either way it checks that the new map can be walked, is lit and has nothing broken. **MAPGEN
@@ -126,7 +126,7 @@ Studio** is its Windows program.
 
 **MAPGEN** делает новые карты Quake II двумя путями. **С нуля**: задайте, на сколько игроков и в каком режиме,
 размер, уровни, устройство (две половины, одна арена, кольцо, открытый космос из островов в пустоте, башня из этажей
-вокруг атриума), переходы, оружие, предметы и механики с известных карт — или возьмите один из 184 пресетов, — и
+вокруг атриума), переходы, оружие, предметы и механики с известных карт — или возьмите один из 187 пресетов, — и
 генератор сам построит планировку, оденет карту, как одеты известные карты (или в свои текстуры студии), и проверит её
 мерками известных карт. **Из готовой карты**: прокладывает проходы в скале, переносит комнаты из другой карты, заливает низины, меняет
 отделку, переставляет предметы. В обоих случаях проверяет, что по новой карте можно пройти, что она освещена и в ней

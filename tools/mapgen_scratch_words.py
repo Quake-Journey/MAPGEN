@@ -133,6 +133,56 @@ def round_made(rm: dict) -> tuple[str, str] | str:
     return (f"углов {c}, полукруглых торцов {a}, возвышений {p}", f"rounded corners {c}, round ends {a}, podiums {p}")
 
 
+# brief 32 (the PO 08.11): the sizes of the pads, the teleporters' frames and the spawns' plates - the record's rows when
+# one was asked (the request's key, mapgen_scratch_fixtures.SIZE_KEYS' name, the row in both languages)
+SIZE_ROWS = (("pad_disc_size", "disc", "Размер круглых джампадов", "Round jump pads' size"),
+             ("pad_wedge_size", "wedge", "Размер наклонных джампадов", "Slanted jump pads' size"),
+             ("tele_frame_size", "tele", "Размер рам телепортов", "Teleporter frames' size"),
+             ("spawn_plate_size", "spawn", "Площадки под точками появления", "Plates under the spawn points"))
+
+
+def size_asked(what: str, pct) -> tuple[str, str]:
+    """A size asked in words: «150 %»; a spawn plate not asked «нет» / «none»."""
+    return NONE if what == "spawn" and not pct else (f"{pct} %", f"{pct} %")
+
+
+def size_made(built: list) -> tuple[str, str]:
+    """Brief 32: how many came out at which size, the biggest first: «2 по 150 %, 1 по 100 %» / «2 at 150 %, 1 at
+    100 %»; a spawn with no plate «без площадки — 1» / «no plate - 1»; none of them on the map «таких нет» / «none»."""
+    if not built:
+        return ("таких нет", "none on the map")
+    counts = {}
+    for v in built:
+        counts[v] = counts.get(v, 0) + 1
+    ru, en = [], []
+    for v in sorted(counts, reverse=True):
+        n = counts[v]
+        if v:
+            ru.append(f"{n} по {v} %")
+            en.append(f"{n} at {v} %")
+        else:
+            ru.append(f"без площадки — {n}")
+            en.append(f"no plate - {n}")
+    return (", ".join(ru), ", ".join(en))
+
+
+def ways_asked(q: dict) -> tuple[str, str]:
+    """Brief 34: a tower's ways asked - stairs (-1: one a storey), lifts, pads."""
+    st = q.get("stairs")
+    st_ru = "по лестнице на этаж" if st is None or int(st) < 0 else f"лестниц {int(st)}"
+    st_en = "a flight a storey" if st is None or int(st) < 0 else f"{int(st)} flights"
+    return (f"{st_ru}, лифтов {int(q.get('lifts') or 0)}, джампадов {int(q.get('pads') or 0)}",
+            f"{st_en}, {int(q.get('lifts') or 0)} lifts, {int(q.get('pads') or 0)} pads")
+
+
+def ways_made(w: dict) -> tuple[str, str]:
+    """Brief 34: the ways made - «лестниц 2, лифтов 1, джампадов 1 (+3 на площадки)»."""
+    tail_ru = f" (+{w['perch_pads']} на площадки)" if w.get("perch_pads") else ""
+    tail_en = f" (+{w['perch_pads']} to the ledges)" if w.get("perch_pads") else ""
+    return (f"лестниц {w.get('stairs', 0)}, лифтов {w.get('lifts', 0)}, джампадов {w.get('pads', 0)}{tail_ru}",
+            f"{w.get('stairs', 0)} flights, {w.get('lifts', 0)} lifts, {w.get('pads', 0)} pads{tail_en}")
+
+
 def item(cls: str, ru: bool) -> str:
     return pick(ITEMS, cls, ru, cls.replace("item_", "").replace("weapon_", "").upper())
 

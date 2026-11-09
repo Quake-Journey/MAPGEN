@@ -1585,6 +1585,15 @@ mapgen_geometry_result_t MapGenGeometry_Clone(const mapgen_geometry_t *src,
     return MAPGEN_GEOMETRY_OK;
 }
 
+void MapGenGeometry_Swap(mapgen_geometry_t *a, mapgen_geometry_t *b)
+{
+    if (!a || !b || a == b)
+        return;
+    const mapgen_geometry_t t = *a;
+    *a = *b;
+    *b = t;
+}
+
 void MapGenGeometry_Free(mapgen_geometry_t *g)
 {
     if (!g)

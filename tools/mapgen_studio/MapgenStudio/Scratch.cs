@@ -98,6 +98,22 @@ public sealed class ScratchParams
     /// <summary>The PO 06.11: the single-player game's ships flying over the map, 1..3 (-1 none), any shape.</summary>
     public int Ships { get; set; } = -1;
 
+    /* brief 32, the PO 08.11 («для джампадов - круглых и наклонных нужно чтобы в студии были параметры для регулировки их
+       размеров, по умолчанию как сейчас, но можно сделать меньше на 50% либо больше на 200% … по местам спавнов также …
+       по телепортам также»): sizes in percent - 100 (the plate: 0, none) is «По умолчанию», as 3.58 built them */
+    public int PadDiscSize { get; set; } = 100;
+    public int PadWedgeSize { get; set; } = 100;
+    public int TeleFrameSize { get; set; } = 100;
+    public int SpawnPlateSize { get; set; } = 0;
+    public static readonly int[] SizeChoices = { 50, 75, 150, 200 };
+
+    /* brief 33, the PO 08.11 («если генератор применяет что-либо из настроек, которые есть только на странице форков, то
+       нужно добавить их и на страницу новых карт»): the engine's stairway annexes (platforms 96-192 up with stairs and a
+       pickup) on a rooms map from scratch - its own row; 0 «Нет» as on the other page. 3.58 took the other page's value
+       unseen (his mg_new_38706: 4) */
+    public int StairAnnexes { get; set; }
+    public static readonly int[] PlateChoices = { 50, 75, 100, 150, 200 };
+
     public static readonly string[] StackItems =
     {
         "item_armor_body", "item_armor_combat", "item_armor_jacket", "item_health_mega", "item_quad",
@@ -224,6 +240,11 @@ public sealed class ScratchParams
         if (HealthPerSpawn10 >= 0) o["health_per_spawn"] = HealthPerSpawn10 / 10.0;
         if (Decor.Length > 0) o["decor"] = Decor;
         if (Ships > 0) o["ships"] = Ships;
+        if (PadDiscSize != 100) o["pad_disc_size"] = PadDiscSize;
+        if (PadWedgeSize != 100) o["pad_wedge_size"] = PadWedgeSize;
+        if (TeleFrameSize != 100) o["tele_frame_size"] = TeleFrameSize;
+        if (SpawnPlateSize > 0) o["spawn_plate_size"] = SpawnPlateSize;
+        if (StairAnnexes > 0) o["stair_annexes"] = StairAnnexes;
         if (WaterAboveFloor) o["water_above_floor"] = true;
         if (Sun.Length > 0) o["sun"] = Sun;
         if (Tone.Length > 0) o["tone"] = Tone;
@@ -407,6 +428,11 @@ public sealed class ScratchParams
         p.HealthPerSpawn10 = Tenths("health_per_spawn");
         p.Decor = S(o["decor"]);
         p.Ships = I("ships", -1) is var sh && sh > 0 ? sh : -1;
+        p.PadDiscSize = I("pad_disc_size", 100);
+        p.PadWedgeSize = I("pad_wedge_size", 100);
+        p.TeleFrameSize = I("tele_frame_size", 100);
+        p.SpawnPlateSize = Math.Max(0, I("spawn_plate_size", 0));
+        p.StairAnnexes = Math.Clamp(I("stair_annexes", 0), 0, 10);
         p.WaterAboveFloor = o["water_above_floor"] is JsonValue wa && wa.TryGetValue<bool>(out var wab) && wab;
         p.Sun = S(o["sun"]);
         p.Tone = S(o["tone"]);

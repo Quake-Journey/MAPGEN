@@ -580,8 +580,8 @@ public sealed partial class MainWindow
                 sub.Measure(new Size(456, double.PositiveInfinity));
                 var subHigh = sub.DesiredSize.Height;
                 var factoryHeads = fresh.Count(h => Presets.FactoryCategories(Presets.Scratch).Any(c => Presets.CategoryName(Presets.FactoryPrefix + c) == h.Header as string));
-                Row(factoryHeads == 15 && Presets.Factory(Presets.Scratch).Count == 184 && subShown == rows.Count && subHigh > 0 && subHigh < 900,
-                    $"«Загрузить» of a new map: 15 factory categories, 184 presets (13 of open space, 11 of a tower); the longest, «{longest.Header}», {rows.Count} lines {subHigh:0} px high",
+                Row(factoryHeads == 15 && Presets.Factory(Presets.Scratch).Count == 187 && subShown == rows.Count && subHigh > 0 && subHigh < 900,
+                    $"«Загрузить» of a new map: 15 factory categories, 187 presets (13 of open space, 14 of a tower); the longest, «{longest.Header}», {rows.Count} lines {subHigh:0} px high",
                     $"«Загрузить» of a new map: {factoryHeads} factory categories, {Presets.Factory(Presets.Scratch).Count} presets; «{longest.Header}» {subShown} of {rows.Count} lines shown, {subHigh:0} px high");
             }
             page.LoadPreset(back ?? vertical);

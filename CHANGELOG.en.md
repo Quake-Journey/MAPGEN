@@ -1,5 +1,18 @@
 # MAPGEN Studio by ly — change log
 
+## 3.60 — 08.11.2026
+
+- Jump pads are no longer piled: two on one floor stand three cells apart at least, no pad goes where a stair or a door near by already leads, and where a pad lands a thin bright plate lies on the floor. The map's checks watch it, and that no more than two like things (pads, teleporters, panels, pedestals, columns) stand together
+- A tower now climbs by stairs and lifts, pads in moderation: by default a flight to every storey, a lift in its own shaft stopping on every storey (as in a skyscraper) and one express pad from a corner of the atrium to the top; the ledges over the atrium by a pad from the top gallery. In «Ways up» a tower has rows of its own: «Stairs between storeys», «Lifts», «Jump pads from the atrium's floor»
+- Three new factory presets of the tower: «Skyscraper: lifts and stairs», «A tower of jump pads», «A tower of stairs» - 187 in all
+- Fixes: the slabs of the ledges over a tower's atrium showed the sky from below instead of the slab itself; the ruin no longer leaves a piece of a wall or a beam hanging in the air
+
+## 3.59 — 08.11.2026
+
+- A new map from scratch is no longer lost at the edits stage: when a trial edit fails to build and the others build, the run hands its map over instead of «The map did not compile». Edits that rearrange a map's parts are no longer tried on a map from scratch - the generator builds its layout itself
+- Sizes of the jump pads, the teleporters' frames and plates under the spawn points - new settings: «Round jump pads' size», «Slanted jump pads' size» and «Teleporter frames' size» in «Ways up» (as before by default, 50 to 200 %), «Plate under a spawn point» in «For whom» (none by default). The pads' height and flight stay; where there is not enough level floor round one, the pad, frame or plate is smaller, and the map's description says how many came out at which size
+- A new map is built only from what its page sets: the «From existing maps» page's settings no longer reach it (a usual map from scratch used to take its «Stairway annexes» and the liquids' swap unseen). «Stairway annexes» is now on the new map's page, in «Ways up». No liquids' swap on a new map: its own «Liquids» card sets the kinds and shares of water, lava and slime. A new map's presets keep «Destruction» too
+
 ## 3.58 — 07.11.2026
 
 - In the Studio, in a new map's description and in its checks the Quake II maps the generator is tuned on and compares a new map with are called simply «well-known maps»; the dressing choice is «Like well-known maps»

@@ -187,14 +187,16 @@ skeleton itself — rooms, levels, the ways between them, the places of weapons,
 well-known maps, builds a real map from the skeleton, dresses it with its edits and checks it.
 
 The easiest start is a preset: «Load» → a category (duels, free for all, big maps, team games, worlds, water and lava,
-weapons, ways, mechanics, look, open space, tower — 184 factory presets in all) → a preset; then «Start generating».
+weapons, ways, mechanics, look, open space, tower — 187 factory presets in all) → a preset; then «Start generating».
 Any parameter of a preset can be changed before the start.
 
 The parameters are laid out in cards. Each list starts with «Default» — the value the generator chooses itself from
-the player count; which one is said in brackets.
+the player count; which one is said in brackets. A new map is built from what this page sets and nothing else: the
+«From existing maps» page's settings do not reach it, nor this page's a map from an existing one.
 
 - **Who for** — how many players (2 — a duel, three to eight — free for all, more — a big map), the mode (duel, free
-  for all, team against team — for teams the stack is repeated in both halves), how many spawns.
+  for all, team against team — for teams the stack is repeated in both halves), how many spawns and the **plate under
+  a spawn point** — an eight-sided plate one step high, so those places can be seen (none by default; 50 to 200 %).
 - **Size and shape** — the map's size (the floor area in percent of the usual for this player count), height levels,
   the vertical span, the share of corridors and open places, the sky overhead, long sight lines, the **layout** and
   **round shapes** (rounded corners, half-round hall ends, podiums — as on medusa_b1). The layouts:
@@ -203,14 +205,23 @@ the player count; which one is said in brackets.
   - **a ring** — rooms round a circle;
   - **open space** — islands hang in the void with no walls, jump pads, bridges and teleporters between them; a step
     off the edge is death;
-  - **a tower** — whole storeys over each other round an atrium under the sky: up by jump pads and shafts, down by
-    jumping, ledges over the top storey only a jump pad reaches.
+  - **a tower** — whole storeys over each other round an atrium under the sky: up by stairs, a lift and an express
+    jump pad, down by jumping, ledges over the top storey only a jump pad reaches.
 - **Open space** and **A tower** — these layouts have a card of their own beside «Size and shape». Open space: how
   many islands, how many only a jump pad reaches, open or railed edges, the height spread, the pads' reach, bridges.
-  A tower: how many storeys, the storey's height, how many shafts, how many ledges at the top. What they never have,
-  the form does not show for them: an open space has no liquids, pits, round shapes, stairs, lifts, doors, windows or
-  wall decorations — of the ways only teleporters; a tower has no liquids, pits, round shapes, stairs, lifts, doors
-  or windows. When an older preset asks for them, the generator does not build them and says so in the description.
+  A tower: how many storeys, the storey's height, how many shafts, how many ledges at the top. In «Ways up» a tower
+  has three rows of its own: **«Stairs between storeys»** (one a storey by default: a flight from gallery to gallery
+  along the wall, under an opening in the floor, neighbouring storeys on opposite sides — the climb goes round the
+  atrium), **«Lifts»** (one by default: a cabin in its own shaft rides from the bottom to the top and stops on every
+  storey at the doorway onto the gallery, as in a skyscraper) and **«Jump pads from the atrium's floor»** (one by
+  default — an express from a corner of the atrium to the top storey; one a corner and one a storey at most). Every
+  ledge over the atrium gets a pad — from the top gallery, a well open to the sky over it, or from the edge of the
+  atrium's floor, three cells from a free corner at least: the atrium's corners are kept for the row «Jump pads from
+  the atrium's floor». A ledge no pad can reach is not built, and the map's description says so. With no stairs and
+  no lifts the pads go only where nothing else would take a player. What they never have, the form does not show for
+  them: an open space has no liquids, pits, round shapes, stairs, lifts, doors, windows or wall decorations — of the
+  ways only teleporters; a tower has no liquids, pits, round shapes, doors or windows. When an older preset asks for
+  them, the generator does not build them and says so in the description.
 - **The new map** and **The finished map** — the generation's time, the variant number and the name; keep the source
   and take covers or not. **«Random variant»** (on by default) — each run takes a new number itself, and each time
   another map comes out; the number is in the map's name. To repeat a map, turn it off and enter the number: the same
@@ -221,7 +232,15 @@ the player count; which one is said in brackets.
 - **Ways** — stairs, ramps, lifts, jump pads, teleporters, ladders, drops, doors and windows between rooms. Jump pads
   and teleporters look as on well-known maps: a lit disc on a plinth for a jump up, a slanted plate with arrows for a
   flight away, arrows running over it the way one flies; a teleporter stands in a frame of two posts with a
-  shimmering portal.
+  shimmering portal. Where a pad lands, a thin bright plate lies on the floor — from the floor one sees where it takes
+  a player. Pads are never piled: two on one floor stand three cells apart at least, and no pad goes where a stair or
+  a door near by already leads. Their size is set by **«Round jump pads' size»**, **«Slanted jump pads' size»** and **«Teleporter
+  frames' size»**: 100 % by default, 50 to 200 % allowed. A pad's height and the flight from it do not change. Where
+  there is not enough level floor round one, the pad, frame or plate comes out smaller than asked, and the map's
+  description says how many came out at which size. **«Stairway annexes»** (none by default, up to 10) — platforms
+  96–192 up with stairs and a pickup on them, against a room's wall or standing free in a hall; these are not the
+  flights of steps between levels. A map may offer fewer places than asked — the map's description says how many stand.
+  An open space and a tower have none.
 - **Mechanics** — ways of play from well-known maps: a stack on the clock, two halves, a gun on a ledge, route
   asymmetry, many small health spots, spawn pressure, a dead-end stack, three approaches, a teleporter to the mirror
   stack, a jump pad over a pit, a lift as a weak spot, a ladder under an item. The check looks for each one turned on.

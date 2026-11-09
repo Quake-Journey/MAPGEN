@@ -2649,6 +2649,9 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
     }
     uint32_t spent_to = 0;
     uint32_t attempts = 0;
+    /* brief 32 (08.11, the PO's mg_new_84162): the built attempts the compiler refused - with nothing accepted, the
+       run is «the compiler could not build anything» only when this is every built attempt */
+    uint32_t attempts_not_compiled = 0;
     /* D18 (assignment 22): where the run's attempts spent their time, in ms:
        total, compile, reach, flood and mouth pairs, the parent's walk,
        divergence - and D28's (assignment 24) CPU, the attempts' and their
@@ -2826,8 +2829,11 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
          * две предыдущие». mg_60 305 of 331 and mg_50 306 of 332 are the same
          * run.
          */
-        if (verdict != MAPGEN_TXN_REJECTED_NOT_APPLIED && !step.proved_refusal)
+        if (verdict != MAPGEN_TXN_REJECTED_NOT_APPLIED && !step.proved_refusal) {
             attempts++;                  /* brief 16 D1: an edit refused by its proof was never built */
+            if (verdict == MAPGEN_TXN_REJECTED_COMPILE)
+                attempts_not_compiled++;
+        }
         ladder_count(&ladder, verdict, &step);
         if ((unsigned)verdict < MAPGEN_TXN_NUM_VERDICTS)
             report->by_verdict[verdict]++;
@@ -3121,7 +3127,15 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
          * run that accepted nothing came out too like its donor or nothing
          * like it is not a question the ledger can answer.
          */
-        if (report->by_verdict[MAPGEN_TXN_REJECTED_COMPILE]) {
+        /*
+         * Brief 32 (08.11): «could not build anything» is every built attempt refused by the compiler. The PO's
+         * mg_new_84162 (an open space from scratch) had a baseline that compiled and was measured, six edits that
+         * compiled and changed nothing, and four bundle swaps that leaked - and one leak was enough to say
+         * ERR_COMPILE and hand over no map at all, where the same run without the four ends in the measurement
+         * below and hands its baseline over (mg_new_51907, mg_new_87098: accepted 0, a map each).
+         */
+        if (report->by_verdict[MAPGEN_TXN_REJECTED_COMPILE] && attempts > 0
+            && attempts_not_compiled >= attempts) {
             MapGenReach_Free(baseline_walk);
             return MAPGEN_PIPELINE_ERR_COMPILE;
         }

@@ -120,8 +120,10 @@ def tower_rows(r: dict, asked: dict, plan: dict) -> list:
     landed = (sp.get("movers") or {}).get("pads", 0)
     want = int(asked.get("perches") or 0)
     got = int((plan or {}).get("perches") or 0)
+    pads_planned = int((plan or {}).get("pads") or 0)
     return [
-        ("tower: every pad flies onto a floor", flown == landed and landed > 0, f"{landed} of {flown}"),
+        # brief 34: a tower of stairs and lifts may have no pad at all
+        ("tower: every pad flies onto a floor", flown == landed and (landed > 0 or pads_planned == 0), f"{landed} of {flown}"),
         (f"tower: ledges only a pad reaches, {want} asked", got >= want, str(got)),
     ]
 
@@ -225,6 +227,19 @@ def judge(r: dict, players: int, asked: dict | None = None, plan: dict | None = 
                     f"pads {fx['pads']}: {fx['discs']} discs, {fx['wedges']} wedges; teleporters {fx['teleporters']}: "
                     f"{fx['frames']} framed, {fx['posts']} posts only, {fx['bare']} bare"
                     + (f" ({'; '.join(fx['why'][:2])})" if fx.get("why") else "")))
+    # brief 34 (the PO 08.11: «джампады … как кучу … выкатили в одном месте»; «не напихивать на уровне кучу повторяемых
+    # объектов»): pads apart, like things not piled, every pad with a reason
+    fm = r.get("fx_measure")
+    if fm:
+        gap = fm.get("pads_min_apart")
+        out.append(("pads apart: two jump pads on one floor at least 192 apart (pro_q2t4: 527)", gap is None or gap >= 191,
+                    f"{gap} (band 192..)" if gap is not None else "no two on one floor"))
+        kind, most = fm.get("worst") or ("pad", 0)
+        out.append(("repetition: no more than two like things within four cells on one floor", most <= 2,
+                    f"{kind} {most} (band ..2)"))
+    if plan and plan.get("pads_no_reason") is not None:
+        n_ = int(plan["pads_no_reason"])
+        out.append(("ways: no jump pad beside another way to the same place", n_ == 0, f"{n_} (band ..0)"))
     want_ships = int(asked.get("ships") or 0)
     if want_ships:
         # the PO 06.11: the ships asked fly - or the record says why fewer (no court under the sky tall enough)
@@ -247,7 +262,8 @@ def asked_got(r: dict, asked: dict, plan: dict | None = None) -> list:
     mv = r.get("movers") or {}
     words = {"lifts": "лифтов", "pads": "джампадов", "teleporters": "телепортов", "ladders": "стремянок",
              "doors": "дверей", "pits": "смертельных ям"}
-    for key, measured, label in (("lifts", mv.get("plats", 0), "lifts (func_plat) ridden in the walk"),
+    # brief 34: a tower's lift stops on every storey - a train the walk rides, counted with the plats
+    for key, measured, label in (("lifts", mv.get("plats", 0) + mv.get("trains", 0), "lifts (func_plat) ridden in the walk"),
                                  ("pads", mv.get("pads", 0), "jump pads with a landing in the walk"),
                                  ("teleporters", mv.get("teleporters", 0) // 2, "teleporter pairs crossed"),
                                  ("ladders", mv.get("ladders", 0), "ladders climbed in the walk"),
@@ -594,9 +610,15 @@ def mechanics(r: dict, asked: dict, players: int) -> list:
     return out
 
 
-def report(path: Path, players: int, asked: dict | None, plan: dict | None = None, doors: list | None = None) -> int:
+def report(path: Path, players: int, asked: dict | None, plan: dict | None = None, doors: list | None = None,
+           skeleton_map: Path | None = None) -> int:
     r = survey.survey(path, doors=doors)
     r["path"] = str(path)
+    if skeleton_map and skeleton_map.is_file():
+        # brief 34: the pads apart and like things together, measured on the map the skeleton wrote (the engine moves
+        # none of them on a map from scratch) - the Studio's own check of a run lacked both rows on his tower (3.60)
+        import mapgen_scratch_fixtures as fx_mod
+        r["fx_measure"] = fx_mod.measure_map(skeleton_map.read_text(encoding="latin-1"))
     if (asked or {}).get("shape") in ("space", "tower"):
         # the space's islands and both shapes' pads' flights on the delivered map too - the Studio's own check of a run
         # said «space: its own measure - not measured» on the PO's first space map (3.52, 06.11)
@@ -670,7 +692,10 @@ def main() -> int:
         import mapgen_scratch as scratch_mod
         doors = scratch_mod.skeleton_doors(a.plan)
     print(f"a map from scratch, measured as people's maps were (brief 19 D7): {a.map.name}, {players} players")
-    fails = report(a.map, players, asked, plan, doors)
+    skel_map = None
+    if a.plan:
+        skel_map = a.plan.parent / f"{(asked or {}).get('name') or a.map.stem}.map"
+    fails = report(a.map, players, asked, plan, doors, skel_map)
     # «SUMMARY», not a bare PASS/FAIL: the Studio reads every PASS/FAIL line as a check
     print(f"SUMMARY from scratch: {fails} failed")
     return 0 if not fails else 1

@@ -91,6 +91,9 @@ def build_candidate(job: tuple) -> tuple:
         return k, said, None
     r = survey_mod.survey(mp.with_suffix(".bsp"), doors=plan_doors(P))
     r["decor_pieces"] = P.metrics.get("decor_pieces")
+    # brief 34: the pads apart and like things together, on the map as written
+    import mapgen_scratch_fixtures as fx_mod
+    r["fx_measure"] = fx_mod.measure_map(mp.read_text(encoding="latin-1"))
     if q.get("shape") in ("space", "tower"):
         # brief 25: the space's islands and both shapes' pads' flights
         import mapgen_space_survey as space_survey
@@ -337,6 +340,12 @@ def final_record(out: Path, bsp: Path) -> int:
     if (out / "style.json").is_file():
         pal = json.loads((out / "style.json").read_text(encoding="utf-8"))
     r = survey_mod.survey(bsp, doors=skeleton_doors(out / "skeleton.txt"))
+    # brief 34: the pads apart and like things together - the map the skeleton wrote (the engine moves none of them on a
+    # map from scratch: its moving families are skipped)
+    base_map = out / f"{req.get('name') or bsp.stem}.map"
+    if base_map.is_file():
+        import mapgen_scratch_fixtures as fx_mod
+        r["fx_measure"] = fx_mod.measure_map(base_map.read_text(encoding="latin-1"))
     if req.get("shape") in ("space", "tower"):
         # 3.57: the islands' and pads' own measure on the finished map, as the candidates had it (build_candidate) - without
         # it the record said «Дальность джампадов: … → 0» and its check failed «space: its own measure»
@@ -443,6 +452,17 @@ def write_record(out: Path, q: dict, m: dict, r: dict, pal: dict, res: list, fin
             ("tele_frames", "Телепорты в раме с порталом", "Teleporters in a frame with a portal", fx["teleporters"],
              fx["frames"] + fx["posts"]),
         ]
+    # brief 32: the sizes asked of the pads, the frames and the spawns' plates, and how many came out at which
+    fs = m.get("fx_sizes") or {}
+    for key, what, ru_, en_ in words_mod.SIZE_ROWS:
+        if q.get(key) is None:
+            continue
+        rows.append((key, ru_, en_, words_mod.size_asked(what, (fs.get("asked") or {}).get(what)),
+                     words_mod.size_made((fs.get("built") or {}).get(what) or [])))
+    ways = m.get("ways")
+    if ways:
+        # brief 34: the ways up by kind - «Наверх: лестниц 2, лифтов 1, джампадов 1 (+3 на площадки)»
+        rows.append(("ways", "Наверх", "Up", words_mod.ways_asked(q), words_mod.ways_made(ways)))
     if q.get("shape") == "tower":
         # brief 25 B: the tower's own, asked → made
         sp = r.get("space") or {}

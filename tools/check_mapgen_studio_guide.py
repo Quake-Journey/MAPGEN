@@ -7,7 +7,11 @@ r"""The Studio's guide is the Studio's (Fable's brief 10, D1).
   current build's, not an older one's;
 * every page the shots mode makes is referred to by both guides (a page the guide forgot), and every option of
   «Размах переделок» named in Loc.cs (gen.opt.*) is named in the guide by its own words, in each language.
-RED: an image taken away - the guard goes red (the first case).
+* the HTML and DOCX the Studio opens (doc\MAPGEN_Studio_Guide_RU.html / .docx) are built from the Markdown and the
+  pictures as they are now - the source stamp each carries (mapgen_studio_guide_html.source_stamp) equals the stamp of
+  the files of now (Fable's review of 3.60, 08.11: both built at 20:02, the Markdown changed twice after it).
+REDs: an image taken away - the guard goes red (the first case); the Markdown changed by one character - the HTML and
+DOCX built before it are stale.
 
     python tools/check_mapgen_studio_guide.py [--shots] [--no-red]
     --shots: make the pictures first (the Studio built to a scratch folder, `--shots`; the run's two pictures need
@@ -153,6 +157,21 @@ def make_shots(work: Path, pages: list[str] | None = None) -> Path | None:
     return shots
 
 
+def built_stamps(lang: str) -> tuple[str, str]:
+    """The source stamps the HTML and the DOCX of one language carry ("" when none)."""
+    import zipfile
+    from mapgen_studio_guide_html import STAMP
+    md = GUIDES[lang]
+    html_ = md.with_suffix(".html")
+    docx = md.with_suffix(".docx")
+    h = STAMP.search(html_.read_text(encoding="utf-8")) if html_.is_file() else None
+    d = None
+    if docx.is_file():
+        with zipfile.ZipFile(docx) as z:
+            d = STAMP.search(z.read("docProps/core.xml").decode("utf-8"))
+    return (h.group(1) if h else "", d.group(1) if d else "")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--shots", action="store_true")
@@ -185,7 +204,18 @@ def main() -> int:
         unnamed = [w for w in words if w not in text]
         check(f"{lang}: every option of «Размах переделок» is named in the guide by its own words", words and not unnamed,
               ", ".join(unnamed) or f"{len(words)} options")
+    from mapgen_studio_guide_html import source_stamp
+    for lang in ("ru", "en"):
+        now = source_stamp(GUIDES[lang])
+        h, d = built_stamps(lang)
+        check(f"{lang}: the HTML and DOCX the Studio opens are built from the Markdown and pictures of now",
+              h == now and d == now, f"now {now}, HTML {h or 'no stamp'}, DOCX {d or 'no stamp'}")
     if not a.no_red:
+        md = GUIDES["ru"]
+        changed = source_stamp(md, md.read_text(encoding="utf-8") + " ")
+        h, d = built_stamps("ru")
+        check("RED: the Markdown changed by one character - the HTML and DOCX built before it are stale",
+              h != changed and d != changed, f"changed {changed}, HTML {h or 'no stamp'}, DOCX {d or 'no stamp'}")
         first = DOC / "screens" / "ru" / names[0] if names else None
         if first and first.is_file():
             aside = first.with_suffix(".png.aside")

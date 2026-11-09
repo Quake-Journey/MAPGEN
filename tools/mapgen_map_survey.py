@@ -205,6 +205,10 @@ def fvec(s: str, default=(0.0, 0.0, 0.0)):
 
 
 # --------------------------------------------------------------------------------------------- the floor graph
+# brief 34: the stopping trains ridden by the walk (a RED switches it off: the storeys only a lift reaches go out of reach)
+TRAINS_RIDDEN = True
+
+
 class Graph:
     def __init__(self, w: World):
         self.w = w
@@ -385,9 +389,46 @@ def movers(g: Graph, w: World):
     for e in ents:
         if e.get("targetname"):
             named.setdefault(e["targetname"], []).append(e)
-    n_plat = n_tel = n_push = n_ladder = 0
+    n_plat = n_tel = n_push = n_ladder = n_train = 0
     for e in ents:
         cls = e.get("classname", "")
+        if cls == "func_train" and TRAINS_RIDDEN:
+            # brief 34 (the PO 08.11: «лифты как в небоскрёбах - едут между этажами, останавливаются там»): a train
+            # whose path corners stop it at floors - its mins go to each corner (the game's train_next); a man at a
+            # stop's floor beside the cabin rides to every other stop (the wait and the ride)
+            mb = model_bounds(w, e)
+            if not mb:
+                continue
+            mins, maxs = mb
+            size = [maxs[k] - mins[k] for k in range(3)]
+            stops, seen, at = [], set(), e.get("target", "")
+            while at and at not in seen and named.get(at):
+                seen.add(at)
+                c = named[at][0]
+                o = fvec(c.get("origin", ""))
+                stops.append((o[0], o[1], o[2] + size[2]))
+                at = c.get("target", "")
+            try:
+                speed = float(e.get("speed", "100") or 100)
+            except ValueError:
+                speed = 100.0
+            groups = []
+            for (ox, oy, top) in {(round(x), round(y), round(z)) for (x, y, z) in stops}:
+                near = [i for i, (x, y, z) in enumerate(g.nodes)
+                        if ox - 64 <= x <= ox + size[0] + 64 and oy - 64 <= y <= oy + size[1] + 64 and abs(z - top) <= 24]
+                if near:
+                    groups.append((top, near))
+            for (za, na) in groups:
+                for (zb, nb) in groups:
+                    if za == zb:
+                        continue
+                    ride = 2.0 + abs(za - zb) / max(speed, 1.0)
+                    for a_ in na:
+                        for b_ in nb:
+                            g.link(a_, b_, ride, "train")
+            if len(groups) >= 2:
+                n_train += 1
+            continue
         if cls == "func_plat":
             mb = model_bounds(w, e)
             if not mb:
@@ -533,7 +574,7 @@ def movers(g: Graph, w: World):
                     g.link(a_, u, rise / 200.0, "ladder")
                     g.link(u, a_, rise / 300.0, "ladder")
             n_ladder += 1
-    return {"plats": n_plat, "teleporters": n_tel, "pads": n_push, "ladders": n_ladder}
+    return {"plats": n_plat, "teleporters": n_tel, "pads": n_push, "ladders": n_ladder, "trains": n_train}
 
 
 def dijkstra(g: Graph, sources, blocked: set | None = None, prev: list | None = None):

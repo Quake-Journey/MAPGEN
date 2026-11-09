@@ -156,7 +156,8 @@ def dress_walls(P, pal: dict, spans: dict, spaces: dict, plat_cells: dict, linte
             | {c for (c, *_r) in P.chamfers} | {c for (c, *_r) in P.pillars} | set(plat_cells)
             | set(getattr(P, "rounded", ())) | plan_mod.button_cells(P)
             | {c for (*_r, front) in P.ladders for c in front} | {c for d in P.doors for c in d.cells}
-            | {c for (src, dst, *_r) in P.pads for c in (src, dst)} | {c for t in P.teleports for c in t})
+            | {c for (src, dst, *_r) in P.pads for c in (src, dst)} | {c for t in P.teleports for c in t}
+            | set(getattr(P, "fx_cells", ())))     # brief 32: the cells a bigger pad, frame or plate reaches
     wet = {c for (cells, *_r) in P.liquids for c in cells}
 
     def rock(c, lo, hi):
@@ -316,6 +317,11 @@ def dress_walls(P, pal: dict, spans: dict, spaces: dict, plat_cells: dict, linte
     return out
 
 
+# brief 34 follow-up: True draws a sky space's every rock underside as sky (the slab under a perch with it, 3.59/3.60's
+# bug) and leaves a perch's well capped by its gallery's ceiling; check_mapgen_tower_ways.py's RED only
+SKY_UNDERSIDES = False
+
+
 FIXTURE_GLOW = 100
 
 
@@ -410,6 +416,7 @@ class LayerView:
         # skirting ran into a rounded corner's fill
         self.buttons = [(ph(c), *rest) for (c, *rest) in getattr(P, "buttons", []) if on(c)]
         self.rounded = {ph(c) for c in getattr(P, "rounded", ()) if on(c)}
+        self.fx_cells = {ph(c) for c in getattr(P, "fx_cells", ()) if on(c)}     # brief 32
         self.doors = [dataclasses.replace(d, cells=[ph(c) for c in d.cells]) if d.cells and on(d.cells[0])
                       else LayerView._None() for d in P.doors]
         self.spaces = {}
@@ -482,14 +489,20 @@ def _build_plan(P, pal: dict, title: str = "") -> tuple:
         k = pal_of(idx)
         if what == "floor":
             return pal["floor"][floor_slot(slots[idx][1], len(pal["floor"])) if idx in slots else k % len(pal["floor"])]
-        if what == "ceil":
-            return pal["sky"][0] if s.sky else pal["ceil"][k % len(pal["ceil"])]
+        if what in ("ceil", "slab", "sky"):
+            # «slab»: rock with more air over it - a ceiling even under the sky (a ledge over a court); «sky»: the top of a
+            # well a roofed space opens to the sky (a tower's perch well)
+            if what == "sky" or (what == "ceil" and s.sky):
+                return pal["sky"][0]
+            return pal["ceil"][k % len(pal["ceil"])]
         return pal["wall"][(slots[idx][0] if idx in slots else k) % len(pal["wall"])]
 
     air = defaultdict(list)
     steps = []
     ph = plan_mod.phys
     plat_cells = {c: zl for (plat, zl, zh, bottom, top) in P.lifts for c in plat}
+    # brief 34: a stopping lift's cabin rests in the same recess at its ground stop
+    plat_cells.update({ph(c): stops[0] for (cells, stops, _d, _n) in getattr(P, "trains", []) for c in cells})
     for s in spaces.values():
         role = ("space", s.id)
         for c0, f in s.floor.items():
@@ -556,6 +569,9 @@ def _build_plan(P, pal: dict, title: str = "") -> tuple:
             return pal["wall"][0]
         return surf(max(votes.items(), key=lambda kv: kv[1])[0], "wall")
 
+    # brief 34 follow-up (the PO 08.11, mg_new_594: «у двух площадок наверху уровня снизу небо просвечивает вместо
+    # текстуры плиты»): the cells whose own ceiling is the sky over a roofed space - a perch's well over the top gallery
+    wells = {ph(c0) for c0, cz in P.cell_ceil.items() if c0 in P.owner and cz > spaces[P.owner[c0]].ceil}
     brushes = []
     for sig, cells in by_sig.items():
         a, b, below, above = sig
@@ -572,7 +588,16 @@ def _build_plan(P, pal: dict, title: str = "") -> tuple:
                 for y in range(y0, y1 + 1):
                     left.discard((x, y))
             top = surf(above, "floor") if above else pal["wall"][0]
-            bot = surf(below, "ceil") if below else pal["wall"][0]
+            # the rock's underside: the sky only where no air is over it (the map's top), never under a ledge's slab
+            if not below:
+                bot = pal["wall"][0]
+            elif above is not None and not SKY_UNDERSIDES:
+                bot = surf(below, "slab")
+            elif above is None and not SKY_UNDERSIDES and all((x, y) in wells for x in range(x0, x1 + 1)
+                                                               for y in range(y0, y1 + 1)):
+                bot = surf(below, "sky")
+            else:
+                bot = surf(below, "ceil")
             sides = {
                 "+x": side_surf([(x1, y) for y in range(y0, y1 + 1)], (1, 0), a, b),
                 "-x": side_surf([(x0, y) for y in range(y0, y1 + 1)], (-1, 0), a, b),
@@ -694,10 +719,13 @@ def finish_entities(P, pal: dict, spaces: dict, brushes: list, ents: list, linte
                                 {"default": TRIGGER_SURF()}) for (x0, y0, x1, y1) in rects_of(set(cells))]))
     # wall decorations: a panel of the trim (and, for «many», a lamp strip) every few cells of plain wall
     every = DECOR_EVERY.get(q.get("decor") or "default", 5)
+    import math
+    import mapgen_scratch_fixtures as fix_mod_
+    placed_decor = []
     hung = 0
     if every:
         busy = ({c for (c, *_r) in P.chamfers} | {c for (c, *_r) in P.pillars} | set(getattr(P, "rounded", ()))
-                | plan_mod.button_cells(P))
+                | plan_mod.button_cells(P) | set(getattr(P, "fx_cells", ())))
         busy |= {c for (*_r, front) in P.ladders for c in front}
         k = 0
         for s in spaces.values():
@@ -726,6 +754,13 @@ def finish_entities(P, pal: dict, spaces: dict, brushes: list, ents: list, linte
                     else:
                         lo_, hi_ = ((cx - 20, fy - 6, z + 56), (cx + 20, fy, z + 136)) if dy > 0 else \
                             ((cx - 20, fy, z + 56), (cx + 20, fy + 6, z + 136))
+                    # brief 34 (the PO 08.11: «не просто напихивать на уровне кучу повторяемых объектов»): no third
+                    # piece within four cells of two on this floor - «many» is as many as stand apart (the piece's own
+                    # middle, as the measure reads it)
+                    mid = ((lo_[0] + hi_[0]) / 2, (lo_[1] + hi_[1]) / 2, lo_[2])
+                    if fix_mod_.crowded(placed_decor, mid):
+                        continue
+                    placed_decor.append(mid)
                     brushes.append(box(lo_, hi_, {"default": pal["trim"][0], **({"+x": surf_, "-x": surf_, "+y": surf_,
                                                                                   "-y": surf_} if lamp_strip else {})},
                                        note="decor"))
@@ -746,16 +781,34 @@ def finish_entities(P, pal: dict, spaces: dict, brushes: list, ents: list, linte
         hi = ((max(xs) + 1) * CELL - 1, (max(ys) + 1) * CELL - 1, zh)
         ents.append(Entity({"classname": "func_plat", "height": str(zh - zl), "speed": "200", "lip": "0"},
                            [box(lo, hi, {"default": pal["trim"][0], "+z": pal["floor"][0]})]))
+    # brief 34 (the PO 08.11: «лифты как в небоскрёбах - едут между этажами, останавливаются там»): a cabin the shaft's
+    # size riding path corners - one a storey, up and back down - waiting at each; its top at a stop is that storey's
+    # floor (the corner takes its mins: the game's train_next), at the ground in the plats' recess
+    for (cells, stops, _doors, name) in getattr(P, "trains", []):
+        pcs = [ph(c) for c in cells]
+        x0, y0 = min(c[0] for c in pcs) * CELL + 1, min(c[1] for c in pcs) * CELL + 1
+        x1, y1 = (max(c[0] for c in pcs) + 1) * CELL - 1, (max(c[1] for c in pcs) + 1) * CELL - 1
+        order = list(range(len(stops))) + list(range(len(stops) - 2, 0, -1))
+        names = [f"{name}_{i}" for i in range(len(order))]
+        ents.append(Entity({"classname": "func_train", "target": names[0], "speed": str(int(plan_mod.TRAIN_SPEED)),
+                            "spawnflags": "1", "dmg": "10"},
+                           [box((x0, y0, stops[0] - 16), (x1, y1, stops[0]),
+                                {"default": pal["trim"][0], "+z": pal["floor"][0]}, note="lift cabin")]))
+        for i, si in enumerate(order):
+            ents.append(Entity({"classname": "path_corner", "targetname": names[i], "target": names[(i + 1) % len(names)],
+                                "wait": str(int(plan_mod.TRAIN_WAIT)), "origin": f"{x0} {y0} {stops[si] - 16}"}))
     from mapgen_scratch_style import TRIGGER
     import mapgen_scratch_fixtures as fix_mod
     # brief 26: the pads' and teleporters' look as people build them (mapgen_scratch_fixtures) - with the style's own
     # fixture textures; without them (no game palette to write them by) the plate of before
     fx_on = bool(pal.get("fx"))
     fxm = {"pads": len(P.pads), "discs": 0, "wedges": 0, "teleporters": 0, "frames": 0, "posts": 0, "bare": 0, "why": []}
-    for (a, t, T, speed, pitch, yaw, zf) in P.pads:
+    # brief 32: each at the size the plan found room for (mapgen_scratch_fixtures.plan_sizes; 100 % without it)
+    sizes = getattr(P, "fx_size", {}) or {}
+    for i, (a, t, T, speed, pitch, yaw, zf) in enumerate(P.pads):
         x0, y0 = ph(a)[0] * CELL, ph(a)[1] * CELL
         if fx_on:
-            bs, kind = fix_mod.pad_brushes(pal, ph(a), zf, pitch, yaw)
+            bs, kind = fix_mod.pad_brushes(pal, ph(a), zf, pitch, yaw, sizes.get(("pad", i), 100) / 100)
             brushes.extend(bs)
             fxm["discs" if kind == "disc" else "wedges"] += 1
         else:
@@ -763,6 +816,11 @@ def finish_entities(P, pal: dict, spaces: dict, brushes: list, ents: list, linte
                                {"default": pal["trim"][0], "+z": lamp}, note="pad"))
         ents.append(Entity({"classname": "trigger_push", "speed": str(speed), "angles": f"{-pitch} {yaw} 0"},
                            [box((x0 + 8, y0 + 8, zf + 4), (x0 + CELL - 8, y0 + CELL - 8, zf + 40), {"default": TRIGGER})]))
+        # brief 34 (the PO: «непонятно для чего»): where it lands is marked - a thin lit plate on the landing's floor,
+        # not a pad's look (no ring), so the floor shows where each pad goes
+        if fx_on and t in P.owner and P.spaces[P.owner[t]].floor.get(t, (0, ""))[1] == "flat":
+            brushes.extend(fix_mod.landing_mark(pal, ph(t), P.spaces[P.owner[t]].floor[t][0]))
+            fxm["landings"] = fxm.get("landings", 0) + 1
     fx_busy = fix_mod.busy_cells(P) if fx_on else set()
     for k, (a, b_, da, db) in enumerate(P.teleports):
         for src, dst, name in ((a, db, f"tele{k}a"), (b_, da, f"tele{k}b")):
@@ -775,7 +833,8 @@ def finish_entities(P, pal: dict, spaces: dict, brushes: list, ents: list, linte
                     "origin": f"{ps[0] * CELL + CELL // 2} {ps[1] * CELL + CELL // 2} {zs + 24}"}
             fxm["teleporters"] += 1
             if fx_on:
-                bs, kind, why, face_ = fix_mod.teleporter_frame(P, pal, src, fx_busy)
+                got, fit = sizes.get(("tele", src), (100, None))
+                bs, kind, why, face_ = fix_mod.teleporter_frame(P, pal, src, fx_busy, got / 100, fit)
                 brushes.extend(bs)
                 fxm[{"frame": "frames", "posts": "posts", "bare": "bare"}[kind]] += 1
                 if why:
@@ -853,11 +912,19 @@ def finish_entities(P, pal: dict, spaces: dict, brushes: list, ents: list, linte
         yaw = {(1, 0): 0, (0, 1): 90, (-1, 0): 180, (0, -1): 270}[(bdx, bdy)]
         ents.append(Entity({"classname": "func_button", "target": tname, "angle": str(yaw), "wait": "4", "lip": "4",
                             "speed": "40"}, [box(lo_, hi_, {"default": detail(pal, 2), face: pal["lamp"][0]})]))
-    for (c, z, ang) in P.spawns:
+    plates = 0
+    for i, (c, z, ang) in enumerate(P.spawns):
         c = ph(c)
+        # brief 32: a plate under it when asked and it found room (the spawn stands on it: 8 higher)
+        plate = sizes.get(("spawn", i), 0)
+        if plate:
+            brushes.extend(fix_mod.spawn_plate(pal, c, z, plate / 100))
+            plates += 1
+        lift = fix_mod.PLATE_H if plate else 0
         ents.append(Entity({"classname": "info_player_deathmatch",
-                            "origin": f"{c[0] * CELL + CELL // 2} {c[1] * CELL + CELL // 2} {z + 24}",
+                            "origin": f"{c[0] * CELL + CELL // 2} {c[1] * CELL + CELL // 2} {z + 24 + lift}",
                             "angle": str(ang)}))
+    fxm["plates"] = plates
     P.metrics["fixtures"] = fxm
     # the PO 06.11: the single-player game's ships over the map when asked (mapgen_scratch_ships)
     import mapgen_scratch_ships as ships_mod

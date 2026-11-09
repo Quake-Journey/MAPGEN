@@ -37,6 +37,10 @@ add("tower", "tower_tech", P(4, shape="tower", style=G("tech")))
 add("tower", "tower_8", P(8, shape="tower", shafts=3))
 add("tower", "tower_4", P(8, shape="tower", storeys=4))
 add("tower", "tower_16", P(16, shape="tower", storeys=4, shafts=3))
+# brief 34: the lift as a parameter, shown by its own presets
+add("tower", "tower_skyscraper", P(4, shape="tower", storeys=4, lifts=2, pads=1))
+add("tower", "tower_pads", P(4, shape="tower", stairs=0, lifts=0, pads=3))
+add("tower", "tower_stairs", P(2, shape="tower", lifts=0, pads=0))
 
 
 def main() -> int:

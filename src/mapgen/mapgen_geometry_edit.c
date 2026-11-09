@@ -35276,6 +35276,80 @@ static bool destroy_pile(destroy_t *d, float x, float y, float z, const char *te
     return made > 0;
 }
 
+/*
+ * The judge's hanging test (mapgen_map_survey.hanging_brushes) on one brush of the geometry: air under most of its
+ * underside (nothing solid within 64), held by one side at most and not by the ceiling - or hanging from the ceiling,
+ * small and touching no wall. The PO 08.11 (mg_new_594 at 50 %): a carve left a wall's 16 x 8 x 46 piece standing out
+ * of the wall 98 over the floor, another a beam's end hanging from the ceiling.
+ */
+static bool destroy_hangs(const mapgen_geometry_t *g, const mapgen_geometry_brush_t *br)
+{
+    const float *mn = br->mins, *mx = br->maxs;
+    const float dx = mx[0] - mn[0], dy = mx[1] - mn[1], dz = mx[2] - mn[2];
+    if (dz < 2.0f || fmaxf(dx, dy) > 1024.0f || (fminf(dx, dy) > 256.0f && dz > 256.0f))
+        return false;
+    float xs[4], ys[4], zs[3];
+    int nx = 0, ny = 0, nz = 0;
+#define DESTROY_GRID(lo_, hi_, n_, out_, cnt_) do { if ((hi_) - (lo_) <= 4.0f) out_[cnt_++] = 0.5f * ((lo_) + (hi_)); \
+        else for (int k_ = 0; k_ < (n_); k_++) out_[cnt_++] = (lo_) + 2.0f + ((hi_) - (lo_) - 4.0f) * (float)k_ / (float)((n_) - 1); } while (0)
+    DESTROY_GRID(mn[0], mx[0], 4, xs, nx);
+    DESTROY_GRID(mn[1], mx[1], 4, ys, ny);
+    DESTROY_GRID(mn[2], mx[2], 3, zs, nz);
+#undef DESTROY_GRID
+    static const float below[4] = { 4.0f, 24.0f, 48.0f, 64.0f };
+    int held = 0, roof = 0;
+    for (int i = 0; i < nx; i++)
+        for (int j = 0; j < ny; j++) {
+            bool h = false;
+            for (int k = 0; k < 4 && !h; k++) {
+                const float p[3] = { xs[i], ys[j], mn[2] - below[k] };
+                h = destroy_in_brush(g, p);
+            }
+            held += h;
+            const float q[3] = { xs[i], ys[j], mx[2] + 2.0f };
+            roof += destroy_in_brush(g, q);
+        }
+    const int under = nx * ny;
+    if (2 * held >= under)
+        return false;
+    int sides = 0;
+    for (int f = 0; f < 4; f++) {
+        const int axis = f < 2 ? 0 : 1;
+        const float at = (f % 2) ? mx[axis] + 2.0f : mn[axis] - 2.0f;
+        const float *along = axis == 0 ? ys : xs;
+        const int na = axis == 0 ? ny : nx;
+        int solid = 0;
+        for (int u = 0; u < na; u++)
+            for (int k = 0; k < nz; k++) {
+                float p[3];
+                p[axis] = at;
+                p[1 - axis] = along[u];
+                p[2] = zs[k];
+                solid += destroy_in_brush(g, p);
+            }
+        sides += 2 * solid >= na * nz;
+    }
+    if (2 * roof >= under)
+        return dz > 8.0f && fmaxf(dx, dy) <= 64.0f && sides == 0;
+    return sides <= 1;
+}
+
+/* Did the carve of [lo, hi] leave a piece hanging - a brush of the world within 64 of it that the judge's test calls
+   hanging now? */
+static bool destroy_left_hanging(const destroy_t *d, const float lo[3], const float hi[3])
+{
+    for (uint32_t b = 0; b < MapGenGeometry_NumBrushes(d->g); b++) {
+        const mapgen_geometry_brush_t *br = MapGenGeometry_Brush(d->g, b);
+        if (!br || br->model || !(br->contents & CONTENTS_SOLID_BIT) || brush_has_sky(d->g, br))
+            continue;
+        if (!span_boxes_meet(br->mins, br->maxs, lo, hi, 64.0f))
+            continue;
+        if (destroy_hangs(d->g, br))
+            return true;
+    }
+    return false;
+}
+
 /* A carve whose new faces wear `tex`; refused (nothing changed) when it is not safe. */
 static bool destroy_carve(destroy_t *d, const float lo[3], const float hi[3], float (*pn)[3], const float *pd, int np,
                           const char *tex)
@@ -35295,11 +35369,31 @@ static bool destroy_carve(destroy_t *d, const float lo[3], const float hi[3], fl
         d->rep->refused++;
         return false;
     }
+    /* the map as it was, to put back when the carve leaves a piece hanging (below) */
+    mapgen_geometry_t *before = NULL;
+    if (MapGenGeometry_Clone(d->g, &before) != MAPGEN_GEOMETRY_OK)
+        before = NULL;
     const bool ok = np > 6 ? carve_convex(d->g, lo, hi, pn, pd, np) : carve_box(d->g, lo, hi);
     if (!ok) {
+        MapGenGeometry_Free(before);
         d->rep->refused++;
         return false;
     }
+    /* the PO 08.11 (mg_new_594): «nothing hanging» - a carve cut a wall's or a beam's piece loose; undone, the map as
+       before it (a piece the map had hanging before the carve refuses the carves near it, which the judge reds anyway) */
+    /* MAPGEN_DESTROY_KEEP_HANGING=1: the carve kept as before (the RED of the PO's mg_new_594 at 50 %) */
+    static int keep_hanging = -1;
+    if (keep_hanging < 0) {
+        const char *e = getenv("MAPGEN_DESTROY_KEEP_HANGING");
+        keep_hanging = e && *e == '1';
+    }
+    if (before && !keep_hanging && destroy_left_hanging(d, lo, hi)) {
+        MapGenGeometry_Swap(d->g, before);
+        MapGenGeometry_Free(before);
+        d->rep->refused++;
+        return false;
+    }
+    MapGenGeometry_Free(before);
     destroy_dress(d, lo, hi, tex, false);
     destroy_mark(d, lo, hi);
     return true;
@@ -35554,6 +35648,31 @@ static bool destroy_patch(destroy_t *d, const float c[3], int ax, float nsg, flo
                 q[ax] = plane_at - nsg * 4.0f;
                 fits = fits && !donor_air(d->b, q[0], q[1], q[2]);
             }
+        /*
+         * Brief 34 (08.11, the PO's tower mg_new_18619 at 50 %): a plate on a wall over a stair's opening in the floor
+         * stood out of the wall with air under it («nothing hanging» at 768 960 448). The judge's own test
+         * (mapgen_map_survey.hanging_brushes): under at least half of the plate solid within 64, or over at least half
+         * of it the ceiling.
+         */
+        if (fits && ax != 2) {
+            const int hz = ia[0] == 2 ? ia[1] : ia[0];
+            const float below[4] = { 4.0f, 24.0f, 48.0f, 64.0f };
+            int held = 0, roofed = 0;
+            for (int i_ = 0; i_ < 4; i_++) {
+                float q[3];
+                q[ax] = plane_at + nsg * 0.5f;
+                q[hz] = lo[hz] + 2.0f + (hi[hz] - lo[hz] - 4.0f) * (float)i_ / 3.0f;
+                bool under = false;
+                for (int k_ = 0; k_ < 4 && !under; k_++) {
+                    q[2] = lo[2] - below[k_];
+                    under = !donor_air(d->b, q[0], q[1], q[2]) || destroy_in_brush(d->g, q);
+                }
+                held += under;
+                q[2] = hi[2] + 2.0f;
+                roofed += !donor_air(d->b, q[0], q[1], q[2]) || destroy_in_brush(d->g, q);
+            }
+            fits = held >= 2 || roofed >= 2;
+        }
         if (fits)
             rep = r;
     }

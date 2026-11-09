@@ -323,6 +323,16 @@ class Plan:
     # brief 25 B: a cell's air stops under its space's ceiling here (plan key -> z): the atrium's column under a
     # tower's perch, the perch's slab between them
     cell_ceil: dict = field(default_factory=dict)
+    # brief 32: the size each pad, teleporter frame and spawn plate is built at (mapgen_scratch_fixtures.plan_sizes)
+    # and the cells the bigger ones reach - every stage after it leaves them alone
+    fx_size: dict = field(default_factory=dict)
+    fx_cells: set = field(default_factory=set)
+    # brief 34 (the PO 08.11: «лифты как в небоскрёбах — едут между этажами, останавливаются там»): a lift that stops on
+    # every storey - (platform cells (ground keys), [stop floor z], [the doorway's key on each stop], name)
+    trains: list = field(default_factory=list)
+    # brief 34: why each pad is there - (take-off, landing) -> «express» | «chain» | «perch» | «shaft» | «pit» |
+    # «shortcut» | «link» (the description says the ways by it; «perch» and «pit» are pads by design)
+    pad_why: dict = field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------------------------- 1. the floor plan
@@ -1775,8 +1785,16 @@ def movers(P: Plan, rnd: random.Random) -> None:
         if not (over_pit and pit_cells):
             highs = [c for c in highs if inner(c)]
         done = False
+        # brief 34: the take-offs apart, none beside a teleporter or a spawn
+        lows = [c for c in lows if pad_spot_ok(P, c, s.base)]
+        # brief 34 §3: the take-off at the terrace's foot (the nearest to its floor first), the landing on its far side
+        # (the farthest from the take-off first) - two random cells read as a pad for nothing
+        if highs and not (over_pit and pit_cells):
+            lows.sort(key=lambda c: min(max(abs(c[0] - h[0]), abs(c[1] - h[1])) for h in highs))
         for a in lows[:80]:
-            for t in highs:
+            from_a = None
+            far = highs if over_pit and pit_cells else sorted(highs, key=lambda t: -math.hypot(t[0] - a[0], t[1] - a[1]))
+            for t in far:
                 dxu, dyu = (t[0] - a[0]) * CELL, (t[1] - a[1]) * CELL
                 D = math.hypot(dxu, dyu)
                 H = s.floor[t][0] - s.base - PAD_TOP     # from the take-off on the pad's plinth (brief 26)
@@ -1793,9 +1811,16 @@ def movers(P: Plan, rnd: random.Random) -> None:
                     vxy = (dxu / D * vh, dyu / D * vh)
                     if pad_flight_clear(P, s, a, vxy, vz, T, s.floor[t][0]) and (
                             pitch >= PAD_STEEP or pad_flight_clear(P, s, a, vxy, vz, T, s.floor[t][0], PAD_WEDGE_LIFT)):
+                        # brief 34: a terrace a stair already joins near by is no pad's reason (a chasm's pad is)
+                        if not (over_pit and pit_cells):
+                            if from_a is None:
+                                from_a = dijkstra(edges, a)
+                            if from_a.get(t, 1e9) <= NO_REASON_S:
+                                break
                         speed = math.hypot(vh, vz) / 10.0
                         yaw = math.degrees(math.atan2(dyu, dxu))
                         P.pads.append((a, t, T + 0.1, round(speed, 1), round(pitch, 2), round(yaw, 2), s.base))
+                        P.pad_why[(a, t)] = "pit" if over_pit and pit_cells else "shortcut"
                         P.no_items.update({a, t})
                         reserve_flight(P, a, t)
                         P.reasons.append(("trigger_push", f"джампад в зале {s.id}: полёт {T + 0.1:.1f} с"
@@ -1809,6 +1834,9 @@ def movers(P: Plan, rnd: random.Random) -> None:
                 break
     want = int(q.get("teleporters") or 0)
     flat = [c for c, f in nodes.items() if f[1] == "flat" and P.owner.get(c) is not None and c not in P.no_items]
+    # brief 34: no teleporter beside a pad
+    flat = [c for c in flat if all(layer_of(c) != layer_of(a) or max(abs(phys(c)[0] - phys(a)[0]), abs(phys(c)[1] - phys(a)[1])) > 1
+                                   for (a, *_r) in P.pads)]
     rnd.shuffle(flat)
     for _ in range(want):
         best = None
@@ -1833,6 +1861,9 @@ def movers(P: Plan, rnd: random.Random) -> None:
         fix_mod.reserve_frame(P, b_)
         P.reasons.append(("misc_teleporter", f"пара телепортов между дальними местами, {walk_s:.1f} с пешком"))
         flat = [c for c in flat if c not in P.no_items]
+        # brief 34: no third teleporter within four cells of two (teleports4 put three discs together, 08.11)
+        discs = [((phys(c)[0] + 0.5) * CELL, (phys(c)[1] + 0.5) * CELL, nodes[c][0]) for tp in P.teleports for c in tp[:2] if c in nodes]
+        flat = [c for c in flat if not fix_mod.crowded(discs, ((phys(c)[0] + 0.5) * CELL, (phys(c)[1] + 0.5) * CELL, nodes[c][0]))]
 
 
 # brief 26: a pad's disc or wedge stands on a plinth - the take-off is this far over the floor (8 + 4: a step), the
@@ -1857,6 +1888,70 @@ def reserve_flight(P: Plan, a, t) -> None:
         c = (int(round(a[0] + ux * k)), int(round(a[1] + uy * k)))
         if c != t and c != a and P.owner.get(c) is not None:
             P.no_items.add(c)
+
+
+# brief 34 (the PO 08.11 on his tower mg_new_18619, five pads a cell apart on the atrium's floor: «джампады вот так
+# наставлены - как кучу говна выкатили в одном месте … навалено куча джампадов непонятно для чего»; «всё хорошо в
+# меру»; «каждый уровень … архитектурным шедевром, а не набором напиханного»): two take-offs on one floor at least
+# PAD_APART cells apart (192 u - pro_q2t4's nearest two are 527 apart, one pad a corner), none beside a teleporter's
+# disc or exit or a spawn; a pad whose landing is NO_REASON_S or less away on foot is a second way beside the first -
+# not built (a pad over a chasm and a pad to a ledge only a pad reaches are pads by design)
+PAD_APART = 3
+# brief 34: a lamp over the floor takes its cell's own ceiling (a tower's perch well); off only for
+# check_mapgen_tower_ways.py's RED
+FREE_LAMP_CELL_CEIL = True
+NO_REASON_S = 2.5
+TRAIN_SPEED = 160.0     # brief 34: the stopping lift's speed (u/s) and its wait at each stop (s)
+TRAIN_WAIT = 2.0
+
+
+def same_floor(P: Plan, a, b, za: float, zb: float) -> bool:
+    """Two plan keys standing on one floor: one layer, within 64 in height, one space or two joined ones."""
+    if layer_of(a) != layer_of(b) or abs(za - zb) >= 64:
+        return False
+    oa, ob = P.owner.get(a), P.owner.get(b)
+    return oa == ob or frozenset((oa, ob)) in P.joined
+
+
+def pad_spot_ok(P: Plan, a, za: float) -> bool:
+    """Brief 34: a pad may take off at a - PAD_APART cells from every other take-off on its floor, not beside a
+    teleporter's disc or exit or a spawn."""
+    pa = phys(a)
+
+    def near(c, d) -> bool:
+        pc = phys(c)
+        return layer_of(c) == layer_of(a) and max(abs(pa[0] - pc[0]), abs(pa[1] - pc[1])) <= d
+
+    for (a2, _t, _T, _sp, _pi, _ya, z2) in P.pads:
+        if same_floor(P, a, a2, za, z2) and near(a2, PAD_APART - 1):
+            return False
+    if any(near(c, 1) for tp in P.teleports for c in tp):
+        return False
+    return not any(near(c, 1) for (c, _z, _ang) in P.spawns)
+
+
+def pads_without_reason(P: Plan) -> list:
+    """Brief 34: the pads whose landing is NO_REASON_S or less from their take-off on foot (no pad, no teleporter on
+    the way) - a stair or a door is right there; (take-off, landing, seconds). Pads by design (a perch, a chasm) aside."""
+    nodes, edges = plan_graph(P)
+    skip = {(a, t) for (a, t, *_r) in P.pads}
+    for (a, b, da, db) in P.teleports:
+        skip |= {(a, db), (b, da)}
+    foot = {c: [(n, w) for (n, w) in es if (c, n) not in skip] for c, es in edges.items()}
+    out = []
+    for (a, t, *_r) in P.pads:
+        if P.pad_why.get((a, t)) in ("perch", "pit"):
+            continue
+        d = dijkstra(foot, a)
+        if t in d and d[t] <= NO_REASON_S:
+            out.append((a, t, round(d[t], 2)))
+    return out
+
+
+def foot_time(P: Plan, edges: dict, a, t) -> float | None:
+    """The walk from a to t on the graph given (None when it does not get there)."""
+    d = dijkstra(edges, a)
+    return d.get(t)
 
 
 def pad_flight_clear(P: Plan, s: Space, a, vh, vz, T, z_land, lift: float = 0.0) -> bool:
@@ -2077,6 +2172,12 @@ def plan_graph(P: Plan):
             for t_ in top:
                 if b in edges and t_ in edges:
                     edges[b].append((t_, 0.4 + (zh - zl) / 220.0))
+    # brief 34: a lift stopping on every storey - from any stop's doorway to any other's (the wait and the ride)
+    for (_cells, stops, doors, _name) in P.trains:
+        for i, a_ in enumerate(doors):
+            for j, b_ in enumerate(doors):
+                if i != j and a_ in edges and b_ in edges:
+                    edges[a_].append((b_, TRAIN_WAIT + abs(stops[i] - stops[j]) / TRAIN_SPEED))
     for d in P.doors:
         if d.rj:
             for c in d.cells:
@@ -3081,7 +3182,7 @@ def light_space(P: Plan, s: Space) -> None:
             d = math.dist((lx, ly, lz), (px, py, pz))
             have[c] += max(0.0, v - d)
     held = ({c for (_cls, c, _z, _n) in P.items} | {c for (c, _z, _a) in P.spawns} | set(P.no_items)
-            | {c for (c, *_r) in P.pillars} | set(P.rounded) | button_cells(P))
+            | {c for (c, *_r) in P.pillars} | set(P.rounded) | button_cells(P) | P.fx_cells)
     corners = {c for (c, *_r) in P.chamfers} | set(P.rounded) | button_cells(P)
     sites = [st for st in lamp_sites(P, s, held) if st[4] not in corners]
     v = LIGHT_VALUE_COURT if s.sky else LIGHT_VALUE
@@ -3105,11 +3206,15 @@ def light_space(P: Plan, s: Space) -> None:
             add(lx, ly, lz, v)
             P.lights.append((lx, ly, lz, v, mount))
             continue
-        z = min(s.ceil - 24, pz + (LIGHT_OVER_COURT if s.sky else LIGHT_OVER))
+        # brief 34: the cell's own ceiling where the plan set one - a tower's perch well is open to the sky over one
+        # gallery cell, and the lamp panel set at the gallery's ceiling there hung in the air (his tower on 3.60, 3
+        # candidates of 10: «nothing hanging … in the air» at the well)
+        ceil_here = P.cell_ceil.get(dark, s.ceil) if FREE_LAMP_CELL_CEIL else s.ceil
+        z = min(min(s.ceil, ceil_here) - 24, pz + (LIGHT_OVER_COURT if s.sky else LIGHT_OVER))
         # brief 20 D3: a court's lamps hang high by its walls with no ceiling over them - at 300 they burnt the walls'
         # upper courses white (a trial duel, 04.11: every wall luxel at 255 was in a court, 50..70 from a lamp)
         add(px, py, z, v)
-        P.lights.append((px, py, z, v, ("free", s.ceil, s.sky)))
+        P.lights.append((px, py, z, v, ("free", ceil_here, s.sky or ceil_here > s.ceil)))
 
 
 # --------------------------------------------------------------------------------------------- 5a. the powerups' places
@@ -3429,7 +3534,7 @@ def _round_held(P: Plan) -> set:
             | {c for (cells, *_r) in P.liquids for c in cells} | {c for (cells, *_w) in P.windows for c in cells}
             | {c for (*_r, front) in P.ladders for c in front} | {c for (src, dst, *_r) in P.pads for c in (src, dst)}
             | {c for t in P.teleports for c in t} | {c for (c, *_r) in getattr(P, "pedestals", [])}
-            | {c for (c, *_r) in getattr(P, "buttons", [])} | set(P.rounded))
+            | {c for (c, *_r) in getattr(P, "buttons", [])} | set(P.rounded) | P.fx_cells)
     for d in P.doors:
         for c in d.cells:
             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
@@ -3661,7 +3766,7 @@ def furnish(P: Plan, rnd: random.Random) -> None:
     # corner's diagonal stood «empty» in the base and «solid» in the engine's rebuild of it (04.11, ERR_BASELINE
     # «placements do not stand the same way»)
     held = ({c for (_cls, c, _z, _n) in P.items} | {c for (c, _z, _a) in P.spawns} | set(P.no_items)
-            | set(P.rounded) | button_cells(P))
+            | set(P.rounded) | button_cells(P) | P.fx_cells)
     for s in P.spaces:
         if s.solid:
             continue
@@ -3854,7 +3959,11 @@ def score(P: Plan) -> float:
     pen += 6 * max(0, min(1, st_want) - st_got) + 2 * max(0, st_want - max(1, st_got))
     # the counts asked and not had, with their reason
     reasons = {"lifts": ("меньше подъёмов в 128 и выше с ровным полом перед проходом", "fewer rises of 128 or more with level floor before the doorway"),
-               "pads": ("меньше высоких залов, где полёт джампада не задевает стен и потолка", "fewer tall halls where a pad's flight misses walls and ceiling"),
+               # brief 34: the pads' own rules said too - three cells apart, none beside a stair to the same ledge
+               "pads": ("меньше мест, где полёт джампада не задевает стен и потолка, до другого джампада не меньше трёх клеток "
+                        "и к площадке рядом не ведёт лестница",
+                        "fewer places where a pad's flight misses walls and ceiling, three cells from another pad at least "
+                        "and no stair near by leading to the ledge"),
                "teleporters": ("меньше пар дальних мест с выходом на ровный пол", "fewer pairs of far places with level floor to arrive on"),
                "ladders": ("меньше подъёмов 96..320 с ровным полом у стены", "fewer rises of 96..320 with level floor at the wall"),
                "doors": ("меньше ровных проходов в 2-3 клетки", "fewer level doorways two or three cells wide"),
@@ -4119,6 +4228,7 @@ def close_lines(P: Plan) -> None:
             | {c for d in P.doors for c in d.cells} | {c for (cs, *_r) in P.lifts for c in cs}
             | {c for (cs, _b, _sid) in P.pits for c in cs} | {c for (c, _z0, _z1) in P.pillars}
             | {c for (c, *_r) in P.chamfers} | {c for (cells, *_r) in P.liquids for c in cells} | set(P.rounded)
+            | P.fx_cells
             | button_cells(P))
     # nor in front of a doorway, a window or a ladder
     for d in P.doors:
@@ -4307,9 +4417,14 @@ def make_plan(params: dict, seed: int) -> Plan:
         t_ = stack_pair_time(P)
         if t_ is not None:
             P.metrics["stack_apart_s"] = t_
+    # brief 32: the pads', frames' and spawn plates' sizes - before the round shapes, lamps and columns, which keep off
+    # the cells the bigger ones reach
+    import mapgen_scratch_fixtures as fix_mod
+    fix_mod.plan_sizes(P)
     round_shapes(P, rnd)
     furnish(P, rnd)
     close_lines(P)
+    P.metrics["pads_no_reason"] = len(pads_without_reason(P))     # brief 34
     return P
 
 

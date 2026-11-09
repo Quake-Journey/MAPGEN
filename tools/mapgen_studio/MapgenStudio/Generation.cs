@@ -523,34 +523,8 @@ public sealed class Generation
     private void SaveRequest()
     {
         var r = Request;
-        File.WriteAllLines(Path.Combine(RunDir, "request.txt"), new[]
-        {
-            $"name={r.Name}", $"donor={r.Donor}", $"fidelity={r.Fidelity}", $"seed={r.Seed}",
-            $"skip={string.Join(',', r.SkipFamilies)}", $"save_map={(r.SaveMapSource ? 1 : 0)}",
-            $"draft={(r.Draft ? 1 : 0)}", $"max_attempts={r.MaxAttempts}", $"gates={(r.RunGates ? 1 : 0)}",
-            $"grafts={string.Join(',', r.Grafts ?? Array.Empty<string>())}",
-            // row 410: every field of the request - a resumed run took the cover it was started without (the window
-            // test's run, stopped and resumed, sat in «cover» waiting to launch the game)
-            $"cover={(r.Cover ? 1 : 0)}",
-            $"digs={r.Options?.Digs ?? 0}", $"annexes={r.Options?.Annexes ?? 0}", $"annex_size={r.Options?.AnnexSize ?? 0}",
-            $"storeys={r.Options?.Storeys ?? 0}", $"spans={r.Options?.Spans ?? 0}", $"halls={r.Options?.Halls ?? 0}",
-            $"liquids={r.Options?.Liquids ?? ""}", $"decor={r.Options?.Decor ?? 0}",
-            $"new_water={r.Options?.NewWater ?? -1}", $"new_slime={r.Options?.NewSlime ?? -1}",
-            $"new_lava={r.Options?.NewLava ?? -1}",
-            $"stairways={r.Options?.Stairways ?? 0}", $"destruction={r.Options?.Destruction ?? 0}",
-            $"remodels={r.Options?.Remodels ?? -1}", $"blocks={r.Options?.Blocks ?? -1}",
-            $"floor_shifts={r.Options?.FloorShifts ?? -1}", $"stair_reshapes={r.Options?.StairReshapes ?? -1}",
-            $"warp_size={r.Options?.WarpSize ?? 100}", $"warp_shape={r.Options?.WarpShape ?? 0}",
-            $"warp_turn={r.Options?.WarpTurn ?? 0}", $"warp_height={r.Options?.WarpHeight ?? 100}",
-            $"warp_shift={r.Options?.WarpShift ?? 0}",
-            // row 411: whether the run's accepted steps reach the disk - without them it cannot be resumed
-            $"checkpoints={(_s.KeepCheckpoints ? 1 : 0)}",
-            // brief 16 D6: the minutes the run may take
-            $"time_minutes={r.TimeMinutes}",
-            // brief 19: the parameters of a map from scratch (one line of JSON)
-            $"scratch={r.Scratch}",
-            $"began={DateTime.Now:O}",
-        });
+        File.WriteAllLines(Path.Combine(RunDir, "request.txt"),
+                           RequestLines(r, _s.KeepCheckpoints).Append($"began={DateTime.Now:O}"));
     }
 
     /// <summary>A run's request as its request.txt has it (a run's folder, or a run's record in data\runs).</summary>
@@ -842,6 +816,98 @@ public sealed class Generation
     }
 
     /// <summary>The engine's arguments - the same for a run and for its resumption, which is what makes it exact.</summary>
+    /// <summary>The engine's families a run from scratch never deals (the reasons where Launch passes them; brief 32
+    /// added the bundle swaps - the PO's mg_new_84162). The self-test holds every family of «Что можно менять» and the
+    /// two swaps to be in it.</summary>
+    internal static readonly string[] ScratchSkips =
+    {
+        "swap-item", "move-spawn", "window", "flood", "dig", "span", "remodel", "push-wall", "block", "floor-shift",
+        "stair-reshape", "reshape-room", "stairs-to-lift", "relevel", "widen-connector", "turn-bundle", "open-connector",
+        "swap-bundles", "recompose-bundles",
+        // brief 33: the liquids' swap - the page's own «Жидкости» sets each kind's share; the swap turned the asked water
+        // into lava behind it (his mg_new_38706: «Вода: 5 % → 0 %», «Лава: 0 % → 3 %»)
+        "reliquid",
+    };
+
+    /// <summary>The 3.59 construction of a scratch run's request, for the self-test's RED only (brief 33).</summary>
+    internal static bool OldScratchRequest;
+
+    /// <summary>
+    /// Brief 33 (the PO 08.11: a generation uses only what the page that starts it shows, both ways): a map from scratch's
+    /// request from the «Новая карта с нуля» page alone - its parameters, its likeness, its stairway annexes, and the rows
+    /// both pages show as one setting (minutes, the ruin, the source kept, the name, the number). Nothing of the «Из
+    /// готовых карт» page: its counts, liquids, frame and «Что можно менять» stay out (3.58 carried them all on a rooms
+    /// map: his mg_new_38706 got the other page's stairways and liquids' swap).
+    /// </summary>
+    internal static GenerationRequest ScratchRequest(Settings s, string name, long seed, int maxAttempts, int minutes)
+    {
+        var p = s.Scratch;
+        var scratch = p.ToPython(Path.Combine(s.ClientDir, "baseq2"), Engine.DonorsDir);
+        if (OldScratchRequest)
+        {
+            var old = s.Options with { WarpSize = 100, WarpShape = 0, WarpTurn = 0, WarpHeight = 100, WarpShift = 0, Decor = 1, Remodels = 0,
+                                       Blocks = 0, FloorShifts = -1, StairReshapes = -1 };
+            if (p.Shape is "space" or "tower")
+                old = old with { Digs = 0, Annexes = 0, AnnexSize = 0, Storeys = 0, Spans = 0, Halls = 0, Liquids = "", Stairways = 0,
+                                 FloorShifts = 0, StairReshapes = 0, NewWater = 0, NewSlime = 0, NewLava = 0 };
+            return new GenerationRequest(name, "", p.Fidelity, seed, s.SkipFamilies, s.SaveMapSource, MaxAttempts: maxAttempts,
+                                         TimeMinutes: minutes, Options: old, Scratch: scratch);
+        }
+        // an open space or a tower has no wall or floor to stand a platform against: no stairway annexes there
+        var stairs = p.Shape is "space" or "tower" ? 0 : Math.Clamp(p.StairAnnexes, 0, 10);
+        // Decor 1 - the engine hangs none of its ornaments (the page's own «Украшения на стенах» governs, 04.11); the
+        // families of the other page none (ScratchSkips) and none of their counts dealt
+        var opts = new GenerationOptions(Decor: 1, NewWater: 0, NewSlime: 0, NewLava: 0, Stairways: stairs,
+                                         Destruction: s.Options.Destruction, Remodels: 0, Blocks: 0, FloorShifts: 0,
+                                         StairReshapes: 0);
+        return new GenerationRequest(name, "", p.Fidelity, seed, Array.Empty<string>(), s.SaveMapSource, MaxAttempts: maxAttempts,
+                                     TimeMinutes: minutes, Options: opts, Scratch: scratch);
+    }
+
+    /// <summary>
+    /// Brief 33: a map from a ready one's requests from the «Из готовых карт» page alone - its bases, likeness, «Что
+    /// можно менять», frame and counts, and the rows both pages show. Nothing of the «Новая карта с нуля» page.
+    /// </summary>
+    internal static List<GenerationRequest> BaseRequests(Settings s, IReadOnlyList<string> chosen, bool graft, string name, int fidelity,
+                                                         long seed, IReadOnlyList<string> skip) =>
+        chosen.Count == 1 || graft
+            ? new List<GenerationRequest>
+              {
+                  new(name, chosen[0], fidelity, seed, skip, s.SaveMapSource, MaxAttempts: s.Builds, TimeMinutes: s.TimeMinutes,
+                      Grafts: chosen.Skip(1).ToList(), Options: s.Options),
+              }
+            : chosen.Select(d => new GenerationRequest($"{name}_{d}", d, fidelity, seed, skip, s.SaveMapSource,
+                                                       MaxAttempts: s.Builds, Options: s.Options, TimeMinutes: s.TimeMinutes)).ToList();
+
+    /// <summary>A request as its request.txt says it, the start time aside - what two requests are compared by.</summary>
+    internal static string[] RequestLines(GenerationRequest r, bool checkpoints) => new[]
+    {
+        $"name={r.Name}", $"donor={r.Donor}", $"fidelity={r.Fidelity}", $"seed={r.Seed}",
+        $"skip={string.Join(',', r.SkipFamilies)}", $"save_map={(r.SaveMapSource ? 1 : 0)}",
+        $"draft={(r.Draft ? 1 : 0)}", $"max_attempts={r.MaxAttempts}", $"gates={(r.RunGates ? 1 : 0)}",
+        $"grafts={string.Join(',', r.Grafts ?? Array.Empty<string>())}",
+        // row 410: every field of the request - a resumed run took the cover it was started without (the window
+        // test's run, stopped and resumed, sat in «cover» waiting to launch the game)
+        $"cover={(r.Cover ? 1 : 0)}",
+        $"digs={r.Options?.Digs ?? 0}", $"annexes={r.Options?.Annexes ?? 0}", $"annex_size={r.Options?.AnnexSize ?? 0}",
+        $"storeys={r.Options?.Storeys ?? 0}", $"spans={r.Options?.Spans ?? 0}", $"halls={r.Options?.Halls ?? 0}",
+        $"liquids={r.Options?.Liquids ?? ""}", $"decor={r.Options?.Decor ?? 0}",
+        $"new_water={r.Options?.NewWater ?? -1}", $"new_slime={r.Options?.NewSlime ?? -1}",
+        $"new_lava={r.Options?.NewLava ?? -1}",
+        $"stairways={r.Options?.Stairways ?? 0}", $"destruction={r.Options?.Destruction ?? 0}",
+        $"remodels={r.Options?.Remodels ?? -1}", $"blocks={r.Options?.Blocks ?? -1}",
+        $"floor_shifts={r.Options?.FloorShifts ?? -1}", $"stair_reshapes={r.Options?.StairReshapes ?? -1}",
+        $"warp_size={r.Options?.WarpSize ?? 100}", $"warp_shape={r.Options?.WarpShape ?? 0}",
+        $"warp_turn={r.Options?.WarpTurn ?? 0}", $"warp_height={r.Options?.WarpHeight ?? 100}",
+        $"warp_shift={r.Options?.WarpShift ?? 0}",
+        // row 411: whether the run's accepted steps reach the disk - without them it cannot be resumed
+        $"checkpoints={(checkpoints ? 1 : 0)}",
+        // brief 16 D6: the minutes the run may take
+        $"time_minutes={r.TimeMinutes}",
+        // brief 19: the parameters of a map from scratch (one line of JSON)
+        $"scratch={r.Scratch}",
+    };
+
     private static void Launch(Generation g, Settings s, bool resume)
     {
         var r = g.Request;
@@ -877,11 +943,15 @@ public sealed class Generation
             /* 3.45, the PO 05.11 («и вот этот блок, он вообще о чём, когда речь о новой карте?»): none of «Что можно
                менять» either - stairs-to-lift added lifts no parameter asked, relevel and the connectors moved its
                floors and doorways; the card is not on the from-scratch page */
-            foreach (var f in new[] { "swap-item", "move-spawn", "window", "flood", "dig", "span", "remodel", "push-wall",
-                                      "block", "floor-shift", "stair-reshape", "reshape-room", "stairs-to-lift", "relevel",
-                                      "widen-connector", "turn-bundle", "open-connector" }
-                         .Where(f => !r.SkipFamilies.Contains(f)))
+            /* brief 32, the PO 08.11 (mg_new_84162, an open space: «почему генерация не удалась?»): the bundle swaps were
+               the last engine families a run from scratch still dealt - four of them moved islands and leaked, nothing
+               was accepted, and the engine called the run «the map did not compile» with a good skeleton in hand.
+               A skeleton places its own parts; the engine only builds, ruins and lights it */
+            foreach (var f in ScratchSkips.Where(f => !r.SkipFamilies.Contains(f)))
                 args.AddRange(new[] { "--skip-family", f });
+        // brief 33: the stairway annexes only when the scratch page asks them
+        if (r.FromScratch && (r.Options?.Stairways ?? 0) == 0 && !r.SkipFamilies.Contains("stairway"))
+            args.AddRange(new[] { "--skip-family", "stairway" });
         // the other maps chosen with the base: rooms may be brought in from them (the generator's graft pass)
         foreach (var d in r.Grafts ?? Array.Empty<string>())
             args.AddRange(new[] { "--donor", Engine.DonorPath(d) });

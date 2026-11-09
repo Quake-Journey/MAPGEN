@@ -467,12 +467,15 @@ def link(P: pm.Plan, isles: list[Isle], rnd: random.Random) -> bool:
         tgts.sort(key=lambda c: math.hypot(c[0] - ax, c[1] - ay) + 0.3 * math.hypot(c[0] - cx, c[1] - cy))
         tgts = tgts[:8]
         srcs.sort(key=lambda c: min((c[0] - t[0]) ** 2 + (c[1] - t[1]) ** 2 for t in tgts))
+        # brief 34: the take-offs on an island apart, none beside a teleporter or a spawn
+        srcs = [c for c in srcs if pm.pad_spot_ok(P, c, floor_z(P, c))]
         for a in srcs[:30]:
             for t in tgts:
                 f = pad_between(P, a, t, reach, top)
                 if f:
                     T, speed, pitch, yaw = f
                     P.pads.append((a, t, T + 0.1, speed, pitch, yaw, floor_z(P, a)))
+                    P.pad_why[(a, t)] = "perch" if b_id in pad_only else "link"
                     used_cells.update({a, t})
                     P.no_items.update({a, t})
                     adj[a_id].add(b_id)
@@ -797,7 +800,10 @@ def plan(P: pm.Plan, rnd: random.Random) -> None:
     railings(P, rnd)
     if not place_items(P, rnd):
         return
+    import mapgen_scratch_fixtures as fix_mod     # brief 32: the pads', frames' and plates' sizes
+    fix_mod.plan_sizes(P)
     lights(P)
+    P.metrics["pads_no_reason"] = len(pm.pads_without_reason(P))     # brief 34
     zs = [f[0] for s in P.spaces for f in s.floor.values()]
     m = P.metrics
     m["floor_area"] = round(sum(len(s.floor) for s in P.spaces) * CELL * CELL / 1e6, 2)
