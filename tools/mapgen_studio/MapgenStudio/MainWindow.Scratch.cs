@@ -45,7 +45,9 @@ public sealed partial class MainWindow
         fromBase.Click += (_, _) => Pick(false);
         fromNothing.Click += (_, _) => Pick(true);
         var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { fromBase, fromNothing } };
-        return Look.Group(FASymbol.Map, Look.BlueC, Loc.T("scratch.mode"), Loc.T("scratch.mode.desc"), row);
+        var card = Look.Group(FASymbol.Map, Look.BlueC, Loc.T("scratch.mode"), Loc.T("scratch.mode.desc"), row);
+        Search.Always(card);                        // brief 35: the way to start is no parameter - always in place
+        return card;
     }
 
     /// <summary>The cards of a map from scratch.</summary>

@@ -9,9 +9,16 @@ For each preset (the Studio's dump, `MapgenStudio.exe --presets-dump DIR`: DIR\s
   * made: the plan's pads (a tower's: from the ground, to the ledges), teleporter pairs, flights, lifts - the mean;
   * the plan's own measures: the nearest two pads on one floor (cells), pads with no reason (a stair or a door to the
     same place is right there), the most teleporter discs near one disc, as the judge's «repetition» row counts them.
+  * brief 35 (the PO 11.11: «ни телепорты ни джампады ни точки спавна рядом не делать»): the nearest two of a disc, an
+    exit, a pad and a spawn point, the nearest ends of two pairs, the most plates (spawns and exits) near one, the
+    spawns made against the asked, and the plates' radius the spawns kept (check_mapgen_movers_apart.plan_measure).
 A preset is FLAGGED when it asks pads or teleporters and no seed makes a third of them (it asks a count the rules
 refuse - the record of every map it makes says «не сделано») or when a measure breaks (two pads nearer than three
-cells, a pad without a reason, three teleporter discs together).
+cells, a pad without a reason, three teleporter discs together; brief 35: two movers nearer than MOVER_APART, two
+pairs' ends nearer than TELE_PAIRS_APART, a third plate within the radius kept). Said, not flagged: the plates' radius
+given (below PLATES_NEAR - the spawns asked come first, brief 35 item 20) and the spawns a single plan fell short of (one
+plan by make_plan; the Studio's choice of 24 holds them - check_mapgen_movers_apart.py's best_plan rows; 3.60's rules
+fell short on the same seeds: duel_tight 702 four of seven).
 
     python tools/check_mapgen_presets_ways.py DIR [--seeds 3] [--jobs N]
 
@@ -71,6 +78,9 @@ def check_one(args: tuple[str, str, list[int]]) -> tuple[str, bool, str]:
     pads = tps = 0
     ways: dict[str, int] = {}
     near, no_reason, together = None, 0, 0
+    import check_mapgen_movers_apart as ma
+    movers_near = pairs_near = None
+    plates, radius, sp_short = 0, pm.PLATES_NEAR, 0
     for s in seeds:
         P = pm.make_plan(dict(q), s)
         if P.failed:
@@ -88,6 +98,14 @@ def check_one(args: tuple[str, str, list[int]]) -> tuple[str, bool, str]:
         near = n_ if near is None or (n_ is not None and n_ < near) else near
         no_reason = max(no_reason, int(P.metrics.get("pads_no_reason") or 0))
         together = max(together, discs_together(P))
+        m = ma.plan_measure(P)
+        if m["movers_near"] is not None:
+            movers_near = m["movers_near"] if movers_near is None else min(movers_near, m["movers_near"])
+        if m["pairs_near"] is not None:
+            pairs_near = m["pairs_near"] if pairs_near is None else min(pairs_near, m["pairs_near"])
+        plates = max(plates, m["plates"])
+        radius = min(radius, int(P.metrics.get("plates_near", pm.PLATES_NEAR)))
+        sp_short = max(sp_short, int(P.params.get("spawns") or 0) - len(P.spawns))
     mean = (lambda v: v / made if made else 0.0)
     short = []
     if asked_pads and made and mean(pads) < asked_pads / 3:
@@ -101,6 +119,12 @@ def check_one(args: tuple[str, str, list[int]]) -> tuple[str, bool, str]:
         broken.append(f"{no_reason} pads without a reason")
     if together > 2:
         broken.append(f"{together} teleporter discs together")
+    if movers_near is not None and movers_near < pm.MOVER_APART:
+        broken.append(f"movers {movers_near} cells apart")
+    if pairs_near is not None and pairs_near < pm.TELE_PAIRS_APART:
+        broken.append(f"two pairs' ends {pairs_near} cells apart")
+    if plates > pm.PLATES_MAX:
+        broken.append(f"{plates} plates together")
     ok = not short and not broken
     tw = ""
     if shape == "tower" and made:
@@ -109,6 +133,9 @@ def check_one(args: tuple[str, str, list[int]]) -> tuple[str, bool, str]:
     line = (f"{'PASS' if ok else 'FLAG'} {stem:20s} {shape:6s} failed {failed} of {len(seeds)}; "
             f"pads {mean(pads):4.1f} of {asked_pads}, teleporters {mean(tps):3.1f} of {asked_tp}{tw}; "
             f"nearest pads {near if near is not None else '-'}, no reason {no_reason}, discs together {together}; "
+            f"movers apart {movers_near if movers_near is not None else '-'}, pairs apart {pairs_near if pairs_near is not None else '-'}, "
+            f"plates {plates}, plates' radius {radius}" + (" (GAVE)" if radius < pm.PLATES_NEAR else "")
+            + (f", one plan {sp_short} spawns short" if sp_short > 0 else "") + "; "
             f"{time.time() - t0:4.1f} s" + (f"; ASKS A COUNT: {', '.join(short)}" if short else "")
             + (f"; BROKEN: {', '.join(broken)}" if broken else ""))
     return stem, ok, line

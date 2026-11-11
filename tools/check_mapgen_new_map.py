@@ -428,7 +428,11 @@ def asked_got(r: dict, asked: dict, plan: dict | None = None) -> list:
         # brief 21 D1: RED = the 3.43 mg_new_style (two lifts sharing a cell of room 0, the PO's video of 05.11)
         out.append(("movers apart: no lift or door overlaps another", not r["movers_overlap"],
                     "; ".join(r["movers_overlap"][:4]) or "none"))
-    if r.get("spawns_by_movers") is not None:
+    if r.get("mover_marks") is not None and not OLD_SPAWN_ROW:
+        out += mover_rows_of(r["mover_marks"])
+    if r.get("door_planes") is not None:
+        out.append(door_row_of(r["door_planes"]))
+    elif r.get("spawns_by_movers") is not None:
         out.append(("spawns: none beside a teleporter, its exit or a jump pad (192 u)", r["spawns_by_movers"] == 0,
                     str(r["spawns_by_movers"])))
     if r.get("vertical_liquid_faces") is not None and not asked.get("water_above_floor"):
@@ -608,6 +612,72 @@ def mechanics(r: dict, asked: dict, players: int) -> list:
                     items[ad[0]]["height"] <= 32 and (t_ad is None or t_ad >= 3.0),
                     f"height {items[ad[0]]['height']}, nearest major {t_ad} s"))
     return out
+
+
+# Brief 35 (the PO 11.11, mg_new_91126: «ни телепорты ни джампады ни точки спавна рядом не делать»): the three rows of
+# the PO's rule on the map's entities - two teleporter discs 512 u apart at least (another pair joins other places), no
+# two of disc / exit / pad / spawn within 256 u (two pads: «pads apart»'s own 192; a disc and its own exit are 256..384
+# by the plan), and no more than two spawn points and teleporter exits - one plate to the eye - within 384 u
+TELE_DISCS_APART_U = 512
+MOVERS_APART_U = 256
+PLATES_NEAR_U = 384
+PLATES_MAX = 2
+ONE_FLOOR_DZ = 96
+OLD_SPAWN_ROW = False        # the 3.60 row («spawns: none beside … 192 u»), for a RED only
+
+
+def mover_rows_of(marks: list) -> list:
+    """[(name, ok, said)]: the three rows of brief 35 from survey.mover_marks."""
+    import math
+
+    def floor(a, b):
+        return abs(a[3] - b[3]) < ONE_FLOOR_DZ
+
+    def dist(a, b):
+        return math.hypot(a[1] - b[1], a[2] - b[2])
+    discs = [m for m in marks if m[0] == "disc"]
+    near_d = None
+    for i, a in enumerate(discs):
+        for b in discs[i + 1:]:
+            if floor(a, b):
+                near_d = dist(a, b) if near_d is None else min(near_d, dist(a, b))
+    rows = [("teleporters apart: no two teleporter discs within 512 u on one floor", near_d is None or near_d >= TELE_DISCS_APART_U - 1,
+             f"{near_d:.0f} (band {TELE_DISCS_APART_U}..)" if near_d is not None else "none")]
+    near_m, what = None, ""
+    for i, a in enumerate(marks):
+        for b in marks[i + 1:]:
+            if not floor(a, b) or (a[0] == "pad" and b[0] == "pad"):
+                continue
+            # a disc and its own exit: the plan stands them 4..6 cells apart, the row holds them to the same 256
+            d = dist(a, b)
+            if near_m is None or d < near_m:
+                near_m, what = d, f"{a[0]} {b[0]}"
+    rows.append(("movers and spawns apart: no teleporter, exit, jump pad or spawn point within 256 u of another",
+                 near_m is None or near_m >= MOVERS_APART_U - 1,
+                 f"{what} {near_m:.0f} (band {MOVERS_APART_U}..)" if near_m is not None else "none"))
+    plates = [m for m in marks if m[0] in ("exit", "spawn")]
+    most = 0
+    for a in plates:
+        most = max(most, sum(1 for b in plates if floor(a, b) and dist(a, b) <= PLATES_NEAR_U))
+    rows.append(("like plates: no more than two spawn points and teleporter exits within 384 u", most <= PLATES_MAX,
+                 f"{most} (band ..{PLATES_MAX})"))
+    return rows
+
+
+def door_row_of(planes: list) -> tuple:
+    """Brief 36 (the PO 11.11, mg_new_91126 on 3.61: «у двери мерцает текстура при её движении»): no door has a face in
+    the plane of a drawn wall face turned the same way, anywhere its opening sweeps - two faces in one plane are drawn in
+    turn. From survey.door_planes; «N of M doors (band ..0)»."""
+    doors = [p for p in planes if p[0] == "func_door"]
+    bad = [p for p in doors if p[4]]
+    said = f"{len(bad)} of {len(doors)} doors (band ..0)" if doors else "none"
+    return ("door faces: no door face in a wall's plane as it opens", not bad, said)
+
+
+def mover_rows(w) -> list:
+    """The three rows on a map's World (mapgen_map_survey) - his map of 3.60 in check_mapgen_movers_apart.py."""
+    import mapgen_map_survey as sv
+    return mover_rows_of(sv.mover_marks(w))
 
 
 def report(path: Path, players: int, asked: dict | None, plan: dict | None = None, doors: list | None = None,

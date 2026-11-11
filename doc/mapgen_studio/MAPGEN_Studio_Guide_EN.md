@@ -76,6 +76,12 @@ page, the line «The map … will be made: base …, likeness …, up to … min
 (they cannot be changed or deleted) and your own. «Create» saves the parameters now under a name and a category of
 your own. A map from a base and a new map from scratch have sets of their own.
 
+**Finding a parameter.** Under the page's title is the box **«Find a parameter…»**. Start typing a parameter's name or a
+word of its description, in Russian or English - from two letters only the parameters that match stay on the page,
+each in its section; the other rows and the sections where nothing matched hide, and when nothing matches the page
+says so. Clear the text (or press Esc, or the cross) - every parameter is back. A parameter the form itself hides (the
+variant number while «Random variant» is on, say) the search does not show.
+
 ### Base map
 
 Tick one map or several. «Choose maps…» adds any Quake II map file from the disk — it is copied next to the program
@@ -234,7 +240,12 @@ the player count; which one is said in brackets. A new map is built from what th
   flight away, arrows running over it the way one flies; a teleporter stands in a frame of two posts with a
   shimmering portal. Where a pad lands, a thin bright plate lies on the floor — from the floor one sees where it takes
   a player. Pads are never piled: two on one floor stand three cells apart at least, and no pad goes where a stair or
-  a door near by already leads. Their size is set by **«Round jump pads' size»**, **«Slanted jump pads' size»** and **«Teleporter
+  a door near by already leads. Teleporters, their exits, jump pads and spawn points do not stand together: any two of
+  them four cells apart at least, a second teleporter pair joins other places, eight cells from the first at least,
+  and the generator puts no more than two spawn points and teleporter exits (they look like the same plate) near each
+  other. When all the spawn points asked do not fit that way, it puts them closer, and the map's checks show it. When
+  a second teleporter pair has no such place, it is not made, and the map's description says why. The size of the pads and the
+  teleporter frames is set by **«Round jump pads' size»**, **«Slanted jump pads' size»** and **«Teleporter
   frames' size»**: 100 % by default, 50 to 200 % allowed. A pad's height and the flight from it do not change. Where
   there is not enough level floor round one, the pad, frame or plate comes out smaller than asked, and the map's
   description says how many came out at which size. **«Stairway annexes»** (none by default, up to 10) — platforms
@@ -274,7 +285,8 @@ The finished map goes through the same checks as a map from a base, and two more
 - **From scratch** — it is measured as well-known maps are (size, levels, the ways' width, visibility, ways out of item
   places, light, the textures' colour and brightness, for an open space the islands and the pads' flights), and it has
   all its parameters and mechanics asked for. It has no place one can get into and not out of; lifts ride only through
-  air; spawns stand away from teleporters and jump pads; water does not stand above a floor. It is checked as the
+  air; teleporters, their exits, jump pads and spawn points do not stand together, and no more than two spawn points
+  and teleporter exits near each other; water does not stand above a floor. It is checked as the
   library gets it — after the ruin and the light. The light it was built with stays to the end.
 - **Not a copy** — it holds no rooms, pieces of route or item placings carried over from the maps the generator
   knows.
@@ -300,7 +312,8 @@ the run has gone and when it began. The buttons are on the right.
 **On the left**, always open:
 
 - **Progress** (a map from scratch) — the percent of the whole build, how long is left and when it will end, which
-  stage is on.
+  stage is on. A stage taking longer than usual is said so («At least … left: the stage is taking longer than usual»),
+  and the time left grows with it.
 - **Difference from the base** (a map from a base) — large, how far the map already differs from the base in percent, of how many
   asked, and a bar. Under it, what the plan promises: how far it can change the map in the builds allowed.
 - **Edits** — three numbers: how many edits were accepted (green), how many builds were made and how many edits were
@@ -316,7 +329,8 @@ the run has gone and when it began. The buttons are on the right.
 - **Stages** — Getting ready → Building the base map → Making the plan of edits → Edits → Checking it is playable
   → Light and visibility → The map's checks → (Destruction - when asked for) → Light on the finished map → Cover →
   Done. The stage under way shows its time; a finished one, how long it took and when it ended. The stage now is
-  named in the folded header too.
+  named in the folded header too. A map from scratch mostly needs no «Edits» - the generator builds it itself - and
+  that stage says so.
 - **Computer load** — CPU, memory, GPU, video memory: the whole machine's and the generator's own. The header says
   the share of the CPU the run has.
 

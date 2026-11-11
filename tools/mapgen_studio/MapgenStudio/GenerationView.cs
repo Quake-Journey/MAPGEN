@@ -82,6 +82,11 @@ public sealed class GenerationView : DockPanel
     private readonly TextBlock _time = new() { FontSize = 13, Opacity = 0.8, TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock _last = new() { FontSize = 13, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0) };
     private readonly TextBlock _tail = new() { FontSize = 12, Opacity = 0.65, TextWrapping = TextWrapping.Wrap };
+    /// <summary>Brief 35: the stage rows as last drawn (key, ticked, under way, its time) - the self-test reads them.</summary>
+    internal readonly List<(string key, bool done, bool now, string time)> StageRows = new();
+    /* brief 35: a map from scratch with nothing to deal says so in one line instead of «0 · 0 · 0» and a clock */
+    private readonly TextBlock _editsNone = new() { FontSize = 14, TextWrapping = TextWrapping.Wrap, IsVisible = false };
+    private WrapPanel _stats = new();
 
     // ---- the plan ----
     private readonly Grid _planRows = new() { ColumnDefinitions = new ColumnDefinitions("*,90,Auto"), RowSpacing = 6, ColumnSpacing = 10 };
@@ -250,11 +255,11 @@ public sealed class GenerationView : DockPanel
                 _planWord.Tip("run.plan.value.tip"),
             },
         };
-        var stats = new WrapPanel
+        _stats = new WrapPanel
         {
             Children = { Stat(_nAccepted, Caption("run.stat.accepted")), Stat(_nBuilt, _builtCaption), Stat(_nTried, Caption("run.stat.tried")) },
         };
-        var edits = new StackPanel { Children = { stats, _attempts.Tip("run.attempts.tip"), _time, _last, _tail } };
+        var edits = new StackPanel { Children = { _editsNone, _stats, _attempts.Tip("run.attempts.tip"), _time, _last, _tail } };
         _planCard = Card("run.plan.head", new StackPanel { Children = { _planRows, _ruin } });
         var progress = new StackPanel
         {
@@ -465,6 +470,18 @@ public sealed class GenerationView : DockPanel
         _tail.Text = fin + graft > 0 && g.Budget > 0 && g.Running
             ? Loc.F("run.tail", Math.Min(g.FinishingSeen, fin) + Math.Min(g.GraftSeen, graft), fin + graft) : "";
         _tail.IsVisible = _tail.Text.Length > 0;
+        // brief 35: nothing to deal - one line, no numbers, no time bar
+        var none = g.NothingToDeal && !RunProgress.OldStages;
+        _editsNone.Text = none ? Loc.T("run.edits.none.s") : "";
+        _editsNone.IsVisible = none;
+        _stats.IsVisible = !none;
+        _attempts.IsVisible = !none;
+        _time.IsVisible = !none;
+        if (none)
+        {
+            _last.IsVisible = false;
+            _tail.IsVisible = false;
+        }
 
         // the plan: kinds done of planned
         var rows = g.PlanRows();
@@ -506,18 +523,24 @@ public sealed class GenerationView : DockPanel
         _ruin.IsVisible = ruin > 0;
 
         // folded: the stages, their header saying the one under way
-        _stagesHead.Text = Loc.F("run.stages.head", Loc.Ts(g.Running ? $"stage.{(g.Stage == "resume" ? "attempt" : g.Stage)}"
+        var old = RunProgress.OldStages;
+        _stagesHead.Text = Loc.F("run.stages.head", Loc.Ts(g.Running ? $"stage.{(old ? (g.Stage == "resume" ? "attempt" : g.Stage) : RunProgress.Canonical(g.Stage))}"
                                                                         : failed ? "run.now.failed" : "run.now.done", sc));
         _stages.Children.Clear();
+        StageRows.Clear();
         // a resumed run replays its ledger: that is the edits stage, gone through again (the PO 05.10 saw every
-        // stage waiting while it replayed)
+        // stage waiting while it replayed); brief 35: a new deal too, by RunProgress.Canonical (the PO 11.11: every
+        // stage an hourglass for 52 s of «Новый круг правок» with no edit after it)
         var Stages = StagesOf(g);
-        var at = Array.IndexOf(Stages, g.Stage is "failed" or "stopped" ? "done" : g.Stage == "resume" ? "attempt" : g.Stage);
+        var at = g.Stage is "failed" or "stopped" ? Array.IndexOf(Stages, "done")
+               : old ? Array.IndexOf(Stages, g.Stage == "resume" ? "attempt" : g.Stage)
+               : Array.IndexOf(Stages, RunProgress.Canonical(g.Stage)) is var cAt && cAt >= 0 ? cAt
+               : g.Running ? RunProgress.AtOf(g, Stages) : -1;
         // a run that failed: done is what it passed, the stage it stopped in is crossed out, the rest not reached
         // (the PO's koldduel1, 05.10: refused at its base map's rebuild, every stage showed a tick)
         var reached = -1;
         for (var k = 0; k < Stages.Length - 1; k++)
-            if (g.StageBegan.ContainsKey(Stages[k]))
+            if (old ? g.StageBegan.ContainsKey(Stages[k]) : RunProgress.BeganOf(g, Stages[k]) != null)
                 reached = k;
         for (var k = 0; k < Stages.Length; k++)
         {
@@ -525,11 +548,13 @@ public sealed class GenerationView : DockPanel
             var broke = failed && k == reached;
             var done = failed ? k < reached : k < at || (!g.Running && g.Error.Length == 0);
             var now = g.Running && k == at;
-            var since = g.StageBegan.TryGetValue(key, out var t) ? t : (DateTime?)null;
-            var next = k + 1 < Stages.Length && g.StageBegan.TryGetValue(Stages[k + 1], out var tn) ? tn : (DateTime?)null;
-            // a stage's end is the next stage's beginning, or the run's end for the last one it went through
+            var since = old ? (g.StageBegan.TryGetValue(key, out var t) ? t : (DateTime?)null) : RunProgress.BeganOf(g, key);
+            // a stage's end is the next stage's beginning - brief 35: of the next stage that BEGAN, not the next row's
+            // (the plan's end was the edits' beginning, and a map from scratch has no edits) - or the run's end
+            var next = old ? (k + 1 < Stages.Length && g.StageBegan.TryGetValue(Stages[k + 1], out var tn) ? tn : (DateTime?)null)
+                           : RunProgress.EndOf(g, Stages, k);
             DateTime? until = next ?? (done && !g.Running ? g.Ended : null);
-            var time = since == null ? ""
+            var time = since == null ? (done && !old && key == "attempt" && g.NothingToDeal ? Loc.Ts("run.stage.attempt.none", sc) : "")
                      : done && until != null ? Loc.F("run.stage.done", Dur(g.Worked(since.Value, until.Value)),
                                                      until.Value.ToString("dd.MM HH:mm:ss"))
                      : now ? StageNow(g, key, since.Value, eta)
@@ -556,6 +581,7 @@ public sealed class GenerationView : DockPanel
             row.Children.Add(icon);
             row.Children.Add(words);
             _stages.Children.Add(row.Tip(Loc.Ks($"stage.{key}.tip", sc)));
+            StageRows.Add((key, done, now, time));
         }
         // brief 24 D2 (the PO: «ограничение 80 %, а реально студия юзает гораздо меньше»): the ceiling in CPUs - the
         // bits of the job's mask - and what the generator uses of the whole machine (its row of the card)
@@ -696,9 +722,10 @@ public sealed class GenerationView : DockPanel
             return g.Error.Length > 0 ? Loc.T("run.now.failed") : Loc.T("run.now.done");
         if (g.Paused)
             return Loc.T("run.now.paused");
-        var key = g.Stage == "resume" ? "attempt" : g.Stage;
+        var key = RunProgress.OldStages ? (g.Stage == "resume" ? "attempt" : g.Stage) : RunProgress.Canonical(g.Stage);
         var head = Loc.Ts($"stage.{g.Stage}.now", g.Request.FromScratch);
-        return g.StageBegan.TryGetValue(key, out var since) ? $"{head} — {StageNow(g, key, since, EditsLeft(g))}" : head;
+        var began = RunProgress.OldStages ? (g.StageBegan.TryGetValue(key, out var t0) ? t0 : (DateTime?)null) : RunProgress.BeganOf(g, key);
+        return began is { } since ? $"{head} — {StageNow(g, key, since, EditsLeft(g))}" : head;
     }
 
     /// <summary>Hours, minutes and seconds in words: «1 ч 02 мин 05 с», «3 мин 07 с», «12 с».</summary>

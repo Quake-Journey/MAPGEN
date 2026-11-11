@@ -2,7 +2,7 @@ namespace MapgenStudio;
 
 /// <summary>«Ход работы» at a moment: the whole build's percent, the time left, the stage k of n and what it is doing.</summary>
 public sealed record ProgressNow(double Percent, TimeSpan? Left, bool Soon, int At, int Count, string Stage, string Inner,
-                                 TimeSpan InStage);
+                                 TimeSpan InStage, bool Over = false, TimeSpan Usual = default);
 
 /// <summary>
 /// Brief 24 D1 (the PO 06.11, his run page of a new map: «какой для меня как пользователя глубокий смысл про этот блок
@@ -32,6 +32,58 @@ public static class RunProgress
         "finish" => "light",
         _ => stage,
     };
+
+    /// <summary>
+    /// Brief 35 (the PO 11.11, mg_new_91126: «Правки — идёт 0 с» beside «Новый круг правок — идёт 33 с»): when a stage
+    /// began - the earliest of the keys it is made of (a new deal, a resume are the edits'); null when it has not.
+    /// </summary>
+    public static DateTime? BeganOf(Generation g, string stage)
+    {
+        DateTime? best = null;
+        foreach (var kv in g.StageBegan)
+            if (Canonical(kv.Key) == stage && (best == null || kv.Value < best))
+                best = kv.Value;
+        return best;
+    }
+
+    /// <summary>
+    /// Brief 35 (the PO 11.11: no «шёл …» under «Составление плана отделки» and «Правки»): a stage ends when any later
+    /// stage of the list begins - the edits a run went past without beginning do not hold the plan's end back.
+    /// </summary>
+    public static DateTime? EndOf(Generation g, string[] stages, int k)
+    {
+        DateTime? best = null;
+        for (var j = k + 1; j < stages.Length; j++)
+            if (BeganOf(g, stages[j]) is { } t && (best == null || t < best))
+                best = t;
+        return best;
+    }
+
+    /// <summary>
+    /// Brief 35 (the PO 11.11: «пройденные этапы все стали с песочными часами»): the row of the stage under way - the
+    /// line's stage by <see cref="Canonical"/>, else the last stage begun (a stage the list does not name never leaves
+    /// every row waiting).
+    /// </summary>
+    public static int AtOf(Generation g, string[] stages)
+    {
+        var at = Array.IndexOf(stages, Canonical(g.Stage));
+        if (at >= 0)
+            return at;
+        var reached = 0;
+        for (var k = 0; k < stages.Length; k++)
+            if (BeganOf(g, stages[k]) != null)
+                reached = k;
+        return reached;
+    }
+
+    /// <summary>The 3.60 reading of the stages (the next ROW's begin, no Canonical in the list), for the self-test's RED.</summary>
+    internal static bool OldStages;
+
+    /// <summary>The 3.60 time left past a stage's expectation (frozen), for the self-test's RED.</summary>
+    internal static bool OldTimeLeft;
+
+    /// <summary>Past its expectation a stage is counted to take this much more of the time it has already taken.</summary>
+    public const double OverrunShare = 0.25;
 
     /// <summary>The run's stages, the end aside; the cover only when one is to be taken.</summary>
     public static string[] StagesOf(Generation g) =>
@@ -75,11 +127,11 @@ public static class RunProgress
         var at = Array.IndexOf(stages, cur);
         if (at < 0)
         {
-            at = reached;
+            at = OldStages ? reached : AtOf(g, stages);
             cur = stages[at];
         }
         var exp = stages.Select(s => Expected(g, s)).ToArray();
-        var since = g.StageBegan.TryGetValue(cur, out var t) ? t : now;
+        var since = OldStages ? (g.StageBegan.TryGetValue(cur, out var t) ? t : now) : BeganOf(g, cur) ?? now;
         var worked = g.Worked(since, now).TotalSeconds;
         double frac, leftCur;
         var counted = false;
@@ -125,6 +177,11 @@ public static class RunProgress
                 break;
         }
         var overran = !counted && worked > exp[at];
+        // brief 35 (the PO 11.11: «алгоритм должен понимать что время увеличивается»): past its expectation a stage
+        // is not over - what is left of it grows with the time it has taken, and the line says so
+        var over = overran && !OldTimeLeft;
+        if (over)
+            leftCur = worked * OverrunShare;
         frac = Math.Clamp(frac, 0, overran ? 0.95 : 0.99);
         var total = exp.Sum();
         var done = exp.Take(at).Sum() + frac * exp[at];
@@ -134,7 +191,8 @@ public static class RunProgress
         var left = TimeSpan.FromSeconds(leftCur + future);
         // the first seconds of a run: nothing measured yet - «считаю…»
         TimeSpan? said = g.Worked(g.Began, now).TotalSeconds < 5 ? null : left;
-        return new ProgressNow(pct, said, overran && future < 60, at + 1, n, cur, inner, TimeSpan.FromSeconds(worked));
+        return new ProgressNow(pct, said, !over && overran && future < 60, at + 1, n, cur, inner, TimeSpan.FromSeconds(worked), over,
+                               TimeSpan.FromSeconds(exp[at]));
     }
 
     /// <summary>The time left in round words: «меньше минуты», «6 мин», «1 ч 05 мин».</summary>
@@ -155,6 +213,8 @@ public static class RunProgress
             return Loc.T("run.progress.left.wait");
         if (p.Soon)
             return Loc.T("run.progress.left.soon");
+        if (p.Over)
+            return Loc.F("run.progress.left.over", LeftWords(left), GenerationView.Dur(p.Usual), GenerationView.Dur(p.InStage));
         return Loc.F("run.progress.left", LeftWords(left), (DateTime.Now + left).ToString("HH:mm"));
     }
 }
@@ -198,13 +258,27 @@ public static class RunHistory
         return s_records;
     }
 
-    /// <summary>The mean seconds of a stage over the last five maps from scratch of these players and minutes (else any); null when none.</summary>
+    /// <summary>
+    /// The mean seconds of a stage over the last five maps from scratch of these players and minutes; else of these
+    /// players; else of the nearest player count that has any (a tie: the larger) - brief 35, the PO's 12-player run was
+    /// expected from duels; null when none.
+    /// </summary>
     public static double? Expected(string stage, int players, int minutes)
     {
         var key = "stage." + stage;
         var have = Records().Where(r => r.ContainsKey(key) && double.TryParse(r[key], out _)).ToList();
-        var same = have.Where(r => r.GetValueOrDefault("players") == players.ToString() && r.GetValueOrDefault("minutes") == minutes.ToString()).ToList();
-        var use = (same.Count > 0 ? same : have).OrderByDescending(r => r.GetValueOrDefault("made", "")).Take(5).ToList();
-        return use.Count == 0 ? null : use.Average(r => double.Parse(r[key]));
+        if (have.Count == 0)
+            return null;
+        static int PlayersOf(Dictionary<string, string> r) => int.TryParse(r.GetValueOrDefault("players"), out var p) ? p : 0;
+        var same = have.Where(r => PlayersOf(r) == players && r.GetValueOrDefault("minutes") == minutes.ToString()).ToList();
+        if (same.Count == 0)
+            same = have.Where(r => PlayersOf(r) == players).ToList();
+        if (same.Count == 0)
+        {
+            var nearest = have.Select(PlayersOf).Distinct().OrderBy(p => Math.Abs(p - players)).ThenByDescending(p => p).First();
+            same = have.Where(r => PlayersOf(r) == nearest).ToList();
+        }
+        var use = same.OrderByDescending(r => r.GetValueOrDefault("made", "")).Take(5).ToList();
+        return use.Average(r => double.Parse(r[key]));
     }
 }

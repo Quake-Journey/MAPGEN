@@ -215,6 +215,8 @@ public sealed partial class MainWindow : Window
     public static bool StartupTesting { get; set; }
 
     private string? _formName;
+    /// <summary>Brief 35: the parameters' search on the Generate page - kept over rebuilds, never saved.</summary>
+    private string _paramQuery = "";
     private bool _suggesting;
 
     /* the PO 06.11: «Случайный вариант» - its toggle and the number's row (the self-test reads them) */
@@ -1220,6 +1222,9 @@ public sealed partial class MainWindow : Window
         var p = new StackPanel { Spacing = 10 };
         // brief 23 D2 (the PO's picture: the empty space right of «Новая карта»): the presets of this form
         p.Children.Add(Look.PageHead(Loc.T("gen.title"), Loc.Ts("gen.sub", S.ScratchMode), PresetBar()));
+        // brief 35 (the PO 11.11: «окошко поиска параметров … живой поиск»): the parameters' search, under the head
+        var searchNone = new TextBlock();
+        p.Children.Add(Search.Box(() => p, () => _paramQuery, v => _paramQuery = v, searchNone));
         // brief 19 D8: the third way to start - a new map from scratch, its own cards in place of the bases
         var scratch = S.ScratchMode;
         p.Children.Add(ModeSwitch());
@@ -1377,7 +1382,7 @@ public sealed partial class MainWindow : Window
         randomSeed.IsCheckedChanged += (_, _) =>
         {
             S.SeedRandom = randomSeed.IsChecked == true;
-            seedRow.IsVisible = !S.SeedRandom;
+            Search.FormShows(seedRow, !S.SeedRandom);    // brief 36: under a query that hid it, kept for when it is cleared
             // switched on: a new number now, so the name shown is the map the next start makes
             if (S.SeedRandom)
                 seed.Value = S.NewSeed();     // its ValueChanged keeps it and suggests the name
@@ -1584,6 +1589,10 @@ public sealed partial class MainWindow : Window
             p.Children.Add(Look.Stack(top!,
                                       Look.Balanced(FormColumn, FramePicker(), creative.rooms, creative.basis, creative.liquids,
                                                     creative.ruin, families.Card)));
+        // brief 35: a query kept over a rebuild (a choice that shows other rows, a preset, the other way to start) applies to
+        // the new page
+        if (_paramQuery.Trim().Length >= Search.MinChars)
+            Search.Apply(p, _paramQuery, searchNone);
         // the start at the page's foot, in sight however far the page is scrolled: what will be made, and the button
         Summarise();
         var footGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 20 };
@@ -2840,6 +2849,7 @@ reshaping families dropped at the plan (their own rules refuse them on this map)
         // brief 23: the style maps' list, the six annex sizes, the presets
         PresetsSelfTest(b);
         ProgressSelfTest(b);
+        SearchSelfTest(b);
         PagesSelfTest(b);       // brief 33: each run its page's rows, presets every row
         Loc.Language = keepLang;
         App.ApplyTheme(keepTheme);

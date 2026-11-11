@@ -985,6 +985,10 @@ def survey(path: Path, seed: int = 1, doors: list | None = None) -> dict:
                 marks.append(tuple((mb[0][k] + mb[1][k]) / 2 for k in range(3)))
     out["spawns_by_movers"] = sum(1 for sp in spawns for m in marks
                                   if math.hypot(sp[0] - m[0], sp[1] - m[1]) < 192 and abs(sp[2] - m[2]) < 96)
+    # brief 35 (the PO 11.11, mg_new_91126): every teleporter disc and exit, jump pad and spawn point, for the map's rows
+    out["mover_marks"] = mover_marks(w)
+    # brief 36 (the PO 11.11, mg_new_91126: «у двери мерцает текстура при её движении»): a door's faces on a wall's plane
+    out["door_planes"] = door_planes(path)
     out["deadly_volumes"] = len(hurt)
     # spawns seen at once from another within 300 u (eye to eye)
     sp_eyes = [(s[0], s[1], s[2] + 22) for s in spawns]
@@ -1172,6 +1176,84 @@ def vertical_liquid_faces(path: Path) -> tuple[int, int]:
     return count, area
 
 
+MOVER_CLASSES = ("func_door", "func_plat", "func_train", "func_button", "func_door_rotating")
+
+
+def door_planes(path: Path, classes: tuple = ("func_door",)) -> list:
+    """Brief 36 (the PO 11.11, mg_new_91126 on 3.61: «у двери мерцает текстура при её движении»): for every brush mover
+    of `classes`, the world's drawn faces lying on the planes of its upright faces inside the box its travel sweeps -
+    two faces in one plane are drawn in turn, the flicker. [(class, mins, maxs, travel, [(texture, axis, side, area,
+    z_lo, z_hi)])]. A door's travel: up its height less its lip (angle -1), down alike (-2), else none counted; a plat's
+    its height; a train's and a button's none (their place only)."""
+    import re as _re
+    import struct as _s
+    d = Path(path).read_bytes()
+
+    def lump(i):
+        return _s.unpack_from("<ii", d, 8 + i * 8)
+    po, pn = lump(1)
+    planes = [_s.unpack_from("<4f", d, po + i * 20) for i in range(pn // 20)]
+    to, tn = lump(5)
+    tex = [(_s.unpack_from("<i", d, to + i * 76 + 32)[0], d[to + i * 76 + 40:to + i * 76 + 72].split(b"\0")[0].decode("latin-1"))
+           for i in range(tn // 76)]
+    vo, vn = lump(2)
+    verts = [_s.unpack_from("<3f", d, vo + i * 12) for i in range(vn // 12)]
+    eo, en = lump(11)
+    edges = [_s.unpack_from("<2H", d, eo + i * 4) for i in range(en // 4)]
+    so, sn = lump(12)
+    se = _s.unpack_from(f"<{sn // 4}i", d, so)
+    fo, fn = lump(6)
+    mo, mn = lump(13)
+    models = [_s.unpack_from("<9f3i", d, mo + i * 48) for i in range(mn // 48)]
+    eno, enl = lump(0)
+    text = d[eno:eno + enl].split(b"\0")[0].decode("latin-1")
+    ents = [dict(_re.findall(r'"([^"]*)"\s+"([^"]*)"', blk)) for blk in _re.findall(r"\{([^{}]*)\}", text)]
+    # the world's drawn upright faces, by the way they face: (axis, +1|-1, coordinate) -> [(lo, hi, texture)]. Only a face
+    # turned the same way as the mover's is drawn over it - one turned the other way is its back (a jamb against a
+    # door's end, a wall against a button's back) and is never seen with it
+    world = {}
+    first, count = models[0][10], models[0][11]
+    for i in range(first, first + count):
+        pnum, side, fe, ne, ti = _s.unpack_from("<HhiHh", d, fo + i * 20)
+        if not (0 <= ti < len(tex)) or tex[ti][0] & (0x80 | 0x4):          # nodraw, sky
+            continue
+        n = planes[pnum]
+        ax = 0 if abs(n[0]) > 0.999 else 1 if abs(n[1]) > 0.999 else None
+        if ax is None:
+            continue
+        facing = (1 if n[ax] > 0 else -1) * (-1 if side else 1)
+        pts = [verts[edges[e][0]] if e >= 0 else verts[edges[-e][1]] for e in (se[fe + k] for k in range(ne))]
+        lo = [min(p[j] for p in pts) for j in range(3)]
+        hi = [max(p[j] for p in pts) for j in range(3)]
+        world.setdefault((ax, facing, round(lo[ax] * 8) / 8), []).append((lo, hi, tex[ti][1]))
+    out = []
+    for e in ents:
+        cls = e.get("classname", "")
+        if cls not in classes or not e.get("model", "").startswith("*"):
+            continue
+        m = models[int(e["model"][1:])]
+        lo, hi = list(m[0:3]), list(m[3:6])
+        travel = 0.0
+        if cls == "func_door" and e.get("angle") in ("-1", "-2"):
+            travel = (hi[2] - lo[2]) - float(e.get("lip", 8) or 8)
+        elif cls == "func_plat":
+            travel = float(e.get("height", 0) or 0) or (hi[2] - lo[2]) - 8
+        z0, z1 = (lo[2], hi[2] + travel) if e.get("angle") != "-2" and cls != "func_plat" else (lo[2] - travel, hi[2])
+        if cls == "func_plat":
+            z0, z1 = lo[2] - travel, hi[2]
+        hits = []
+        for ax in (0, 1):
+            wide = 1 - ax
+            for side, facing in ((lo[ax], -1), (hi[ax], 1)):
+                for (flo, fhi, t) in world.get((ax, facing, round(side * 8) / 8), []):
+                    ow = min(fhi[wide], hi[wide]) - max(flo[wide], lo[wide])
+                    oz = min(fhi[2], z1) - max(flo[2], z0)
+                    if ow > 0.5 and oz > 0.5:
+                        hits.append((t, ax, round(side, 1), round(ow * oz), round(max(flo[2], z0)), round(min(fhi[2], z1))))
+        out.append((cls, tuple(round(v, 1) for v in lo), tuple(round(v, 1) for v in hi), travel, hits))
+    return out
+
+
 def sky_share_of(path: Path, seed: int = 1) -> float:
     """The share of standing places with sky straight up - alone, for a style taken from maps (brief 19 §4: the sky
     «by style»)."""
@@ -1219,6 +1301,35 @@ def stacked_points(g: Graph, R) -> int:
             if any(abs(z - o) >= 128 for o in zs):
                 n += 1
     return n
+
+
+def mover_marks(w: "World") -> list:
+    """Brief 35: [(kind, x, y, z, pair)] of the map's teleporter discs («disc»: misc_teleporter, or a trigger_teleport's
+    middle), their exits («exit»: misc_teleporter_dest), jump pads («pad»: a trigger_push's middle) and spawn points
+    («spawn»); `pair` ties a disc to its exit (the disc's target), else None."""
+    out = []
+    dests = {e.get("targetname"): e for e in w.ents if e.get("classname") == "misc_teleporter_dest"}
+    for e in w.ents:
+        cls = e.get("classname", "")
+        if cls == "misc_teleporter":
+            o = fvec(e.get("origin", ""))
+            out.append(("disc", o[0], o[1], o[2], e.get("target")))
+        elif cls == "trigger_teleport":
+            mb = model_bounds(w, e)
+            if mb:
+                out.append(("disc", (mb[0][0] + mb[1][0]) / 2, (mb[0][1] + mb[1][1]) / 2, mb[0][2], e.get("target")))
+        elif cls == "misc_teleporter_dest":
+            o = fvec(e.get("origin", ""))
+            out.append(("exit", o[0], o[1], o[2], e.get("targetname")))
+        elif cls == "trigger_push":
+            mb = model_bounds(w, e)
+            if mb:
+                out.append(("pad", (mb[0][0] + mb[1][0]) / 2, (mb[0][1] + mb[1][1]) / 2, mb[0][2], None))
+        elif cls == "info_player_deathmatch":
+            o = fvec(e.get("origin", ""))
+            out.append(("spawn", o[0], o[1], o[2], None))
+    _ = dests
+    return out
 
 
 def hanging_brushes(w: World) -> list:

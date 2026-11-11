@@ -759,22 +759,31 @@ def teleporters(P: pm.Plan, rnd: random.Random, storeys: list) -> None:
              if c in edges and c not in P.no_items]
     rnd.shuffle(rooms)
     made = 0
+    storey_of = {c: k for (k, c) in rooms}
     for _ in range(want):
-        best = None
-        for ka, a in rooms[:30]:
-            ta = pm.dijkstra(edges, a)
-            for kb, b in rooms[:300]:
-                if kb == ka or P.owner[b] == P.owner[a] or b not in ta:
-                    continue
-                if best is None or ta[b] > best[0]:
-                    best = (ta[b], a, b)
-        if not best:
-            break
-        walk_s, a, b = best
-        da, db = pm.exit_cell(P, a), pm.exit_cell(P, b)
-        if da is None or db is None:
-            rooms = [r for r in rooms if r[1] not in (a, b)]
-            continue
+        if pm.OLD_MOVER_RULES:
+            best = None
+            for ka, a in rooms[:30]:
+                ta = pm.dijkstra(edges, a)
+                for kb, b in rooms[:300]:
+                    if kb == ka or P.owner[b] == P.owner[a] or b not in ta:
+                        continue
+                    if best is None or ta[b] > best[0]:
+                        best = (ta[b], a, b)
+            if not best:
+                break
+            walk_s, a, b = best
+            da, db = pm.exit_cell(P, a), pm.exit_cell(P, b)
+            if da is None or db is None:
+                rooms = [r for r in rooms if r[1] not in (a, b)]
+                continue
+        else:
+            # brief 35: the farthest pair whose ends keep apart from every mover and spawn and from the other pairs
+            found = pm.pair_of_ends(P, [c for (_k, c) in rooms[:30]], [c for (_k, c) in rooms[:300]], edges,
+                                    pair_ok=lambda a_, b_: storey_of.get(a_) != storey_of.get(b_))
+            if found is None:
+                break
+            walk_s, a, b, da, db = found
         P.teleports.append((a, b, da, db))
         P.no_items.update({a, b, da, db})
         import mapgen_scratch_fixtures as fix_mod     # brief 26: the frames' posts stand beside the discs
@@ -787,6 +796,13 @@ def teleporters(P: pm.Plan, rnd: random.Random, storeys: list) -> None:
         discs = [((pm.phys(c)[0] + 0.5) * CELL, (pm.phys(c)[1] + 0.5) * CELL, nodes[c][0]) for tp in P.teleports for c in tp[:2] if c in nodes]
         rooms = [r for r in rooms if not fix_mod.crowded(discs, ((pm.phys(r[1])[0] + 0.5) * CELL, (pm.phys(r[1])[1] + 0.5) * CELL, nodes[r[1]][0]))]
     P.metrics["teleporters"] = made
+    if made < want and not pm.OLD_MOVER_RULES:
+        # brief 35: a pair not made is said (the rule keeps it from the places the others join)
+        got = made
+        P.metrics["refused"] = list(P.metrics.get("refused") or []) + [pm.say(f"телепортов (пар) {got} из {want}: ещё одна пара вела бы в те же места, что уже связанные, или стояла бы рядом "
+               "с джампадом или точкой появления",
+               f"teleporter pairs {got} of {want}: one more pair would join the places already joined, or stand beside a jump "
+               "pad or a spawn point")]
 
 
 def pm_gap(a: pm.Rect, b: pm.Rect) -> int:
@@ -830,6 +846,10 @@ def place(P: pm.Plan, rnd: random.Random, storeys: list, perches: list, shafts: 
     # too (the judge's row; a spawn 2 x 2 cells off a pad is 181 away, 06.11)
     mover_at = [at(m) for m in movers]
     cands = [c for s in walk for c in free(s) if all(math.dist(at(c), m) > 224 for m in mover_at)]
+    if not pm.OLD_MOVER_RULES:
+        # brief 35: MOVER_APART from every disc, exit and pad (and no third plate - checked as each is picked)
+        cands = [c for c in cands if pm.spot_ok(P, c, "spawn", pm.mover_marks(P, spawns=[]))]
+    plates_steps = list(pm.PLATES_STEPS)
     rnd.shuffle(cands)
     spawns, t_from = [], {}
 
@@ -839,22 +859,35 @@ def place(P: pm.Plan, rnd: random.Random, storeys: list, perches: list, shafts: 
     # three; one by one by the time window ground spawns took 62..100 % of them, 06.11)
     turn = list(range(len(storeys)))
     i_turn = rnd.randrange(len(turn))
-    while len(spawns) < want_sp and cands:
+    pool = cands                 # every spot still free; `cands` - those of it the rule passes now
+    while len(spawns) < want_sp and pool:
         k = turn[i_turn % len(turn)]
         i_turn += 1
+        cands = pool
+        if not pm.OLD_MOVER_RULES:
+            # the spawns asked are never cut: the plates' radius gives when nothing is left at it (brief 35 item 20) -
+            # each time from every free spot, not only those a stricter radius had left
+            marks_now = pm.mover_marks(P, spawns=spawns)
+            cands = [c for c in pool if pm.spot_ok(P, c, "spawn", marks_now, plates_near=plates_steps[0])]
+            while not cands and len(plates_steps) > 1:
+                plates_steps.pop(0)
+                cands = [c for c in pool if pm.spot_ok(P, c, "spawn", marks_now, plates_near=plates_steps[0])]
+            if not cands:
+                break
         here = [c for c in cands if pm.layer_of(c) == k] or cands
         if not spawns:
             c = here[0]
         else:
             win = [c for c in here if 1.2 <= nearest_t(c) <= 2.4]
             c = max(win, key=lambda c: nearest_t(c) + rnd.random() * 0.3) if win else max(here, key=lambda c: min(nearest_t(c), 3.0) + rnd.random() * 0.3)
-        cands.remove(c)
+        pool.remove(c)
         spawns.append(c)
         t_from[c] = pm.dijkstra(edges, c)
         taken.add(c)
     if len(spawns) < max(2, want_sp // 2):
         P.failed = f"tower: room for {len(spawns)} spawns of {want_sp}"
         return
+    P.metrics["plates_near"] = pm.PLATES_NEAR if pm.OLD_MOVER_RULES else plates_steps[0]
     for c in spawns:
         pc = pm.phys(c)
         P.spawns.append((c, P.spaces[P.owner[c]].floor[c][0], int(round(math.degrees(math.atan2(P.H / 2 - pc[1], P.W / 2 - pc[0])))) % 360))
@@ -970,4 +1003,8 @@ def score(P: pm.Plan) -> float:
     pen += 1.0 * max(0, st_want - w.get("stairs", 0))
     pen += 1.0 * max(0, int(q.get("lifts") or 0) - w.get("lifts", 0))
     pen += 1.0 * max(0, int(q.get("pads") or 0) - w.get("pads", 0))
+    # brief 35: the spawns asked first (never cut for the movers' rule), then the pairs asked, then the plates' radius kept
+    pen += 3.0 * max(0, int(q.get("spawns") or 0) - len(P.spawns))
+    pen += 1.0 * max(0, int(q.get("teleporters") or 0) - len(P.teleports))
+    pen += 0.3 * max(0, pm.PLATES_NEAR - int(m.get("plates_near", pm.PLATES_NEAR)))
     return pen

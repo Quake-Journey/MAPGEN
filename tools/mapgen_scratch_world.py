@@ -320,6 +320,61 @@ def dress_walls(P, pal: dict, spans: dict, spaces: dict, plat_cells: dict, linte
 # brief 34 follow-up: True draws a sky space's every rock underside as sky (the slab under a perch with it, 3.59/3.60's
 # bug) and leaves a perch's well capped by its gallery's ceiling; check_mapgen_tower_ways.py's RED only
 SKY_UNDERSIDES = False
+# a pad's trigger: this far in from its cell's sides - 7 (8 before 3.61 put an axis-flying wedge's sides on its planes and
+# the engine refused the base; check_mapgen_fixtures.py's RED sets 8)
+PAD_TRIGGER_IN = 7
+
+# Brief 36 (the PO 11.11, mg_new_91126 on 3.61: «баг с дверью в стене - у неё мерцает текстура при её движении»): a door
+# was its doorway's whole cell, 64 across - the wall's own thickness - so its two broad faces lay in the wall's two
+# planes and, rising 120 into the wall over the doorway, were drawn in one plane with the wall's faces. A door now stands
+# DOOR_ACROSS thick in the middle of its wall, as people's are (q2dm3, q2dm8: 32; q2dm6: 16..80), and rises hidden in it.
+# 64 gives back 3.60/3.61's door (the RED of tools/check_mapgen_doors.py).
+DOOR_ACROSS = 32
+# ... and its two ends 1 in from the doorway's ends, a fixed stop of the door's thickness standing in that unit from the
+# floor to the opening's top: rising, the door's ends go up inside the wall over the doorway, never along a face of it
+# seen from beyond the doorway's end - through a window there, or from a higher floor whose steps stand on the jamb (his
+# request on 3.62's first build: 1 door of 8 each). 0 gives back the door's ends at the doorway's (the RED).
+DOOR_END_IN = 1
+
+
+def door_across(P, d) -> int | None:
+    """The axis one walks through a door along (mapgen_scratch_plan.door_across)."""
+    return plan_mod.door_across(P, d)
+
+
+def door_box(P, d) -> tuple:
+    """A moving door's box (lo, hi): along its wall the doorway's whole width, DOOR_ACROSS thick in the middle of the
+    wall, from its floor DOOR_H up."""
+    pcs_ = [plan_mod.phys(c) for c in d.cells]
+    lo = [min(c[0] for c in pcs_) * CELL, min(c[1] for c in pcs_) * CELL, d.z]
+    hi = [(max(c[0] for c in pcs_) + 1) * CELL, (max(c[1] for c in pcs_) + 1) * CELL, d.z + plan_mod.DOOR_H]
+    ax = door_across(P, d)
+    if ax is not None and hi[ax] - lo[ax] > DOOR_ACROSS:
+        mid = (lo[ax] + hi[ax]) / 2
+        lo[ax], hi[ax] = mid - DOOR_ACROSS / 2, mid + DOOR_ACROSS / 2
+        along = 1 - ax
+        lo[along] += DOOR_END_IN
+        hi[along] -= DOOR_END_IN
+    return tuple(lo), tuple(hi)
+
+
+def door_stops(P, d) -> list:
+    """The two fixed stops in the units a door leaves at its doorway's ends: (lo, hi) boxes, none for a door built a whole
+    cell."""
+    lo, hi = door_box(P, d)
+    ax = door_across(P, d)
+    if ax is None or not DOOR_END_IN or hi[ax] - lo[ax] >= CELL:
+        return []
+    along = 1 - ax
+    out = []
+    for end, sign in ((lo[along], -1), (hi[along], 1)):
+        a_, b_ = list(lo), list(hi)
+        if sign < 0:
+            a_[along], b_[along] = end - DOOR_END_IN, end
+        else:
+            a_[along], b_[along] = end, end + DOOR_END_IN
+        out.append((tuple(a_), tuple(b_)))
+    return out
 
 
 FIXTURE_GLOW = 100
@@ -690,18 +745,17 @@ def _build_plan(P, pal: dict, title: str = "") -> tuple:
     for d in P.doors:
         if not d.mover:
             continue
-        pcs_ = [ph(c) for c in d.cells]
-        xs, ys = [c[0] for c in pcs_], [c[1] for c in pcs_]
+        lo, hi = door_box(P, d)
+        for (sa, sb) in door_stops(P, d):
+            brushes.append(box(sa, sb, {"default": pal["trim"][0]}, note="door stop"))
         if getattr(d, "tname", None):
             # a powerup's door: opened by its buttons only, for five seconds (brief 21+)
             ents.append(Entity({"classname": "func_door", "angle": "-1", "speed": "150", "wait": "5", "lip": "8",
                                 "targetname": d.tname},
-                               [box((min(xs) * CELL, min(ys) * CELL, d.z), ((max(xs) + 1) * CELL, (max(ys) + 1) * CELL,
-                                    d.z + DOOR_H), {"default": detail(pal, 2)})]))
+                               [box(lo, hi, {"default": detail(pal, 2)})]))
             continue
         ents.append(Entity({"classname": "func_door", "angle": "-1", "speed": "200", "wait": "2", "lip": "8"},
-                           [box((min(xs) * CELL, min(ys) * CELL, d.z), ((max(xs) + 1) * CELL, (max(ys) + 1) * CELL,
-                                d.z + DOOR_H), {"default": pal["trim"][0]})]))
+                           [box(lo, hi, {"default": pal["trim"][0]})]))
     return finish_entities(P, pal, spaces, brushes, ents, lintels, spans, title)
 
 
@@ -814,8 +868,14 @@ def finish_entities(P, pal: dict, spaces: dict, brushes: list, ents: list, linte
         else:
             brushes.append(box((x0 + 8, y0 + 8, zf), (x0 + CELL - 8, y0 + CELL - 8, zf + 4),
                                {"default": pal["trim"][0], "+z": lamp}, note="pad"))
+        # 7 in, not 8 (11.11, the fixtures check of brief 35): a slanted pad flying along an axis has its wedge's sides
+        # (fix_mod.WEDGE_HALF, 24 off the middle) on the very planes of a 48-wide trigger's, and the engine's rebuild of
+        # the base dresses the trigger's unseen sides in the wedge's drawn texture - «the baseline draws 5184 units of
+        # e1u1/box1_3 that the donor does not», the base refused (seed 26101: 4 of 13 pads along an axis). One unit wider
+        # on each side puts no trigger side on a pad's face at any size (wedge 12..48, plinth 20..81, disc 14..55 off)
         ents.append(Entity({"classname": "trigger_push", "speed": str(speed), "angles": f"{-pitch} {yaw} 0"},
-                           [box((x0 + 8, y0 + 8, zf + 4), (x0 + CELL - 8, y0 + CELL - 8, zf + 40), {"default": TRIGGER})]))
+                           [box((x0 + PAD_TRIGGER_IN, y0 + PAD_TRIGGER_IN, zf + 4),
+                                (x0 + CELL - PAD_TRIGGER_IN, y0 + CELL - PAD_TRIGGER_IN, zf + 40), {"default": TRIGGER})]))
         # brief 34 (the PO: «непонятно для чего»): where it lands is marked - a thin lit plate on the landing's floor,
         # not a pad's look (no ring), so the floor shows where each pad goes
         if fx_on and t in P.owner and P.spaces[P.owner[t]].floor.get(t, (0, ""))[1] == "flat":

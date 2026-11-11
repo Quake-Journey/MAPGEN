@@ -320,10 +320,12 @@ public sealed class Generation
             if (!File.Exists(path))
                 return (FinishingMax, 0);
             int swaps = 0, grafts = 0, liquids = 0;
+            // brief 35: a family the run never deals is not «после правок» (a map from scratch: «0 из 6» of swaps it skips)
+            var skipped = Request.FromScratch ? SkippedFamilies() : new HashSet<string>();
             foreach (var line in File.ReadLines(path))
             {
                 var parts = line.Split(' ');
-                if (parts.Length < 2 || line.StartsWith('#'))
+                if (parts.Length < 2 || line.StartsWith('#') || skipped.Contains(parts[1]))
                     continue;
                 if (parts[1] is "swap-item" or "move-spawn")
                     swaps++;
@@ -390,6 +392,41 @@ public sealed class Generation
         or "widen-connector" or "open-connector" or "relevel" or "stairs-to-ramp" or "stairs-to-lift" or "swap-bundles"
         or "recompose-bundles" or "recut-room" or "room-block" or "pit" or "window";
 
+    /// <summary>The engine's family a plan kind is dealt by.</summary>
+    internal static string FamilyOfKind(string kind) => kind switch
+    {
+        "digs" or "annexes" or "storeys" or "rooms_from" or "rooms_copy" or "skins_from" => "dig",
+        "spans" => "span",
+        "floods" => "flood",
+        "windows" => "window",
+        "reliquids" => "reliquid",
+        "stairways" => "stairway",
+        "remodels" => "remodel",
+        "blocks" => "block",
+        "floor_shifts" => "floor-shift",
+        "stair_reshapes" => "stair-reshape",
+        _ => kind,
+    };
+
+    /// <summary>
+    /// Brief 35: the families this run never deals - the user's, and for a map from scratch every one of
+    /// <see cref="ScratchSkips"/> and the stairway annexes when its page asks none (as Launch passes them).
+    /// </summary>
+    public HashSet<string> SkippedFamilies()
+    {
+        var set = new HashSet<string>(Request.SkipFamilies);
+        if (Request.FromScratch)
+        {
+            set.UnionWith(ScratchSkips);
+            if ((Request.Options?.Stairways ?? 0) == 0)
+                set.Add("stairway");
+        }
+        return set;
+    }
+
+    /// <summary>Brief 35: a map from scratch with no family to deal - its «Правки» have nothing to try (the PO's mg_new_91126).</summary>
+    public bool NothingToDeal => Request.FromScratch && (Request.Options?.Stairways ?? 0) == 0;
+
     private static readonly string[] PlanKinds = { "digs", "annexes", "storeys", "spans", "floods", "windows", "reliquids", "stairways",
                                                    "remodels", "blocks", "floor_shifts", "stair_reshapes", "rooms_from", "rooms_copy",
                                                    "skins_from" };
@@ -411,7 +448,10 @@ public sealed class Generation
     public List<(string key, string name, int done, int planned)> PlanRows()
     {
         var second = SecondName.Length > 0 ? SecondName : Request.Grafts?.FirstOrDefault() ?? "";
-        return PlanKinds.Where(k => Planned.GetValueOrDefault(k) > 0)
+        // brief 35 (the PO's mg_new_91126: «Новые проходы 0 из 5 · Окна 0 из 17 · Комнаты из основы 0 из 2»): a map from
+        // scratch shows only the kinds whose family it deals
+        var skipped = SkippedFamilies();
+        return PlanKinds.Where(k => Planned.GetValueOrDefault(k) > 0 && !(Request.FromScratch && skipped.Contains(FamilyOfKind(k))))
                         .Select(k => (k, Loc.F($"plan.name.{k}", second), Done.GetValueOrDefault(k), Planned[k]))
                         .ToList();
     }
@@ -474,12 +514,13 @@ public sealed class Generation
     /// The self-test's run of a map from scratch (the PO, 04.11: «проверяй всё такое»): a request at a stage, with
     /// figures in every field the run page shows - nothing started, nothing written.
     /// </summary>
-    internal static Generation ForSelfTest(Settings s, string stage, bool fromScratch = true)
+    internal static Generation ForSelfTest(Settings s, string stage, bool fromScratch = true, bool deals = true)
     {
-        // brief 24 D1: and a run of a map from a ready one (its page keeps «Отличие от основы»)
+        // brief 24 D1: and a run of a map from a ready one (its page keeps «Отличие от основы»); brief 35: a map from
+        // scratch that deals its stairway annexes (its edits are tried), or none (`deals` false: nothing to edit)
         var r = new GenerationRequest(fromScratch ? "mg_new_selftest" : "mg_base_selftest", fromScratch ? "" : "q2dm1", 70, 7,
                                       Array.Empty<string>(), false,
-                                      Options: new GenerationOptions(Decor: 1, Remodels: 0, Blocks: 0), TimeMinutes: 60,
+                                      Options: new GenerationOptions(Decor: 1, Remodels: 0, Blocks: 0, Stairways: deals ? 2 : 0), TimeMinutes: 60,
                                       Scratch: fromScratch ? s.Scratch.ToPython(Path.Combine(s.ClientDir, "baseq2"), Engine.DonorsDir) : "");
         var g = new Generation(r, s, Path.Combine(Path.GetTempPath(), "mapgen_selftest_scratch_run"))
         {
@@ -1356,6 +1397,12 @@ public sealed class Generation
         }
         catch (IOException) { }
     }
+
+    /// <summary>Brief 35: a progress line taken as the run's file gives it - the self-test feeds the PO's own run.</summary>
+    internal void TakeForSelfTest(string line) => Take(line);
+
+    /// <summary>Brief 35: the stage a self-test run is at (a new deal with no edit after it).</summary>
+    internal void SetStageForSelfTest(string stage) => Stage = stage;
 
     private void Take(string line)
     {

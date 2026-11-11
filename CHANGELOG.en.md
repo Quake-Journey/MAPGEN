@@ -1,5 +1,17 @@
 # MAPGEN Studio by ly — change log
 
+## 3.62 — 11.11.2026
+
+- Doors on maps from scratch no longer flicker as they open: a door is half as thick as its wall now, stands in the middle of it and rises into the wall, as on well-known maps. The map's checks watch it
+- The parameters' search: when only one of the two top cards matches, it moves into the left column, with no empty space beside it; a row the form itself hid (the variant number while «Random variant» is on, say) does not come back when the search is cleared; the first row found in a card has no stray line over it
+
+## 3.61 — 11.11.2026
+
+- Teleporters, their exits, jump pads and spawn points no longer stand together: a second teleporter pair joins other places, not the cells beside the first, any two of them stand four cells apart at least, and the generator puts no more than two spawn points and teleporter exits (they look like the same plate) near each other while all the spawn points asked fit. The map's checks watch it
+- The Generate page has a search of the parameters: start typing a name or a word of its description, in Russian or English, from two letters - only the parameters that match stay, in their sections; cleared - all of them again
+- A map from scratch no longer waits minutes at «Making the plan of the dressing»: the generator sees at once that there is nothing to edit on it
+- The run page: the stages passed no longer turn into hourglasses, every stage passed says how long it took, and a stage taking longer than usual makes «Time left» grow and say so
+
 ## 3.60 — 08.11.2026
 
 - Jump pads are no longer piled: two on one floor stand three cells apart at least, no pad goes where a stair or a door near by already leads, and where a pad lands a thin bright plate lies on the floor. The map's checks watch it, and that no more than two like things (pads, teleporters, panels, pedestals, columns) stand together

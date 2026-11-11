@@ -50,11 +50,16 @@ public static class Look
     }
 
     /// <summary>A card: the soft ground every part of a page stands on.</summary>
-    public static Border Card(Control body, double pad = 18) => new()
+    public static Border Card(Control body, double pad = 18)
     {
-        Background = CardBack, BorderBrush = CardEdge, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(12),
-        Padding = new Thickness(pad, pad - 2, pad, pad), Child = body,
-    };
+        var card = new Border
+        {
+            Background = CardBack, BorderBrush = CardEdge, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(pad, pad - 2, pad, pad), Child = body,
+        };
+        Search.Section(card);                       // brief 35: shown under a query only while it holds a row found
+        return card;
+    }
 
     /// <summary>A coloured sign: the symbol in a rounded square of its colour.</summary>
     public static Border Sign(FASymbol symbol, Color colour, double size = 36) => new()
@@ -111,6 +116,7 @@ public static class Look
                 // a row hidden takes its line with it (the PO 06.11: the variant number's row hides under «Случайный
                 // вариант» - two lines would stand together)
                 var line = new Border { Height = 1, Background = Line, Margin = new Thickness(0, 2, 0, 2), IsVisible = r.IsVisible };
+                Search.Line(line, r);           // brief 36: a card's first row shown under a query has no line over it
                 var row = r;
                 row.PropertyChanged += (_, e) =>
                 {
@@ -137,6 +143,7 @@ public static class Look
         var row = new RowPanel(words, control) { Margin = new Thickness(0, 10, 0, 10) };
         if (tip != null)
             ToolTip.SetTip(row, tip);
+        Search.Mark(row, title, desc, tip);         // brief 35: the parameters' search finds a row by its words
         return row;
     }
 
@@ -275,10 +282,27 @@ public sealed class ColumnsPanel : Panel
     /// <summary>The PO, 12.10: the left card takes the right column's height and scrolls what does not fit in it.</summary>
     public bool LeftFollowsRight { get; set; }
 
+    /// <summary>3.61's two columns (one card hidden left its column empty), for the self-test's RED.</summary>
+    internal static bool OldColumns;
+
     private bool Two(double width) => !double.IsInfinity(width) && width >= 2 * MinColumn + Gap && Children.Count == 2;
+
+    /// <summary>
+    /// Brief 36 item 8 (Fable's review of 3.61: under «похож» the bases' card hid and its column stayed an empty field
+    /// beside the card found): of the two, one hidden - the other stands in the left column, its own height.
+    /// </summary>
+    private Control? Alone() => OldColumns || Children.Count != 2 || Children[0].IsVisible == Children[1].IsVisible ? null
+        : Children[0].IsVisible ? Children[0] : Children[1];
 
     protected override Size MeasureOverride(Size available)
     {
+        if (Two(available.Width) && Alone() is { } alone)
+        {
+            var w = (available.Width - Gap) / 2;
+            foreach (var c in Children)
+                c.Measure(new Size(w, double.PositiveInfinity));
+            return new Size(available.Width, alone.DesiredSize.Height);
+        }
         if (Two(available.Width))
         {
             var w = (available.Width - Gap) / 2;
@@ -303,6 +327,12 @@ public sealed class ColumnsPanel : Panel
 
     protected override Size ArrangeOverride(Size final)
     {
+        if (Two(final.Width) && Alone() is { } alone)
+        {
+            var w = (final.Width - Gap) / 2;
+            alone.Arrange(new Rect(0, 0, w, alone.DesiredSize.Height));
+            return final;
+        }
         if (Two(final.Width))
         {
             var w = (final.Width - Gap) / 2;
@@ -564,6 +594,7 @@ public sealed class OptionGroup
         row.Children.Add(control);
         if (tipKey != null)
             ToolTip.SetTip(row, Loc.T(tipKey));
+        Search.Mark(row, title, desc, tipKey != null ? Loc.T(tipKey) : null);
         Look.Fill(_rows, new Control[] { row });
     }
 }
@@ -582,6 +613,7 @@ public sealed class Fold : Expander
         Key = titleKey;
         Header = Look.CardHead(symbol, colour, Loc.T(titleKey), Loc.T(descKey));
         Content = _rows;
+        Search.Section(this);
         IsExpanded = open;
         HorizontalAlignment = HorizontalAlignment.Stretch;
         HorizontalContentAlignment = HorizontalAlignment.Stretch;

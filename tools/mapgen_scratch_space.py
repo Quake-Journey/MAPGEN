@@ -539,12 +539,32 @@ def link(P: pm.Plan, isles: list[Isle], rnd: random.Random) -> bool:
     # 4. teleporters: from the farthest groups that are not pad-only back to a deck (a pair, both ways)
     far = sorted((s for s in P.spaces if s.id not in pad_only and s.id not in decks), key=lambda s: -s.base)
     deck_cells = [c for d in decks for c in P.spaces[d].floor if inner(P, c, 1) and c not in used_cells]
-    for s in far[:tele_left]:
+    # brief 35: an island with no floor apart from its pads is passed over - the next farthest is asked (3.60 took the
+    # first `tele_left` and nothing else)
+    for s in (far[:tele_left] if pm.OLD_MOVER_RULES else far):
+        if len(P.teleports) >= tele_left:
+            break
         a_cells = [c for c in s.floor if inner(P, c, 1) and c not in used_cells]
         if not a_cells or not deck_cells:
-            break
-        a = rnd.choice(a_cells)
-        b = deck_cells.pop(rnd.randrange(len(deck_cells)))
+            if pm.OLD_MOVER_RULES:
+                break
+            continue
+        if pm.OLD_MOVER_RULES:
+            a = rnd.choice(a_cells)
+            b = deck_cells.pop(rnd.randrange(len(deck_cells)))
+        else:
+            # brief 35: both discs MOVER_APART from every mover and spawn, TELE_PAIRS_APART from the other pairs' ends
+            rnd.shuffle(a_cells)
+            a = next((c for c in a_cells if pm.spot_ok(P, c, "disc", z=floor_z(P, c))), None)
+            if a is None:
+                continue
+            marks_a = pm.mover_marks(P) + [("disc", a, floor_z(P, a), -1)]
+            order_b = list(range(len(deck_cells)))
+            rnd.shuffle(order_b)
+            ib = next((i_ for i_ in order_b if pm.spot_ok(P, deck_cells[i_], "disc", marks_a, z=floor_z(P, deck_cells[i_]))), None)
+            if ib is None:
+                continue
+            b = deck_cells.pop(ib)
         # brief 26: the frames' posts stand beside the discs - their cells kept first; the exit then 2 cells off its
         # disc on its island, past the frame (beside the disc it stood inside its frame, one step off the disc back - a
         # cover of 06.11); 3..5 off when 2 has no room, beside it only on the smallest island. Not 3..5 first, as the
@@ -569,7 +589,15 @@ def link(P: pm.Plan, isles: list[Isle], rnd: random.Random) -> bool:
                 e = pm.exit_cell(P, c)
                 e = e if e is not None and e not in used_cells else None
             return e if e is not None else ring_cell(c, 1)
-        da, db = exit_near(a), exit_near(b)
+        if pm.OLD_MOVER_RULES:
+            da, db = exit_near(a), exit_near(b)
+        else:
+            # brief 35: the exit EXIT_RING (4..6) off its disc on its island, MOVER_APART from everything else - an
+            # island with no such floor makes no pair here (said in the record)
+            ends = pm.mover_marks(P) + [("disc", a, floor_z(P, a), -1), ("disc", b, floor_z(P, b), -1)]
+            da = pm.exit_cell(P, a, lambda n_: n_ not in used_cells and pm._end_ok(P, n_, ends, a))
+            ends_b = ends + ([("exit", da, floor_z(P, da), -1)] if da is not None else [])
+            db = pm.exit_cell(P, b, lambda n_: n_ not in used_cells and pm._end_ok(P, n_, ends_b, b)) if da is not None else None
         if da is None or db is None:
             P.no_items.clear()
             P.no_items.update(keep)
@@ -580,6 +608,13 @@ def link(P: pm.Plan, isles: list[Isle], rnd: random.Random) -> bool:
         adj[s.id].update(decks)
         for d in decks:
             adj[d].add(s.id)
+    if len(P.teleports) < tele_left and not pm.OLD_MOVER_RULES:
+        # brief 35: a pair not made is said (no island far from the pads and the other pairs' ends had room for it)
+        got, want = len(P.teleports), tele_left
+        P.metrics["refused"] = list(P.metrics.get("refused") or []) + [pm.say(f"телепортов (пар) {got} из {want}: ещё одна пара вела бы в те же места, что уже связанные, или стояла бы рядом "
+               "с джампадом или точкой появления",
+               f"teleporter pairs {got} of {want}: one more pair would join the places already joined, or stand beside a jump "
+               "pad or a spawn point")]
     # what each group is entered by
     into = {i: set() for i in range(n)}
     for (a, b) in seen:
@@ -658,6 +693,9 @@ def place_items(P: pm.Plan, rnd: random.Random) -> bool:
         [c for tp in P.teleports for c in tp]
     cands = [c for s in walkers for c in free(s, 1) if c in edges
              and all(max(abs(c[0] - m[0]), abs(c[1] - m[1])) > 3 for m in movers)]
+    if not pm.OLD_MOVER_RULES:
+        cands = [c for c in cands if pm.spot_ok(P, c, "spawn", pm.mover_marks(P, spawns=[]), z=floor_z(P, c))]
+    plates_steps = list(pm.PLATES_STEPS)
     rnd.shuffle(cands)
     spawns = []
     t_from: dict = {}
@@ -670,6 +708,15 @@ def place_items(P: pm.Plan, rnd: random.Random) -> bool:
             c = deck_c[0]
         else:
             ok_ = [c for c in cands if all(abs(c[0] - s_[0]) + abs(c[1] - s_[1]) >= 5 or floor_z(P, c) != floor_z(P, s_) for s_ in spawns)]
+            if not pm.OLD_MOVER_RULES:
+                # brief 35: no third plate (spawns and teleporter exits) within PLATES_NEAR, movers MOVER_APART off;
+                # the spawns asked are never cut - the radius gives when nothing is left at it
+                marks_now = pm.mover_marks(P, spawns=spawns)
+                keep_ = ok_
+                ok_ = [c for c in keep_ if pm.spot_ok(P, c, "spawn", marks_now, z=floor_z(P, c), plates_near=plates_steps[0])]
+                while not ok_ and len(plates_steps) > 1:
+                    plates_steps.pop(0)
+                    ok_ = [c for c in keep_ if pm.spot_ok(P, c, "spawn", marks_now, z=floor_z(P, c), plates_near=plates_steps[0])]
             win = [c for c in ok_ if 1.2 <= nearest_t(c) <= 2.4]
             if win:
                 c = max(win, key=lambda c: nearest_t(c) + rnd.random() * 0.3)
@@ -684,6 +731,7 @@ def place_items(P: pm.Plan, rnd: random.Random) -> bool:
     if len(spawns) < max(2, want_sp // 2):
         P.failed = f"space: room for {len(spawns)} spawns of {want_sp}"
         return False
+    P.metrics["plates_near"] = pm.PLATES_NEAR if pm.OLD_MOVER_RULES else plates_steps[0]
     mx = sum(c[0] for c in nodes) / max(1, len(nodes))
     my = sum(c[1] for c in nodes) / max(1, len(nodes))
     for c in spawns:
@@ -833,4 +881,8 @@ def score(P: pm.Plan) -> float:
     if len(sp) >= 2:
         near = min(math.hypot(a[0] - b[0], a[1] - b[1]) for i, a in enumerate(sp) for b in sp[i + 1:])
         pen += 2.0 * max(0.0, 5.0 - near)
+    # brief 35: the spawns asked first (never cut for the movers' rule), then the pairs asked, then the plates' radius kept
+    pen += 3.0 * max(0, int(q.get("spawns") or 0) - len(P.spawns))
+    pen += 1.0 * max(0, int(q.get("teleporters") or 0) - len(P.teleports))
+    pen += 0.3 * max(0, pm.PLATES_NEAR - int(m.get("plates_near", pm.PLATES_NEAR)))
     return pen

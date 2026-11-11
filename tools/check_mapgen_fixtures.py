@@ -27,6 +27,11 @@ REDs (the same plan built again with a constant changed in the sandbox of this p
   far end, stays green: the people's survey launches a pad from the floor node under its trigger's base - mins + 24 -
   not from the wedge's top, so the wedge's height moves no take-off; measured 06.11 on the tower, 6 of 6 landing);
 * D3: the back slab across the disc's own cell (80 across) - the disc no longer stands free.
+3.61 (11.11, this check at 100 % on the space of brief 35: «ERR_BASELINE … the baseline draws 5184 units of e1u1/box1_3
+that the donor does not» - a wedge flying along an axis had its sides on its 48-wide trigger's planes, and the engine's
+rebuild dresses a trigger's unseen sides in the drawn face on its plane): on every case no pad's trigger side lies on a
+pad brush's face (the .map's planes, their boxes overlapping); RED - mapgen_scratch_world.PAD_TRIGGER_IN 8 (3.60's
+trigger) on the space at 100 %: some trigger side on a wedge's face, and with --engine the engine refuses the base.
 
     python tools/check_mapgen_fixtures.py [--engine] [--only space|tower|rooms] [--size 50..200]
 Writes into O:\Claude2\_agent_temp\claude\fixtures_check\. Pinned by the load guard.
@@ -93,6 +98,46 @@ def notes(text: str) -> dict:
     out = {}
     for m in re.finditer(r"^// brush \d+ (pad \w+|portal \w+)$", text, re.M):
         out[m.group(1)] = out.get(m.group(1), 0) + 1
+    return out
+
+
+def triggers_on_faces(text: str) -> list:
+    """3.61: the pads' trigger sides lying on a pad brush's face (plinth, disc, wedge) - the same plane either way round,
+    the two brushes' boxes meeting. The engine's rebuild of a base gives a trigger's unseen side the texture drawn on its
+    plane (mapgen_geometry.c, the bare sides' dressing) and then draws it: the base is refused."""
+    num = r"(-?[\d.]+)"
+    pt = rf"\( {num} {num} {num} \)"
+    face_re = re.compile(rf"^{pt} {pt} {pt} ", re.M)
+
+    def planes_and_box(body: str):
+        planes, pts = [], []
+        for m in face_re.finditer(body):
+            v = [float(x) for x in m.groups()]
+            a, b, c = v[0:3], v[3:6], v[6:9]
+            u = [b[i] - a[i] for i in range(3)]
+            w = [c[i] - a[i] for i in range(3)]
+            n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]]
+            ln = sum(x * x for x in n) ** 0.5 or 1.0
+            n = [x / ln for x in n]
+            planes.append((n, sum(n[i] * a[i] for i in range(3))))
+            pts += [a, b, c]
+        lo = [min(p[i] for p in pts) for i in range(3)] if pts else [0, 0, 0]
+        hi = [max(p[i] for p in pts) for i in range(3)] if pts else [0, 0, 0]
+        return planes, lo, hi
+
+    pads = [planes_and_box(m.group(1)) for m in re.finditer(r"^// brush \d+ pad (?:plinth|disc|wedge)\n\{\n((?:\(.*\n)+)\}", text, re.M)]
+    trig = [planes_and_box(m.group(1)) for m in
+            re.finditer(r'"classname" "trigger_push"\n(?:"[^"]*" "[^"]*"\n)*(?:// brush \d+\n)?\{\n((?:\(.*\n)+)\}', text)]
+    out = []
+    for (tp, tlo, thi) in trig:
+        for (pp, plo, phi) in pads:
+            if any(thi[i] < plo[i] - 0.5 or tlo[i] > phi[i] + 0.5 for i in range(3)):
+                continue
+            for (tn, td) in tp:
+                for (pn, pd) in pp:
+                    dot = sum(tn[i] * pn[i] for i in range(3))
+                    if (dot > 0.9999 and abs(td - pd) < 0.1) or (dot < -0.9999 and abs(td + pd) < 0.1):
+                        out.append(f"trigger at {[round(x) for x in tlo]} on a pad face {[round(x, 2) for x in tn]} {td:.1f}")
     return out
 
 
@@ -286,6 +331,9 @@ def main() -> int:
         nw, bad = wedge_dirs(text)
         row(nw == n.get("pad wedge", 0) and not bad, f"{label}: every wedge rises along its flight, its arrows point that way",
             f"{nw} wedges" + (f"; {'; '.join(bad[:3])}" if bad else ""))
+        on_face = triggers_on_faces(text)
+        row(not on_face, f"{label}: no pad's trigger side lies on a pad's face (the engine's rebuild would draw it, 11.11)",
+            "; ".join(on_face[:3]) or "none")
         hung = fixtures_hanging(bsp, text)
         row(not hung, f"{label}: no piece of a pad or a frame in the air (the hanging measure, even on an open space)",
             "; ".join(hung[:3]) or "none")
@@ -350,6 +398,26 @@ def main() -> int:
             air = over_air(got[5], got[2])
             row(bool(air), f"RED 32 ({label}): with the footprint test off a plinth or a plate reaches over air - goes red",
                 f"{len(air)}: " + ("; ".join(air[:2]) or "nothing over air"))
+    # 3.61's RED: 3.60's pad trigger (8 in) on the space at 100 % - 4 of its 13 wedges fly along an axis
+    if "space" in plans and not a.size:
+        import mapgen_scratch_world as world_mod
+        keep_in = world_mod.PAD_TRIGGER_IN
+        world_mod.PAD_TRIGGER_IN = 8
+        try:
+            got = build(plans["space"], plans["space"].params, "mg_fx_red5_space", WORK / "red5_space")
+        finally:
+            world_mod.PAD_TRIGGER_IN = keep_in
+        if got:
+            on_face = triggers_on_faces(got[2])
+            said = f"{len(on_face)}: {'; '.join(on_face[:2])}"
+            ok = bool(on_face)
+            if a.engine:
+                acc, why = sc.engine_accepts(STUDIO / "engine" / "pipeline.exe", got[5], GAME, WORK / "red5_space_probe")
+                shutil.rmtree(WORK / "red5_space_probe", ignore_errors=True)
+                ok = ok and not acc
+                said += f"; the engine: {why[:120] if not acc else 'took it'}"
+            row(ok, "RED 3.61 (space): the trigger 8 in - a trigger side on a wedge's face"
+                + (", the engine refuses the base" if a.engine else ""), said)
     # the REDs: the same plans, a constant changed in this process
     if "space" in plans or "tower" in plans:
         label = "tower" if "tower" in plans else "space"

@@ -207,6 +207,17 @@ public static class GateSaid
                 if (said == "no two on one floor")
                     return Loc.T("lib.gates.said.nopadpairs");
                 break;
+            // brief 35: «disc exit 64 (band 256..)» - which two stand nearest, and how near
+            case "gate.movers and spawns apart":
+                if ((m = M(said, @"^(disc|exit|pad|spawn) (disc|exit|pad|spawn) (\d+) \(band (\d+)\.\.\)$")).Success)
+                    return Loc.F("lib.gates.said.movers", Loc.T($"lib.gates.said.mark.{m.Groups[1].Value}"),
+                                 Loc.T($"lib.gates.said.mark.{m.Groups[2].Value}"), m.Groups[3].Value, m.Groups[4].Value);
+                break;
+            // brief 36: «3 of 7 doors (band ..0)» - how many doors have a face in a wall's plane
+            case "gate.door faces":
+                if ((m = M(said, @"^(\d+) of (\d+) doors \(band \.\.0\)$")).Success)
+                    return Loc.F("lib.gates.said.doorfaces", m.Groups[1].Value, m.Groups[2].Value);
+                break;
             case "gate.not a copy, item graph":
                 if ((m = M(said, @"^([\d.]+) s from (\S+)$")).Success)
                     return Loc.F("lib.gates.said.copygraph", m.Groups[1].Value, m.Groups[2].Value);

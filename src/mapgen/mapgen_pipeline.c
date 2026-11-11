@@ -1284,6 +1284,14 @@ static const bool g_plan_word_measured = true;  /* brief 18: the word held to it
 #define PLAN_DRY_SAY_TENTHS 3000u       /* ... and one worth more than a third of this is said with its re-measure */
 static const bool g_plan_dry_build = true;      /* the RED's mutation point */
 
+/* brief 35: a first deal with nothing the run may build ends the edits at once - not under MAPGEN_ROUND0_REDEAL=1, the
+   RED (the old way: through the round and a whole new deal before «plan exhausted») */
+static bool round0_exhausts(void)
+{
+    const char *e = getenv("MAPGEN_ROUND0_REDEAL");          /* «1»: the RED - the old way */
+    return !(e && *e == '1');
+}
+
 /* Brief 16 D3: a proved, untried edit worth at least half a permille - what a new deal has to offer to go on. */
 #define PLAN_WORTH_TENTHS 5u
 
@@ -2676,6 +2684,8 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
     for (uint32_t round = 0; round < MAPGEN_PIPELINE_MORE_ROUNDS; round++) {
       rounds_dealt = round + 1u;
       if (round) {
+          /* brief 35: where a round's time goes - its builds end here, the new deal below (the Studio names neither) */
+          progress_line("stage=round-end round=%u attempts=%u", (unsigned)(round - 1u), (unsigned)attempts);
           if (MapGenTransaction_Divergence(txn) >= target || attempts >= budget)
               break;
           /* brief 15 D4: past the first four, only while the round before accepted something */
@@ -2688,6 +2698,7 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
               break;
           plan = MapGenTransaction_Plan(txn);
           offered = MapGenGeometryEdit_Count(plan);
+          progress_line("stage=redeal-dealt round=%u offered=%u", (unsigned)round, (unsigned)offered);
           SAY(50, "dealing again");
           write_plan(job_dir, plan, round);
           uint32_t fresh = 0;
@@ -2759,6 +2770,27 @@ static mapgen_pipeline_result_t run_pipeline(const char *donor_bsp,
           replay.diverged = true;
           snprintf(replay.why, sizeof(replay.why), "the plan only: its word is said, nothing is built");
           break;
+      }
+      /*
+       * Brief 35 (the PO 11.11, mg_new_91126: «долго висело на шаге Составление плана»): the first deal with nothing
+       * this run may build - a map from scratch skips every family but the stairway annexes it did not ask - ends the
+       * edits here. It used to go through the round, deal the whole map again (281 s on his 12-player ring) and only
+       * then say «fresh=0». The finishing pass below still runs.
+       */
+      if (!round && round0_exhausts()) {
+          uint32_t fresh0 = 0;
+          for (uint32_t i = 0; i < offered; i++) {
+              const mapgen_geometry_edit_t *e = MapGenGeometryEdit_At(plan, i);
+              if (e && !family_skipped(request, e->kind)
+                  && (target == 0 || (MapGenGeometryEdit_MovesArchitecture(e->kind) && !zero_gain(e->kind)))
+                  && !print_held(tried, num_tried, edit_print(plan, i, e)))
+                  fresh0++;
+          }
+          if (!fresh0) {
+              plan_exhausted = true;
+              progress_line("stage=plan-exhausted round=0 tried=0");
+              break;
+          }
       }
       for (uint32_t k = 0; k < offered && attempts < budget; k++) {
         const uint32_t i = order ? order[k] : k;

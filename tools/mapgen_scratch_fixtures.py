@@ -345,7 +345,8 @@ def teleporter_frame(P, pal: dict, c, busy: set, k: float = 1.0, fit=None) -> tu
 # among them: people's maps hang their lights in rows (up to 14 within four cells on q2duel5, 5..11 on most of them).
 # People's pads: one a place (pro_q2t4 527 u apart at least); q2_q3dm17's one hub - a pad up and four out in a cross -
 # is a composition our generator does not build.
-LIKE_KINDS = {"pad": "trigger_push", "teleporter": "misc_teleporter", "pedestal": "pedestal", "column": "pillar",
+# brief 35: the teleporters left this rule - «teleporters apart» (512 u) and «movers and spawns apart» hold them stricter
+LIKE_KINDS = {"pad": "trigger_push", "pedestal": "pedestal", "column": "pillar",
               "panel": "decor", "plate": "spawn plate", "landing": "pad landing", "podium": "podium"}
 REPEAT_MAX = 2          # like things within REPEAT_CELLS of one on its floor, itself included
 REPEAT_CELLS = 4
@@ -377,7 +378,7 @@ def measure_map(text: str) -> dict:
             v = [tuple(map(float, q)) for q in re.findall(r"\( (\S+) (\S+) (\S+) \)", faces)]
             pts["pad"].append(((min(p[0] for p in v) + max(p[0] for p in v)) / 2, (min(p[1] for p in v) + max(p[1] for p in v)) / 2,
                                min(p[2] for p in v)))
-        elif cls == "misc_teleporter":
+        elif cls == "misc_teleporter" and "teleporter" in pts:
             o = re.search(r'"origin" "(\S+) (\S+) (\S+)"', keys)
             if o:
                 pts["teleporter"].append(tuple(float(o.group(i)) for i in (1, 2, 3)))

@@ -293,7 +293,7 @@ public static class Describe
                 var ruined = Math.Max(0, N(first, 3) - standing);
                 var parts = new List<string>();
                 if (placed < asked)
-                    parts.Add(ru ? $"мест на этой основе нашлось {placed}" : $"this base had places for {placed}");
+                    parts.Add(ru ? $"мест на этой {(g.Request.FromScratch ? "карте" : "основе")} нашлось {placed}" : $"this {(g.Request.FromScratch ? "map" : "base")} had places for {placed}");
                 if (accepted < placed)
                     parts.Add(ru ? $"{placed - accepted} отклонены проверкой хода (перекрыли бы путь или подъём)"
                                  : $"{placed - accepted} refused by the walk check (they would block a way or a climb)");
@@ -305,8 +305,9 @@ public static class Describe
                              + (parts.Count > 0 ? ": " + string.Join(", ", parts) + "." : "."));
             }
             else if (families.GetValueOrDefault("stairway") < asked)
-                b.AppendLine(ru ? $"Площадок с лестницами {families.GetValueOrDefault("stairway")} из {asked}: больше подходящих мест на этой основе не нашлось."
-                                : $"Platforms with stairs {families.GetValueOrDefault("stairway")} of {asked}: this base had no more places for them.");
+                // brief 35: a map from scratch has no base (the self-test, its stairway annexes asked: «на этой основе»)
+                b.AppendLine(ru ? $"Площадок с лестницами {families.GetValueOrDefault("stairway")} из {asked}: больше подходящих мест на этой {(g.Request.FromScratch ? "карте" : "основе")} не нашлось."
+                                : $"Platforms with stairs {families.GetValueOrDefault("stairway")} of {asked}: this {(g.Request.FromScratch ? "map" : "base")} had no more places for them.");
         }
         // brief 11 D2: what was destroyed, by kind, and that passage is not guaranteed
         var ruin = Path.Combine(g.RunDir, "candidate.destroyed.json");

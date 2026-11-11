@@ -11,6 +11,32 @@ public static class Versions
 
     public static readonly Entry[] All =
     {
+        new("3.62", "11.11.2026",
+            new[]
+            {
+                "Двери на картах с нуля больше не мерцают, когда открываются: дверь стала вдвое тоньше стены, стоит посередине неё и уходит вверх внутрь стены, как на известных картах. Проверки карты следят за этим",
+                "Поиск параметров: если найдена только одна из двух верхних карточек, она встаёт в левую колонку, без пустого места рядом; строка, которую спрятала сама форма (например, номер варианта при «Случайном варианте»), после очистки поиска не появляется; над первой найденной строкой карточки нет лишней черты",
+            },
+            new[]
+            {
+                "Doors on maps from scratch no longer flicker as they open: a door is half as thick as its wall now, stands in the middle of it and rises into the wall, as on well-known maps. The map's checks watch it",
+                "The parameters' search: when only one of the two top cards matches, it moves into the left column, with no empty space beside it; a row the form itself hid (the variant number while «Random variant» is on, say) does not come back when the search is cleared; the first row found in a card has no stray line over it",
+            }),
+        new("3.61", "11.11.2026",
+            new[]
+            {
+                "Телепорты, их выходы, джампады и точки появления больше не стоят рядом: вторая пара телепортов ведёт в другие места, а не в соседние клетки с первой, любые два из них — не ближе четырёх клеток, и больше двух точек появления и выходов телепортов (на вид это одинаковые площадки) рядом генератор не ставит, пока помещаются все заказанные точки появления. Проверки карты следят за этим",
+                "На странице генерации — поиск параметров: начните вводить название или слово из описания, по-русски или по-английски, с двух букв — останутся только подходящие параметры в своих секциях; стёрли — снова все",
+                "Новая карта с нуля больше не ждёт минутами на «Составлении плана отделки»: генератор сразу видит, что править на ней нечего",
+                "Страница прогона: пройденные этапы больше не превращаются в песочные часы, у каждого пройденного этапа написано, сколько он шёл, а если этап идёт дольше обычного, «Осталось» растёт и говорит об этом",
+            },
+            new[]
+            {
+                "Teleporters, their exits, jump pads and spawn points no longer stand together: a second teleporter pair joins other places, not the cells beside the first, any two of them stand four cells apart at least, and the generator puts no more than two spawn points and teleporter exits (they look like the same plate) near each other while all the spawn points asked fit. The map's checks watch it",
+                "The Generate page has a search of the parameters: start typing a name or a word of its description, in Russian or English, from two letters - only the parameters that match stay, in their sections; cleared - all of them again",
+                "A map from scratch no longer waits minutes at «Making the plan of the dressing»: the generator sees at once that there is nothing to edit on it",
+                "The run page: the stages passed no longer turn into hourglasses, every stage passed says how long it took, and a stage taking longer than usual makes «Time left» grow and say so",
+            }),
         new("3.60", "08.11.2026",
             new[]
             {

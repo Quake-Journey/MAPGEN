@@ -13,9 +13,9 @@ namespace MapgenStudio;
 public sealed partial class MainWindow
 {
     /// <summary>A run of a map from scratch at a stage: the stage under way began 20 s ago, each before it a minute before.</summary>
-    private static Generation FreshRun(string stage, bool fromScratch = true)
+    private static Generation FreshRun(string stage, bool fromScratch = true, bool deals = true)
     {
-        var g = Generation.ForSelfTest(App.Settings, stage, fromScratch);
+        var g = Generation.ForSelfTest(App.Settings, stage, fromScratch, deals);
         var order = new[] { "scratch", "start", "baseline", "plan", "attempt", "judge", "light", "gates", "cover", "done" };
         var at = Array.IndexOf(order, stage);
         var now = DateTime.Now;
@@ -104,6 +104,139 @@ public sealed partial class MainWindow
             Row(!sec.ContainsKey("redeal") && sec.ContainsKey("attempt") && Math.Abs(sec.Values.Sum() - whole) <= sec.Count,
                 $"the stages' seconds for the record: {string.Join(", ", sec.Select(kv => $"{kv.Key} {kv.Value}"))} (the whole run {whole} s)",
                 $"the stages' seconds: {string.Join(", ", sec.Select(kv => $"{kv.Key} {kv.Value}"))}, sum {sec.Values.Sum()} of {whole} s");
+
+            // brief 35 (the PO 11.11, mg_new_91126): the stages and the time left when no edit is tried
+            {
+                (List<(string key, bool done, bool now, string time)> rows, ProgressNow p) Look35(Generation g)
+                {
+                    var w = RunPage(g);
+                    return (w._runView?.StageRows.ToList() ?? new(), RunProgress.Of(g));
+                }
+                Generation Redeal()
+                {
+                    var g = FreshRun("plan", deals: false);
+                    g.StageBegan["redeal"] = DateTime.Now.AddSeconds(-33);
+                    g.SetStageForSelfTest("redeal");
+                    return g;
+                }
+                bool AllClocks(List<(string key, bool done, bool now, string time)> rows) => rows.Count > 0 && rows.All(r => !r.done && !r.now);
+                // (a) a new deal with no edit after it: ticks before, one stage under way
+                var (ra, pa) = Look35(Redeal());
+                RunProgress.OldStages = true;
+                var (ra0, pa0) = Look35(Redeal());
+                RunProgress.OldStages = false;
+                var nowRow = ra.FirstOrDefault(r => r.now);
+                Row(!AllClocks(ra) && ra.Count(r => r.now) == 1 && nowRow.key == "attempt" && ra.TakeWhile(r => !r.now).All(r => r.done)
+                    && AllClocks(ra0),
+                    $"«Новый круг правок» with no edit after it: the stages before ticked, «{Loc.T("stage.attempt")}» under way (3.60: every stage an hourglass)",
+                    $"a new deal with no edit: rows {string.Join(", ", ra.Select(r => $"{r.key}{(r.done ? "+" : r.now ? ">" : "-")}"))}; 3.60's all clocks {AllClocks(ra0)}");
+                // (b) its time is the deal's, not 0
+                Row(pa.InStage.TotalSeconds >= 30 && pa0.InStage.TotalSeconds < 2,
+                    $"the edits' stage under a new deal has gone {GenerationView.Dur(pa.InStage)} (3.60: {GenerationView.Dur(pa0.InStage)})",
+                    $"the edits' stage under a new deal: {GenerationView.Dur(pa.InStage)} (want ≥ 30 s), 3.60's {GenerationView.Dur(pa0.InStage)} (want 0)");
+                // (c) the plan's and the edits' times once the checks began - a map from scratch with nothing to deal
+                Generation Judged()
+                {
+                    var g = FreshRun("plan", deals: false);
+                    g.StageBegan["plan"] = DateTime.Now.AddSeconds(-300);
+                    g.StageBegan["judge"] = DateTime.Now.AddSeconds(-17);
+                    g.SetStageForSelfTest("judge");
+                    return g;
+                }
+                var (rc, _) = Look35(Judged());
+                RunProgress.OldStages = true;
+                var (rc0, _) = Look35(Judged());
+                RunProgress.OldStages = false;
+                string TimeOf(List<(string key, bool done, bool now, string time)> rows, string key) => rows.FirstOrDefault(r => r.key == key).time ?? "";
+                var planT = TimeOf(rc, "plan");
+                var editT = TimeOf(rc, "attempt");
+                Row(planT.Length > 0 && editT == Loc.T("run.stage.attempt.none.s") && rc.First(r => r.key == "attempt").done
+                    && TimeOf(rc0, "plan").Length == 0,
+                    $"after the checks began: «{Loc.T("stage.plan.s")}» {planT}; «{Loc.T("stage.attempt")}» {editT} (3.60: the plan's time empty)",
+                    $"after the checks began: plan «{planT}», edits «{editT}»; 3.60's plan «{TimeOf(rc0, "plan")}» (want empty)");
+                // (d) a stage past its expectation: the left line says so and grows
+                Generation Long(int seconds)
+                {
+                    var g = FreshRun("plan");
+                    g.StageBegan["plan"] = DateTime.Now.AddSeconds(-seconds);
+                    return g;
+                }
+                var later = RunProgress.StagesOf(Long(283)).SkipWhile(x => x != "plan").Skip(1).Sum(x => RunProgress.Expected(Long(283), x));
+                var p283 = RunProgress.Of(Long(283));
+                var p120 = RunProgress.Of(Long(120));
+                var line283 = RunProgress.LeftLine(Long(283), p283);
+                RunProgress.OldTimeLeft = true;
+                var p283old = RunProgress.Of(Long(283));
+                var line283old = RunProgress.LeftLine(Long(283), p283old);
+                RunProgress.OldTimeLeft = false;
+                var over = Loc.T("run.progress.left.over");
+                var overHead = over[..over.IndexOf('{')];
+                Row(line283.StartsWith(overHead, StringComparison.Ordinal) && p283.Left > p120.Left && p283.Left!.Value.TotalSeconds > later
+                    && !line283old.StartsWith(overHead, StringComparison.Ordinal) && Math.Abs(p283old.Left!.Value.TotalSeconds - later) < 1,
+                    $"a stage 283 s into its expected {RunProgress.Expected(Long(283), "plan"):0}: «{line283}» - grows with it ({p120.Left?.TotalSeconds:0} → {p283.Left?.TotalSeconds:0} s; 3.60 froze at {later:0})",
+                    $"past its expectation: «{line283}», left {p120.Left?.TotalSeconds:0} → {p283.Left?.TotalSeconds:0} s (later stages {later:0}); 3.60 «{line283old}» {p283old.Left?.TotalSeconds:0}");
+                // (e) a stage expected from the nearest player count
+                string Rec(string name, int players, int minutes, int plan) => string.Join("\n", new[]
+                {
+                    $"made={DateTime.Now.AddDays(-1):O}", "scratch=1", $"players={players}", $"minutes={minutes}", $"stage.plan={plan}",
+                });
+                foreach (var (n, pl, mi, pv) in new[] { ("mg_r2", 2, 30, 10), ("mg_r8", 8, 30, 20), ("mg_r16", 16, 60, 40) })
+                    File.WriteAllText(Path.Combine(dir, "descriptions", $"{n}.info.txt"), Rec(n, pl, mi, pv));
+                RunHistory.Forget();
+                var e12 = RunHistory.Expected("plan", 12, 30);
+                var e8 = RunHistory.Expected("plan", 8, 30);
+                var e3 = RunHistory.Expected("plan", 3, 30);
+                foreach (var n in new[] { "mg_r2", "mg_r8", "mg_r16" })
+                    File.Delete(Path.Combine(dir, "descriptions", $"{n}.info.txt"));
+                RunHistory.Forget();
+                Row(e12 == 40 && e8 == 20 && e3 == 10,
+                    $"a stage's expectation from the nearest player count: 12 players → the 16-player record ({e12} s), 8 → its own ({e8}), 3 → the duel's ({e3})",
+                    $"the nearest player count: 12 → {e12} (want 40), 8 → {e8} (want 20), 3 → {e3} (want 10)");
+                // (f) the plan card of a map from scratch: no family it skips
+                var gf = FreshRun("attempt", deals: false);
+                foreach (var (k, v) in new[] { ("digs", 5), ("windows", 17), ("rooms_copy", 2) })
+                    gf.Planned[k] = v;
+                var planRows = gf.PlanRows();
+                Row(planRows.Count == 0 && gf.NothingToDeal,
+                    "the plan card of a map from scratch: none of «Новые проходы», «Окна», «Комнаты из основы» (families it never deals)",
+                    $"the plan card of a map from scratch shows {string.Join(", ", planRows.Select(r => r.name))}");
+                // (g) the PO's own run, line by line: at no line every stage waiting
+                var his = new[]
+                {
+                    "PROGRESS stage=start map=q2mg fidelity=70 seed=91126 target=300 resume=0 elapsed=0",
+                    "PROGRESS stage=baseline elapsed=0",
+                    "PROGRESS stage=plan offered=414 budget=300 target=300 digs=5 annexes=0 storeys=0 spans=0 floods=0 windows=17 reliquids=0 stairways=0 remodels=0 blocks=0 floor_shifts=0 stair_reshapes=0 elapsed=30",
+                    "PROGRESS stage=plan-rooms copies=2 elapsed=30",
+                    "PROGRESS stage=plan-value round=0 proved=0 worthy=0 declined=7 refused=10 builds=0 can=0 have=0 target=300 large=5 ms=1806 cells=0 summed=0 tried=0/0 elapsed=32",
+                    "PROGRESS stage=plan-turns round=0 first=0,1,2,3,4,5,6,7 elapsed=32",
+                    "PROGRESS stage=redeal round=1 offered=414 fresh=0 elapsed=313",
+                    "PROGRESS stage=plan-value round=1 proved=0 worthy=0 declined=7 refused=10 builds=0 can=0 have=0 target=300 large=5 ms=1891 cells=0 summed=0 tried=0/0 elapsed=315",
+                    "PROGRESS stage=plan-exhausted round=1 tried=0 elapsed=315",
+                    "PROGRESS stage=ladder not_applied=0 proved=0 tried=0 paint=0 builds=0 whole=0 taken=0 elapsed=315",
+                    "PROGRESS stage=judge elapsed=365",
+                };
+                List<string> Fed(bool old)
+                {
+                    RunProgress.OldStages = old;
+                    var g = FreshRun("scratch", deals: false);
+                    var bad = new List<string>();
+                    foreach (var line in his)
+                    {
+                        g.TakeForSelfTest(line);
+                        var (rows, _) = Look35(g);
+                        if (AllClocks(rows))
+                            bad.Add(line[(line.IndexOf("stage=", StringComparison.Ordinal) + 6)..].Split(' ')[0]);
+                    }
+                    RunProgress.OldStages = false;
+                    return bad;
+                }
+                var badNow = Fed(false);
+                var badOld = Fed(true);
+                Row(badNow.Count == 0 && badOld.Count > 0,
+                    $"the PO's mg_new_91126 fed line by line: at no line every stage waiting (3.60: after «{string.Join("», «", badOld.Distinct())}»)",
+                    $"the PO's run fed line by line: every stage waiting after {string.Join(", ", badNow)}; 3.60 after {string.Join(", ", badOld)} (want some)");
+                Generation.Current = null;
+            }
 
             // (v) the strip over the other pages: the percent and the stage, no difference
             var strip = new RunStrip();

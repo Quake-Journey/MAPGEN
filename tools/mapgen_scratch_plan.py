@@ -1739,6 +1739,33 @@ def flights_and_ramps(P: Plan, rnd: random.Random) -> None:
     P.metrics["ramps_got"] = sum(1 for g in groups if g & P.ramps)
 
 
+# Brief 36 (the PO 11.11: «у двери мерцает текстура при её движении»): which way one walks through a door - the world
+# builder stands a door in the middle of its wall by it (mapgen_scratch_world.door_box)
+def door_across(P: Plan, d) -> int | None:
+    """The axis one walks through a door along (0: x, 1: y): its cells lie along the wall, so across is the other axis;
+    one cell by which of its sides its two spaces hold - one on each side is the way through (a powerup's nook opening
+    stands in its room's corner: the room holds three sides of it, the nook the fourth - duel_highrise 702). None when
+    nothing tells."""
+    xs = {c[0] for c in d.cells}
+    ys = {c[1] for c in d.cells}
+    if len(ys) == 1 and len(xs) > 1:
+        return 1
+    if len(xs) == 1 and len(ys) > 1:
+        return 0
+    sides = {d.a, d.b}
+    by_x = by_y = 0
+    for c in d.cells:
+        nx = (P.owner.get((c[0] - 1, c[1])), P.owner.get((c[0] + 1, c[1])))
+        ny = (P.owner.get((c[0], c[1] - 1)), P.owner.get((c[0], c[1] + 1)))
+        by_x += 4 * (set(nx) == sides and d.a != d.b) + sum(o in sides for o in nx)
+        by_y += 4 * (set(ny) == sides and d.a != d.b) + sum(o in sides for o in ny)
+    if by_x > by_y:
+        return 0
+    if by_y > by_x:
+        return 1
+    return None
+
+
 def moving_doors(P: Plan, rnd: random.Random) -> None:
     """«Двери» (brief 19 §4): as many func_door as asked, each in a level doorway of the routes (two or three cells
     wide), opening upward when one comes near - a door on a route, never a wall."""
@@ -1839,21 +1866,29 @@ def movers(P: Plan, rnd: random.Random) -> None:
                                    for (a, *_r) in P.pads)]
     rnd.shuffle(flat)
     for _ in range(want):
-        best = None
-        for a in flat[:40]:
-            ta = dijkstra(edges, a)
-            for b_ in flat[:200]:
-                if P.owner.get(b_) == P.owner.get(a) or b_ not in ta:
-                    continue
-                if best is None or ta[b_] > best[0]:
-                    best = (ta[b_], a, b_)
-        if not best:
-            break
-        walk_s, a, b_ = best
-        da = exit_cell(P, a)
-        db = exit_cell(P, b_)
-        if da is None or db is None:
-            continue
+        if OLD_MOVER_RULES:
+            best = None
+            for a in flat[:40]:
+                ta = dijkstra(edges, a)
+                for b_ in flat[:200]:
+                    if P.owner.get(b_) == P.owner.get(a) or b_ not in ta:
+                        continue
+                    if best is None or ta[b_] > best[0]:
+                        best = (ta[b_], a, b_)
+            if not best:
+                break
+            walk_s, a, b_ = best
+            da = exit_cell(P, a)
+            db = exit_cell(P, b_)
+            if da is None or db is None:
+                continue
+        else:
+            # brief 35: the farthest pair on foot whose four ends keep apart from every disc, exit, pad and spawn -
+            # and from every other pair's (TELE_PAIRS_APART): a second pair never joins the places the first joins
+            found = pair_of_ends(P, flat[:40], flat[:200], edges)
+            if found is None:
+                break
+            walk_s, a, b_, da, db = found
         P.teleports.append((a, b_, da, db))
         P.no_items.update({a, b_, da, db})
         import mapgen_scratch_fixtures as fix_mod     # brief 26: the frames' posts stand beside the discs
@@ -1913,9 +1948,99 @@ def same_floor(P: Plan, a, b, za: float, zb: float) -> bool:
     return oa == ob or frozenset((oa, ob)) in P.joined
 
 
+# Brief 35 (the PO 11.11, mg_new_91126: «ни телепорты ни джампады ни точки спавна рядом не делать», «напиханы как
+# грибы», «это делает нормальную в целом карту дерьмовой»): two teleporter pairs joined the same two places - discs 91
+# and 143 u apart, exits 64 u - and the exits, which the game draws as a spawn point's plate, stood in a row with spawn
+# points. Brief 34's «more than two like things» let two stand side by side. The PO's own rule, stricter than people's
+# maps (q2duel1 stands a spawn 162 u from an exit):
+MOVER_APART = 4          # cells between any two of a teleporter's disc, its exit, a jump pad's take-off, a spawn point
+TELE_PAIRS_APART = 8     # cells between a pair's disc or exit and another pair's
+PLATES_NEAR = 6          # cells: spawn points and teleporter exits (one plate to the eye) - no more than PLATES_MAX
+PLATES_MAX = 2
+ONE_FLOOR_DZ = 96        # one floor to the eye: a flight of steps is the same place
+EXIT_RING = (4, 6)       # a teleporter's exit from its own disc, in cells
+# the RED: 3.60's rules (a third disc only, exits 3..5 off, a spawn 4 cells off a mover); MAPGEN_OLD_MOVER_RULES=1 sets it
+# for a process importing the planner (a check, a replay) - the Studio's skeleton step does not pass it on
+OLD_MOVER_RULES = __import__("os").environ.get("MAPGEN_OLD_MOVER_RULES") == "1"
+
+
+def cell_z(P: Plan, c) -> float:
+    """The floor a plan key stands on."""
+    if c in P.owner:
+        return P.spaces[P.owner[c]].floor[c][0]
+    return getattr(P, "_door_z", {}).get(c, 0)
+
+
+def mover_marks(P: Plan, spawns=None) -> list:
+    """Brief 35: every teleporter disc and exit, jump pad take-off and spawn point - (kind, key, z, pair); `spawns` the
+    spawn keys being placed (else the plan's)."""
+    out = []
+    for i, (a, b, da, db) in enumerate(P.teleports):
+        out += [("disc", a, cell_z(P, a), i), ("disc", b, cell_z(P, b), i), ("exit", da, cell_z(P, da), i),
+                ("exit", db, cell_z(P, db), i)]
+    out += [("pad", a, z, None) for (a, _t, _T, _sp, _pi, _ya, z) in P.pads]
+    # a pad's landing: where its flight comes down - no teleporter, exit or spawn in its way (the fixtures check at 200 %,
+    # 11.11: a frame twice its size stood at a landing on an open space and the flight flew past it into the void)
+    out += [("land", t, cell_z(P, t), None) for (_a, t, *_r) in P.pads]
+    if spawns is None:
+        out += [("spawn", c, z, None) for (c, z, _ang) in P.spawns]
+    else:
+        out += [("spawn", c, cell_z(P, c), None) for c in spawns]
+    return out
+
+
+def _cheb(a, b) -> int:
+    pa, pb = phys(a), phys(b)
+    return max(abs(pa[0] - pb[0]), abs(pa[1] - pb[1]))
+
+
+# the spawns asked are never cut for the plates' rule (brief 35 item 20): the radius gives, step by step, and the plan
+# says the one it kept (P.metrics["plates_near"])
+PLATES_STEPS = (6, 5, 4, 3, 0)
+
+
+def spot_ok(P: Plan, c, kind: str, marks=None, z=None, plates_near: int | None = None) -> bool:
+    """Brief 35: may a «disc», «exit», «pad» (take-off) or «spawn» stand at c - MOVER_APART cells from every other mark
+    on its floor (two pads keep brief 34's own PAD_APART), a teleporter's end TELE_PAIRS_APART from every other pair's,
+    and an exit or a spawn not making a third plate within PLATES_NEAR. `marks`: mover_marks(P, ...) when the caller
+    holds marks the plan does not yet (a pair being chosen, spawns being picked)."""
+    if OLD_MOVER_RULES:
+        return True
+    zc = cell_z(P, c) if z is None else z
+    ms = mover_marks(P) if marks is None else marks
+    near_r = PLATES_NEAR if plates_near is None else plates_near
+    plates = []
+    for (k, m, zm, _pair) in ms:
+        if m == c:
+            return False
+        if layer_of(m) != layer_of(c) or abs(zm - zc) >= ONE_FLOOR_DZ:
+            continue
+        d = _cheb(c, m)
+        if k == "land":
+            if kind in ("disc", "exit", "spawn") and d < MOVER_APART:
+                return False
+            continue
+        if not (kind == "pad" and k == "pad") and d < MOVER_APART:
+            return False
+        if kind in ("disc", "exit") and k in ("disc", "exit") and d < TELE_PAIRS_APART:
+            return False
+        if k in ("exit", "spawn") and d <= near_r:
+            plates.append(m)
+    if kind in ("exit", "spawn") and plates:
+        if len(plates) + 1 > PLATES_MAX:
+            return False
+        # nor the third plate of one already there
+        for p_ in plates:
+            around = sum(1 for (k, m, zm, _pair) in ms if k in ("exit", "spawn") and m != p_ and layer_of(m) == layer_of(p_)
+                         and abs(zm - cell_z(P, p_)) < ONE_FLOOR_DZ and _cheb(m, p_) <= near_r)
+            if around + 2 > PLATES_MAX:
+                return False
+    return True
+
+
 def pad_spot_ok(P: Plan, a, za: float) -> bool:
-    """Brief 34: a pad may take off at a - PAD_APART cells from every other take-off on its floor, not beside a
-    teleporter's disc or exit or a spawn."""
+    """Brief 34: a pad may take off at a - PAD_APART cells from every other take-off on its floor; brief 35: and
+    MOVER_APART from every teleporter's disc and exit and every spawn (spot_ok)."""
     pa = phys(a)
 
     def near(c, d) -> bool:
@@ -1925,9 +2050,11 @@ def pad_spot_ok(P: Plan, a, za: float) -> bool:
     for (a2, _t, _T, _sp, _pi, _ya, z2) in P.pads:
         if same_floor(P, a, a2, za, z2) and near(a2, PAD_APART - 1):
             return False
-    if any(near(c, 1) for tp in P.teleports for c in tp):
-        return False
-    return not any(near(c, 1) for (c, _z, _ang) in P.spawns)
+    if OLD_MOVER_RULES:
+        if any(near(c, 1) for tp in P.teleports for c in tp):
+            return False
+        return not any(near(c, 1) for (c, _z, _ang) in P.spawns)
+    return spot_ok(P, a, "pad", z=za)
 
 
 def pads_without_reason(P: Plan) -> list:
@@ -1983,14 +2110,59 @@ def pad_flight_clear(P: Plan, s: Space, a, vh, vz, T, z_land, lift: float = 0.0)
     return False
 
 
-def exit_cell(P: Plan, c):
-    """Where one arrives from the other pad: in the pad's space, 3..5 cells from it, on plain floor nobody else
-    holds - not beside the pad (the PO, 04.11: «такие вещи нужно разносить подальше друг от друга»)."""
+def pair_of_ends(P: Plan, firsts, seconds, edges, same_space_ok=False, tries: int = 400, pair_ok=None):
+    """Brief 35: the teleporter pair the farthest apart on foot - first end among `firsts`, the other among `seconds` in
+    another space - whose discs and exits all pass spot_ok (with the pair's own ends as marks); None when none does.
+    Returns (walk seconds, a, b, exit of a, exit of b)."""
+    cands = []
+    for a in firsts:
+        if not spot_ok(P, a, "disc"):
+            continue
+        ta = dijkstra(edges, a)
+        for b in seconds:
+            if b == a or b not in ta or (not same_space_ok and P.owner.get(b) == P.owner.get(a)):
+                continue
+            if pair_ok is not None and not pair_ok(a, b):
+                continue
+            cands.append((ta[b], a, b))
+    cands.sort(key=lambda t: -t[0])
+    base = mover_marks(P)
+    for (walk_s, a, b) in cands[:tries]:
+        marks = base + [("disc", a, cell_z(P, a), -1)]
+        if not spot_ok(P, b, "disc", marks):
+            continue
+        marks = marks + [("disc", b, cell_z(P, b), -1)]
+        da = exit_cell(P, a, lambda n: _end_ok(P, n, marks, a))
+        if da is None:
+            continue
+        marks2 = marks + [("exit", da, cell_z(P, da), -1)]
+        db = exit_cell(P, b, lambda n: _end_ok(P, n, marks2, b))
+        if db is None:
+            continue
+        return walk_s, a, b, da, db
+    return None
+
+
+def _end_ok(P: Plan, n, marks, own) -> bool:
+    """An exit at n for the disc `own`: spot_ok against everything but its own disc (4..6 off by exit_cell's ring), and
+    TELE_PAIRS_APART from the other pairs' ends - its own pair's far end is far by the pair's choice."""
+    others = [m for m in marks if not (m[3] == -1)]
+    if not spot_ok(P, n, "exit", others):
+        return False
+    pair = [m for m in marks if m[3] == -1 and m[1] != own]
+    return all(_cheb(n, m[1]) >= MOVER_APART or layer_of(n) != layer_of(m[1]) for m in pair)
+
+
+def exit_cell(P: Plan, c, ok=None):
+    """Where one arrives from the other pad: in the pad's space, 3..5 cells from it (brief 35: EXIT_RING, 4..6), on plain
+    floor nobody else holds - not beside the pad (the PO, 04.11: «такие вещи нужно разносить подальше друг от друга»);
+    `ok`: brief 35's spot rule for the exit (spot_ok with the pair's marks)."""
     s = P.spaces[P.owner[c]]
+    lo, hi = (3, 5) if OLD_MOVER_RULES else EXIT_RING
     best = None
     for n, f in s.floor.items():
         dist = max(abs(n[0] - c[0]), abs(n[1] - c[1]))
-        if not (3 <= dist <= 5) or f[1] != "flat" or n in P.no_items:
+        if not (lo <= dist <= hi) or f[1] != "flat" or n in P.no_items or (ok is not None and not ok(n)):
             continue
         clear = all(s.floor.get((n[0] + dx, n[1] + dy), (None, "x"))[1] == "flat"
                     for dx in (-1, 0, 1) for dy in (-1, 0, 1))
@@ -2866,8 +3038,12 @@ def places(P: Plan, rnd: random.Random) -> None:
             pp = phys(p_)
             if math.dist((pc[0] * CELL, pc[1] * CELL, nodes[c][0]), (pp[0] * CELL, pp[1] * CELL, nodes[p_][0])) < 320:
                 return True
-        # nor beside a teleporter, its exit or a jump pad (one spawns into another's arrival)
-        return any(max(abs(pc[0] - m_[0]), abs(pc[1] - m_[1])) < 4 for m_ in movers_at)
+        # nor beside a teleporter, its exit or a jump pad (one spawns into another's arrival); brief 35: nor a third
+        # plate - spawn points and teleporter exits look alike - within PLATES_NEAR (his mg_new_91126: five in a row)
+        if OLD_MOVER_RULES:
+            return any(max(abs(pc[0] - m_[0]), abs(pc[1] - m_[1])) < 4 for m_ in movers_at)
+        return not spot_ok(P, c, "spawn", mover_marks(P, spawns=picked), plates_near=plates_r[0])
+    plates_r = [PLATES_NEAR]
     for c in sp_c:
         if len(picked) >= want:
             break
@@ -2884,7 +3060,11 @@ def places(P: Plan, rnd: random.Random) -> None:
             continue
         picked.append(c)
         used.add(c)
-    if len(picked) < want:
+    # brief 35: the spawns asked are never cut - the plates' radius gives, step by step
+    for r_ in (PLATES_STEPS if not OLD_MOVER_RULES else (PLATES_NEAR,)):
+        if len(picked) >= want:
+            break
+        plates_r[0] = r_
         for c in sp_c:
             if len(picked) >= want:
                 break
@@ -2897,6 +3077,7 @@ def places(P: Plan, rnd: random.Random) -> None:
                 continue
             picked.append(c)
             used.add(c)
+    P.metrics["plates_near"] = plates_r[0]
     for c in picked:
         P.spawns.append((c, nodes[c][0], facing(P, c)))
     # 5. ammo by its gun, small health in many rooms, shards in corridors
@@ -3052,6 +3233,19 @@ def mech_places(P: Plan, q: dict, mech: set, nodes, times, cands, free, put, use
             s = P.spaces[P.owner[key[1]]]
             near = [c for c in s.floor if c in nodes and nodes[c][1] == "flat" and c not in P.no_items
                     and c not in used and 3 <= max(abs(c[0] - key[1][0]), abs(c[1] - key[1][1])) <= 6]
+            if not OLD_MOVER_RULES:
+                # brief 35 (the presets' check, mech_ffa_all 700: this exit moved beside the other pair's end and made a
+                # third plate with two spawns): the moved exit keeps the movers' rule too - its own pair's ends
+                # MOVER_APART off, the other pairs' TELE_PAIRS_APART, no third plate
+                marks = [(k, m, z, -1 if pair == 0 else pair) for (k, m, z, pair) in mover_marks(P)
+                         if not (k == "exit" and m == db and pair == 0)]
+                near = [c for c in near if _end_ok(P, c, marks, None)]
+                if not near:
+                    from mapgen_scratch_words import item as item_word
+                    missing.append(say(f"three_approaches: выход телепорта напротив оружия «{item_word(key[0], True)}» не "
+                                       "поставлен - у него нет места вдали от других телепортов, джампадов и точек появления",
+                                       f"three_approaches: no teleporter exit opposite the {item_word(key[0], False)} - no "
+                                       "room by it away from the other teleporters, jump pads and spawn points"))
             if near:
                 nd = near[0]
                 P.teleports[0] = (a, b_, da, nd)
@@ -3878,6 +4072,8 @@ def score(P: Plan) -> float:
     # spawns
     if len(P.spawns) < q["spawns"]:
         pen += 3 * (q["spawns"] - len(P.spawns))
+    # brief 35: the plates' radius the spawns kept (PLATES_NEAR unless the spawns asked needed it to give)
+    pen += 0.3 * max(0, PLATES_NEAR - int(m.get("plates_near", PLATES_NEAR)))
     pen += 0.5 * max(0, 3 - sum(1 for s in live if s.kind == "hall"))
     # what was asked by count: every lift, pad and teleporter pair short is a heavy penalty
     got = {"lifts": len(P.lifts), "pads": len(P.pads), "teleporters": len(P.teleports), "ladders": len(P.ladders),
@@ -3964,7 +4160,11 @@ def score(P: Plan) -> float:
                         "и к площадке рядом не ведёт лестница",
                         "fewer places where a pad's flight misses walls and ceiling, three cells from another pad at least "
                         "and no stair near by leading to the ledge"),
-               "teleporters": ("меньше пар дальних мест с выходом на ровный пол", "fewer pairs of far places with level floor to arrive on"),
+               # brief 35: a pair is made only where it joins other places than the pairs before it
+               "teleporters": ("ещё одна пара вела бы в те же места, что уже связанные, или стояла бы рядом с джампадом "
+                               "или точкой появления",
+                               "one more pair would join the places already joined, or stand beside a jump pad or a spawn "
+                               "point"),
                "ladders": ("меньше подъёмов 96..320 с ровным полом у стены", "fewer rises of 96..320 with level floor at the wall"),
                "doors": ("меньше ровных проходов в 2-3 клетки", "fewer level doorways two or three cells wide"),
                "pits": ("меньше залов с провалом посередине", "fewer halls with a sunken middle"),
