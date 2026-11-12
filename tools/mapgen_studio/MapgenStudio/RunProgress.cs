@@ -195,6 +195,20 @@ public static class RunProgress
                                TimeSpan.FromSeconds(exp[at]));
     }
 
+    /// <summary>3.62's words past a stage's expectation («не меньше меньше минуты»), for the self-test's RED.</summary>
+    internal static bool OldOverWords;
+
+    /// <summary>
+    /// The time left past a stage's expectation (the PO 11.11, his mg_new_8695: «Осталось не меньше меньше минуты - это
+    /// как?»): under a minute in seconds, by fives - «не меньше 25 с»; else as <see cref="LeftWords"/>.
+    /// </summary>
+    public static string OverWords(TimeSpan t)
+    {
+        if (OldOverWords || t.TotalSeconds >= 60)
+            return LeftWords(t);
+        return Loc.F("run.progress.sec", Math.Max(5, (int)Math.Ceiling(t.TotalSeconds / 5) * 5));
+    }
+
     /// <summary>The time left in round words: «меньше минуты», «6 мин», «1 ч 05 мин».</summary>
     public static string LeftWords(TimeSpan t)
     {
@@ -214,7 +228,7 @@ public static class RunProgress
         if (p.Soon)
             return Loc.T("run.progress.left.soon");
         if (p.Over)
-            return Loc.F("run.progress.left.over", LeftWords(left), GenerationView.Dur(p.Usual), GenerationView.Dur(p.InStage));
+            return Loc.F("run.progress.left.over", OverWords(left), GenerationView.Dur(p.Usual), GenerationView.Dur(p.InStage));
         return Loc.F("run.progress.left", LeftWords(left), (DateTime.Now + left).ToString("HH:mm"));
     }
 }

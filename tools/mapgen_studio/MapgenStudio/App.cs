@@ -30,6 +30,9 @@ public sealed class App : Application
 
     private static bool s_themed;
 
+    /// <summary>The height a list opens to at most (the self-test holds every list of the pages within it).</summary>
+    public const double ComboRowsHigh = 880;
+
     /// <summary>The window look: the Fluent theme and the light or dark one chosen. Once.</summary>
     public static void LoadTheme()
     {
@@ -37,6 +40,12 @@ public sealed class App : Application
             return;
         s_themed = true;
         Current.Styles.Add(new FluentAvaloniaTheme());
+        // the PO 12.11 («в меню скроллбар - так недопустимо»): a list opens with every row shown - the theme's 504 px
+        // scrolled the spawn points' 24 and the item practice's 18; 880 holds 24 rows and stays inside a 1080 screen
+        Current.Styles.Add(new Avalonia.Styling.Style(x => x.OfType<Avalonia.Controls.ComboBox>())
+        {
+            Setters = { new Avalonia.Styling.Setter(Avalonia.Controls.ComboBox.MaxDropDownHeightProperty, ComboRowsHigh) },
+        });
         ApplyTheme(Settings.Theme);
     }
 
@@ -160,6 +169,62 @@ public sealed class App : Application
                     report = "FAIL the plan test threw -- " + ex;
                 }
                 File.WriteAllText(Path.Combine(Settings.ProgramDir, "scheme_test.txt"), report);
+                Environment.Exit(report.Contains("FAIL") ? 1 : 0);
+            }
+            if (Environment.GetCommandLineArgs().Contains("--menus-test"))
+            {
+                string report;
+                try
+                {
+                    report = MainWindow.MenusTest();
+                }
+                catch (Exception ex)
+                {
+                    report = "FAIL the menus' test threw -- " + ex;
+                }
+                File.WriteAllText(Path.Combine(Settings.ProgramDir, "menus_test.txt"), report);
+                Environment.Exit(report.Contains("FAIL") ? 1 : 0);
+            }
+            if (Environment.GetCommandLineArgs().Contains("--tries-test"))
+            {
+                string report;
+                try
+                {
+                    report = SchemeTest.TriesTest(Environment.GetCommandLineArgs());
+                }
+                catch (Exception ex)
+                {
+                    report = "FAIL the tries' test threw -- " + ex;
+                }
+                File.WriteAllText(Path.Combine(Settings.ProgramDir, "tries_test.txt"), report);
+                Environment.Exit(report.Contains("FAIL") ? 1 : 0);
+            }
+            if (Environment.GetCommandLineArgs().Contains("--walk-code-test"))
+            {
+                string report;
+                try
+                {
+                    report = SchemeTest.WalkCodeTest(Environment.GetCommandLineArgs());
+                }
+                catch (Exception ex)
+                {
+                    report = "FAIL the walk code's test threw -- " + ex;
+                }
+                File.WriteAllText(Path.Combine(Settings.ProgramDir, "walk_code_test.txt"), report);
+                Environment.Exit(report.Contains("FAIL") ? 1 : 0);
+            }
+            if (Environment.GetCommandLineArgs().Contains("--show-test"))
+            {
+                string report;
+                try
+                {
+                    report = SchemeTest.ShowTest(Environment.GetCommandLineArgs());
+                }
+                catch (Exception ex)
+                {
+                    report = "FAIL the pictures' test threw -- " + ex;
+                }
+                File.WriteAllText(Path.Combine(Settings.ProgramDir, "show_test.txt"), report);
                 Environment.Exit(report.Contains("FAIL") ? 1 : 0);
             }
             if (Environment.GetCommandLineArgs().Contains("--generate-test"))

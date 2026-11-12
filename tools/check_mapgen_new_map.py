@@ -411,7 +411,10 @@ def asked_got(r: dict, asked: dict, plan: dict | None = None) -> list:
         out.append(("corridors with a turn", int(plan["corridor_turns"]) >= 1,
                     f"{plan['corridor_turns']} corridor pieces with a turn (an L or a U)"))
     if plan and plan.get("pool_share_max") is not None:
-        out.append(("pools: none over a third of its hall", float(plan["pool_share_max"]) <= 0.34,
+        # the PO 12.11: a deep pool one swims across takes up to 45 % (q2dm1's is most of its hall); the pits a third
+        import mapgen_scratch_plan as pm_
+        cap = pm_.POOL_SHARE if pm_.deep_pools_only(pm_.defaults(dict(asked or {}))) else 0.34
+        out.append((f"pools: none over {'a third' if cap < 0.4 else f'{cap:.0%}'} of its hall", float(plan["pool_share_max"]) <= cap + 0.005,
                     f"the largest {float(plan['pool_share_max']):.0%} of its hall"))
     if r.get("hanging_brushes") is not None:
         # brief 20 D4, the PO 04.11 («висящих в воздухе архитектурных штучек»): nothing stands out of a wall half way
@@ -538,15 +541,19 @@ def mechanics(r: dict, asked: dict, players: int) -> list:
         out.append(("mechanic «halves»: the key gun and the stack on different halves (RG<->RA >= 7 s, brief 19 §6)",
                     t is not None and t >= 7.0, f"{t} s"))
     if "key_gun_ledge" in mech:
+        # the PO 12.11 («туже рельсу класть в шаге от двух арморов - глупо», «рельса должна быть заслуженной»): the key
+        # gun up on its ledge (or earned by its way - a nook, a vault, a dive, the open: the «prizes earned» row measures
+        # it), no armour asked by it any more (3.65 asked one within 2.2 s); «majors apart» keeps the armours off it
         k = (idx.get("weapon_railgun") or [None])[0]
         ok, said = False, "no railgun"
         if k is not None:
             h = items[k].get("above_around", items[k]["height"])
-            arm = [i for c in ("item_armor_combat", "item_armor_jacket") for i in idx.get(c, [])]
+            way = dict((c_, k_) for c_, k_ in ((asked.get("_plan") or {}).get("prize_kinds") or [])).get("weapon_railgun")
+            arm = [i for c in ("item_armor_combat", "item_armor_jacket", "item_armor_body") for i in idx.get(c, [])]
             near = min((x for x in (_t(r, k, i) for i in arm) if x is not None), default=None)
-            ok = h >= 128 and near is not None and near <= 2.2
-            said = f"{h} over the floor around, an armour {near} s away"
-        out.append(("mechanic «key gun on a ledge»: 128 up or more (brief 19 §6), an armour within 2.2 s", ok, said))
+            ok = h >= 128 or way in ("jump", "hard", "water", "lift", "ladder", "exposed")
+            said = f"{h} over the floor around" + (f", its way: {way}" if way else "") + f", the nearest armour {near} s away"
+        out.append(("mechanic «key gun on a ledge»: 128 up or more or earned by its way (brief 19 §6, the PO 12.11)", ok, said))
     if "asymmetry" in mech:
         best = 0.0
         n = len(items)
@@ -680,6 +687,130 @@ def mover_rows(w) -> list:
     return mover_rows_of(sv.mover_marks(w))
 
 
+PRIZES = ("weapon_railgun", "item_health_mega", "item_quad", "item_invulnerability", "item_armor_body", "item_power_shield")
+POWERUP_PRIZES = ("item_health_mega", "item_quad", "item_invulnerability", "item_armor_body", "item_power_shield")
+
+
+def item_rows_of(st: dict, asked: dict | None) -> list:
+    """The PO 12.11 (mg_new_84719: a yellow and a green armour 231 u apart, the railgun 270 u off, on a floor one walks
+    to): «нельзя класть рядом предметы одного класса», «рельса должна быть заслуженной», «плыть под водой … за важными
+    целями». From mapgen_item_practice.study of the map:
+      majors apart - no pair of weapons, armours, powerups nearer than the knowledge base's rule for their two classes
+                     (people's lower quartile; a short walk, or near straight and not far on foot either);
+      prizes earned - the railgun, mega, quad, invulnerability, body armour, power shield each need a jump, a swim, a
+                     lift, a ladder, a pad or a teleporter from most spawn points (effort >= 0.5), lie behind a door a
+                     button opens, or lie in the open seen from five sides or more (under fire); powerups asked «on the
+                     floor» (easy) are not held to it;
+      under water  - when asked, that many prizes taken by a swim from most spawn points."""
+    import mapgen_scratch_plan as pm
+    q = pm.defaults(dict(asked or {}))
+    near = []
+    for a, b, units, secs in st.get("pairs") or []:
+        if units <= 32:
+            continue                    # an item team on one spot (the powerups' cycle)
+        t_need, d_need = pm.majors_need(a, b, q)
+        if pm.majors_close(units, secs if secs is not None else 99.0, t_need, d_need):
+            near.append(f"{a.split('_', 1)[1]}/{b.split('_', 1)[1]} {units} u {secs} s (rule {d_need:.0f} u {t_need:.1f} s)")
+    rows = [("majors apart: no weapon, armour or powerup near another of a class people keep apart", not near,
+             "; ".join(near[:4]) + (f" and {len(near) - 4} more" if len(near) > 4 else "") if near else "none near")]
+    easy = q.get("powerup_access") == "easy"
+    lazy, earned = [], []
+    for it in st.get("items") or []:
+        if it["cls"] not in PRIZES or "effort" not in it:
+            continue
+        if easy and it["cls"] in POWERUP_PRIZES:
+            continue
+        how = ", ".join(k for k, v in (it.get("moves") or {}).items() if v >= 0.3)
+        tag = f"{it['cls'].split('_', 1)[1]} effort {it['effort']:.2f} sides {it['sides']}" + (f" ({how})" if how else "")
+        if it.get("button_door"):
+            tag += " (behind a door a button opens)"
+        if it.get("submerged"):
+            tag += " (under water: one dives and swims out)"
+        (earned if it["effort"] >= 0.5 or it["sides"] >= 5 or it.get("button_door") or it.get("submerged") else lazy).append(tag)
+    rows.append(("prizes earned: the railgun, mega, quad, body armour need a jump, a swim, a mover or the open under fire",
+                 not lazy, ("walked to: " + "; ".join(lazy)) if lazy else f"{len(earned)} earned"))
+    want = int(q.get("underwater") or 0)
+    if want or (q.get("prize_access") == "water"):
+        # swum to (a vault behind a drowned doorway) or lying in water (a well's bottom: one falls in, swims out)
+        swum = [it["cls"].split("_", 1)[1] for it in st.get("items") or [] if it["cls"] in PRIZES
+                and ((it.get("moves") or {}).get("swim", 0) >= 0.5 or it.get("submerged"))]
+        need = max(1, want)
+        rows.append((f"under water: {need} prize(s) or more taken by a swim", len(swum) >= need,
+                     f"{len(swum)}: {', '.join(swum) or 'none'}"))
+    return rows
+
+
+ITEM_STUDY: dict = {}
+
+
+def item_rows(path: Path, asked: dict | None) -> list:
+    import mapgen_item_practice as practice
+    ITEM_STUDY[str(path)] = practice.study(str(path))
+    return item_rows_of(ITEM_STUDY[str(path)], asked)
+
+
+WATER_DEEP = 160        # people's deep bodies 120..432 (mapgen_water_practice): one swims under, 224 the median
+WATER_POOL = 12         # a pool's water open to the air, in cells of 64: people's deep pools 14..195 (q2dm1 55)
+WATER_TUBE = 320        # a stretch under a roof one swims along, units: people's 368..1024 (q2dm1 368)
+
+
+def water_rows_of(st: dict, asked: dict | None, plan: dict | None = None, items: dict | None = None) -> list:
+    """The PO 12.11 on his mg_new_7775 («никакого глубокого бассейна по типу как на q2dm1 в котором плывешь за рейлом -
+    я не получил, только узкая небольшая подводная нычка под стенкой», «на q2dm4 или q2dm5 там вообще многоуровневые
+    конструкции с множеством глубоких водоемов»). From mapgen_water_practice.study of the map (the water as the game
+    reads it):
+      deep pool   - water asked (or a prize under water): a body WATER_DEEP deep with a pool open to the air of
+                    WATER_POOL cells or more;
+      tube        - a prize under water, or two pools or more: a stretch under a roof WATER_TUBE long, 64 high or more;
+      levels      - water on several levels asked: deep water on two heights or more;
+      worth       - the PO 12.11 («вот приплыл сюда, а там пусто»): every deep water (pools joined by tubes: one) leads
+                    to a weapon, an armour or a powerup taken by a swim (or lying in it) within 192 u of it - people's
+                    deep water: 9 bodies of 10 (q2dm1's railgun, q2dm2's quad, q2dm4's quad, mega, BFG, q2dm5's mega)."""
+    import mapgen_scratch_plan as pm
+    q = pm.defaults(dict(asked or {}))
+    if not pm.water_deep(q) or not (float(q.get("water") or 0) > 0 or int(q.get("underwater") or 0) > 0):
+        return []
+    water = [b for b in st.get("bodies") or [] if b.get("kind") == "water"]
+    deep = [b for b in water if b["depth_max"] >= WATER_DEEP]
+    pool = max((p[0] for b in deep for p in b["pools"]), default=0) / 4096.0
+    rows = [("deep pool: water one swims in, as on well-known maps", bool(deep) and pool >= WATER_POOL,
+             f"deepest {max((b['depth_max'] for b in water), default=0):.0f} (from {WATER_DEEP}), its widest pool "
+             f"{pool:.0f} cells of 64 (from {WATER_POOL}; q2dm1 55)")]
+    pools = (plan or {}).get("pools") or []
+    if int(q.get("underwater") or 0) > 0 or len(pools) >= 2 or q.get("water_body") == "levels":
+        tube = max((t[0] for b in water for t in b["tubes"] if t[2] >= 64), default=0)
+        rows.append(("tube under water: one swims along it, as on q2dm1", tube >= WATER_TUBE,
+                     f"the longest {tube:.0f} u (from {WATER_TUBE}; q2dm1 368)"))
+    if items is not None:
+        import mapgen_item_practice as ip
+        swum = [it for it in items.get("items") or [] if ip.kind_of(it["cls"])
+                and ((it.get("moves") or {}).get("swim", 0) >= 0.5 or it.get("submerged"))]
+        empty, held = [], []
+        for b in deep:
+            if b["open_area"] < 6 * 4096:
+                continue
+            x0, y0, x1, y1 = b["box"]
+            mine = [it["cls"].split("_", 1)[1] for it in swum if x0 - 192 <= it["at"][0] <= x1 + 192
+                    and y0 - 192 <= it["at"][1] <= y1 + 192 and b["bottom"] - 32 <= it["at"][2] <= b["surface"] + 192]
+            if mine:
+                held.append("/".join(mine))
+            else:
+                empty.append(f"{(x0 + x1) // 2} {(y0 + y1) // 2} {b['surface']:.0f}")
+        rows.append(("water worth: every deep water leads to a valuable item", not empty,
+                     (f"{len(empty)} of {len(empty) + len(held)} with none: " + "; ".join(empty))
+                     if empty else f"{len(held)}: " + ", ".join(held)))
+    if q.get("water_body") == "levels":
+        lv = sorted({int(round(b["surface"] / 32.0) * 32) for b in deep})
+        rows.append(("water levels: deep water on two heights or more", len(lv) >= 2,
+                     f"{len(lv)} levels: {' '.join(str(v) for v in lv)}"))
+    return rows
+
+
+def water_rows(path: Path, asked: dict | None, plan: dict | None = None, items: dict | None = None) -> list:
+    import mapgen_water_practice as wp
+    return water_rows_of(wp.study(str(path)), asked, plan, items)
+
+
 def report(path: Path, players: int, asked: dict | None, plan: dict | None = None, doors: list | None = None,
            skeleton_map: Path | None = None) -> int:
     r = survey.survey(path, doors=doors)
@@ -695,6 +826,16 @@ def report(path: Path, players: int, asked: dict | None, plan: dict | None = Non
         import mapgen_space_survey as space_survey
         r["space"] = space_survey.space_part(Path(path))
     res = judge(r, players, asked, plan)
+    # the PO 12.11: the items' pick-up worth (a map from scratch only - the PO's rule, not a donor's measure)
+    try:
+        res = list(res) + item_rows(path, asked)
+    except Exception as e:  # noqa: BLE001 - a measure that cannot be taken is said, the other rows stand
+        res = list(res) + [("majors apart and prizes earned", False, f"not measured: {type(e).__name__}: {e}")]
+    # the PO 12.11: the water as well-known maps build it (deep pools, tubes under water, levels)
+    try:
+        res = list(res) + water_rows(path, asked, plan, ITEM_STUDY.get(str(path)))
+    except Exception as e:  # noqa: BLE001
+        res = list(res) + [("deep pool: water one swims in, as on well-known maps", False, f"not measured: {type(e).__name__}: {e}")]
     fails = 0
     for name, ok, said in res:
         print(f"  {'PASS' if ok else 'FAIL'}  {name}  -- {said}")

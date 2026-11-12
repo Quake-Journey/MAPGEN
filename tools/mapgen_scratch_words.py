@@ -120,7 +120,9 @@ def powerup_sites(sites) -> tuple[str, str]:
     """«Главные предметы» made: «мега — в нише, красная броня — на постаменте» in both languages."""
     def one(cls, kind, ru):
         short = POWERUP_SHORT.get(cls)
-        name = short[0 if ru else 1] if short else cls.replace("item_", "").replace("_", " ")
+        # a prize that is not a powerup (the railgun in a nook, 3.66) by its name, not its class (his mg_new_56432 of
+        # 12.11: «weapon railgun — в нише»)
+        name = short[0 if ru else 1] if short else item(cls, ru).lower()
         return f"{name} — {pick(SITES, kind, ru)}"
     return tuple(", ".join(one(c, k, ru) for c, k in sites) for ru in (True, False))
 
@@ -185,6 +187,49 @@ def ways_made(w: dict) -> tuple[str, str]:
 
 def item(cls: str, ru: bool) -> str:
     return pick(ITEMS, cls, ru, cls.replace("item_", "").replace("weapon_", "").upper())
+
+
+# the PO 12.11: the water as well-known maps build it (mapgen_scratch_plan: deep pools, tubes under water)
+WATER_BODIES = {"people": ("глубокие, как на известных картах", "deep, as on well-known maps"),
+                "levels": ("на разных уровнях, с трубами", "several levels, with tubes"),
+                "shallow": ("мелкие ямы по пояс", "shallow pits, waist-deep")}
+
+
+def water_body(key) -> tuple[str, str]:
+    return WATER_BODIES.get(key or "people", WATER_BODIES["people"])
+
+
+def water_made(pools: list, tubes: list, prize_tubes: list) -> tuple[str, str]:
+    """«бассейнов 2 (25 и 16 клеток по 64, глубина 224), подводных труб 2 (512, 448 ед.)»."""
+    if not pools:
+        return NONE
+    sizes_ru = " и ".join(str(p[0]) for p in pools)
+    sizes_en = " and ".join(str(p[0]) for p in pools)
+    deep = sorted({int(p[1]) for p in pools})
+    ln = [int(n) * 64 for n in tubes] + [int(n) * 64 for _c, n in prize_tubes]
+    ru = f"бассейнов {len(pools)} ({sizes_ru} клеток по 64, глубина {', '.join(map(str, deep))})"
+    en = f"{len(pools)} pools ({sizes_en} cells of 64, {', '.join(map(str, deep))} deep)"
+    heights = sorted({int(p[2]) for p in pools})
+    if len(heights) > 1:
+        ru += f" на {len(heights)} высотах"
+        en += f" on {len(heights)} heights"
+    if ln:
+        ru += f", подводных труб {len(ln)} ({', '.join(map(str, ln))} ед.)"
+        en += f", {len(ln)} tubes under water ({', '.join(map(str, ln))} u)"
+    return ru, en
+
+
+def under_made(kinds: list, prize_tubes: list) -> tuple[str, str]:
+    """«1: рельса — в комнате за подводной трубой 512 ед.»; a prize at a pool's bottom «на дне бассейна»."""
+    tube = {c: int(n) * 64 for c, n in prize_tubes}
+    wet = [c for c, k in kinds if k == "water"]
+    if not wet:
+        return "0", "0"
+    ru = ", ".join(f"{item(c, True).lower()} — " + (f"в комнате за подводной трубой {tube[c]} ед." if c in tube else "на дне бассейна")
+                   for c in wet)
+    en = ", ".join(f"{item(c, False).lower()} - " + (f"in a room past a tube under water {tube[c]} u" if c in tube else "at a pool's bottom")
+                   for c in wet)
+    return f"{len(wet)}: {ru}", f"{len(wet)}: {en}"
 
 
 def source(src: str | None, theme: str | None, maps: list, ru: bool) -> str:

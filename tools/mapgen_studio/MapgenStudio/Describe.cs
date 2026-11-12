@@ -475,6 +475,9 @@ public static class Describe
         t.TotalHours >= 1 ? (ru ? $"{(int)t.TotalHours} ч {t.Minutes} мин" : $"{(int)t.TotalHours} h {t.Minutes} min")
                           : (ru ? $"{Math.Max(1, (int)t.TotalMinutes)} мин" : $"{Math.Max(1, (int)t.TotalMinutes)} min");
 
+    /// <summary>A pickup's name in the description's words (the scheme's walk names the items it reaches).</summary>
+    internal static string PickupName(string cls, bool ru) => Pickup(cls, ru);
+
     private static string Pickup(string cls, bool ru) => cls switch
     {
         "weapon_rocketlauncher" => ru ? "ракетница" : "rocket launcher",

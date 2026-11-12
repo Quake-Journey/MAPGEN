@@ -121,7 +121,8 @@ public sealed record Lamp(Vector3 At, Vector3 Colour, float Level, Vector3? Towa
 /// </summary>
 public static class StageArt
 {
-    public readonly record struct State(float Morph, float Glow, float Vis, bool Lamps, bool Portals, string Caption);
+    public readonly record struct State(float Morph, float Glow, float Vis, bool Lamps, bool Portals, string Caption,
+                                        bool Walk = false, float WalkT = 0);
 
     private static float Ease(float t) => t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
 
@@ -172,12 +173,46 @@ public static class StageArt
                 caption = Loc.F("art.light.ready", s.Lamps.Count);
             }
         }
+        else if (run is { Running: true, Stage: "scratch" } && s.Source.StartsWith("skeleton:"))
+        {
+            // the PO 11.11: the skeleton built step by step - its step in words
+            caption = s.ShowCaption;
+        }
+        else if (run is { Running: true, Stage: "gates" } && s.Walk is { } wk && !SchemeModel.OldShows)
+        {
+            // the PO 11.11: «карта ходьбы … визуализировалась как ходьба, ножками» - the walk's own seconds now: the
+            // floor it reached by then, the footprints that far, the items reached named
+            var t = wk.Now(DateTime.Now);
+            var over = t > wk.Span;
+            return new State(morph, 0, over ? 2f : t / wk.Span, false, false,
+                             Loc.F("art.walk", wk.Spawns.Count, Seconds(Math.Min(t, wk.Span)), wk.Trails.Count(x => x.T <= t),
+                                   wk.Trails.Count + wk.Lost.Count), true, t);
+        }
+        else if (run is { Running: true, Stage: "relight" } && !OldRelight)
+        {
+            // the PO 11.11 (his mg_new_8695, «Свет на готовой карте»): «добавить бы визуализации света на готовой карте, а
+            // то само освещение визуализируется фонариками, а тут нет» - the finished map's own lamps, glowing and
+            // breathing while its light is fitted and the map lit again (the step says no progress of its own)
+            var breath = 0.5f + 0.5f * (float)Math.Sin(DateTime.Now.TimeOfDay.TotalSeconds * 1.6);
+            lamps = true;
+            glow = 0.7f + 0.3f * breath;
+            caption = Loc.F("art.relight", s.Lamps.Count);
+        }
         return new State(morph, glow, vis, lamps && s.Lamps.Count > 0, portals, caption);
     }
 
+    /// <summary>Seconds of the walk as its items' names say them: one decimal, the language's own mark («2,5 с», «2.5 s»).</summary>
+    public static string Seconds(float t) =>
+        t.ToString("0.0", Loc.Language == "ru" ? new System.Globalization.CultureInfo("ru-RU") : System.Globalization.CultureInfo.InvariantCulture);
+
     /// <summary>Whether the picture moves now - the scheme then draws thirty frames a second instead of ten.</summary>
     public static bool Moving(Generation? run, SchemeModel.Snapshot? s) =>
-        s != null && run is { Running: true } r && ((r.Stage == "warp" && s.Warp != null) || r.Stage == "light");
+        s != null && run is { Running: true } r && ((r.Stage == "warp" && s.Warp != null) || r.Stage == "light"
+                                                    || (r.Stage == "relight" && !OldRelight)
+                                                    || (r.Stage == "gates" && s.Walk != null && !SchemeModel.OldShows));
+
+    /// <summary>3.62's finished-map light stage (no lamps drawn), for the self-test's RED.</summary>
+    internal static bool OldRelight;
 
     /// <summary>A light entity's colour: «_color» as given (0..1 or 0..255), white when none.</summary>
     public static Vector3 Colour(string? v)

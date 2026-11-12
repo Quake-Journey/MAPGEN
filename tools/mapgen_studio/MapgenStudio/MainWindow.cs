@@ -2849,6 +2849,10 @@ reshaping families dropped at the plan (their own rules refuse them on this map)
         // brief 23: the style maps' list, the six annex sizes, the presets
         PresetsSelfTest(b);
         ProgressSelfTest(b);
+        ShowsSelfTest(b);       // the PO 11.11: the skeleton's steps and the map's walk on the scheme
+        ItemsSelfTest(b);       // the PO 12.11: the items' pick-up worth - the rows, the request, the presets
+        WaterSelfTest(b);       // the PO 12.11: deep pools and tubes - the row, the request, the presets; no relight
+        CombosScroll(b);        // the PO 12.11: no drop-down list of the page scrolls
         SearchSelfTest(b);
         PagesSelfTest(b);       // brief 33: each run its page's rows, presets every row
         Loc.Language = keepLang;

@@ -69,6 +69,32 @@ public sealed class ScratchParams
     public string PowerupAccess { get; set; } = "";
     /// <summary>The stack's armour and mega (and a power shield) taking turns in one nook, as on q2dm8.</summary>
     public bool PowerupCycle { get; set; }
+    /* the PO 12.11 (his mg_new_84719: two armours side by side, the railgun a step off them on a floor one walks to):
+       «айтемы, оружие, броня, паверапы … должны иметь ценность подбора», «рельса должна быть заслуженной», «плыть под
+       водой … за важными целями», «сформировал логику расположения и делал миксы пресетов» - from the knowledge base
+       of people's maps (tools/mapgen_item_practice.py, tools/mapgen_item_rules.json) */
+    /// <summary>How the prizes (railgun, mega, quad, body armour…) are earned - "" default (people) | people | nooks |
+    /// water | exposed.</summary>
+    public string PrizeAccess { get; set; } = "";
+    /// <summary>How many prizes lie under water (a dive, a swim to a vault) - 0..3.</summary>
+    public int Underwater { get; set; }
+    /// <summary>How far apart the majors keep - "" default (people: their lower quartile) | wide (their median).</summary>
+    public string ItemSpacing { get; set; } = "";
+    /// <summary>Whose item practice - "" default (all the maps) | a family (q2dm, q2duel …) | two joined by «+».</summary>
+    public string ItemPractice { get; set; } = "";
+    public static readonly string[] PrizeAccesses = { "", "people", "nooks", "water", "exposed" };
+    /* the PO 12.11 (his mg_new_7775): «никакого глубокого бассейна по типу как на q2dm1 в котором плывешь за рейлом»,
+       «на q2dm4 или q2dm5 там вообще многоуровневые конструкции с множеством глубоких водоемов» */
+    /// <summary>What the water is - "" default (people: deep pools, two or more joined by tubes under water) | people |
+    /// levels (pools on several floors joined by tubes, q2dm4 and q2dm5) | shallow (3.66's pits, waist-deep).</summary>
+    public string WaterBody { get; set; } = "";
+    public static readonly string[] WaterBodies = { "", "people", "levels", "shallow" };
+    public static readonly string[] ItemPractices =
+    {
+        "", "mix", "q2dm", "q2duel", "q2rdm", "ztn2dm", "omf", "koldduel1", "ptrip", "match1",
+        "q2duel+ztn2dm", "q2dm+q2rdm", "q2duel+koldduel1", "q2dm+ztn2dm", "q2rdm+omf", "ptrip+match1", "q2dm+q2duel",
+        "ztn2dm+q2rdm",
+    };
     /// <summary>3.46, the PO 05.11 (medusa_b1): round shapes - "" none | few | some | many.</summary>
     public string Round { get; set; } = "";
     /// <summary>Which of them: corners, apses, podiums (null - all three).</summary>
@@ -250,6 +276,12 @@ public sealed class ScratchParams
         if (Tone.Length > 0) o["tone"] = Tone;
         if (PowerupAccess.Length > 0) o["powerup_access"] = PowerupAccess;
         if (PowerupCycle) o["powerup_cycle"] = true;
+        // the prizes' ways and the dives are built in rooms and halls: the page shows those rows only there
+        if (PrizeAccess.Length > 0 && Shape is not ("space" or "tower")) o["prize_access"] = PrizeAccess;
+        if (Underwater > 0 && Shape is not ("space" or "tower")) o["underwater"] = Underwater;
+        if (WaterBody.Length > 0 && Shape is not ("space" or "tower")) o["water_body"] = WaterBody;
+        if (ItemSpacing.Length > 0) o["item_spacing"] = ItemSpacing;
+        if (ItemPractice.Length > 0) o["item_practice"] = ItemPractice;
         if (Shape == "space")
         {
             if (Islands > 0) o["islands"] = Islands;
@@ -438,6 +470,11 @@ public sealed class ScratchParams
         p.Tone = S(o["tone"]);
         p.PowerupAccess = S(o["powerup_access"]);
         p.PowerupCycle = o["powerup_cycle"] is JsonValue pc && pc.TryGetValue<bool>(out var pcb) && pcb;
+        p.PrizeAccess = S(o["prize_access"]);
+        p.Underwater = Math.Clamp(I("underwater", 0), 0, 3);
+        p.WaterBody = S(o["water_body"]);
+        p.ItemSpacing = S(o["item_spacing"]);
+        p.ItemPractice = S(o["item_practice"]);
         p.Round = S(o["round"]);
         if (o["round_kinds"] is JsonArray rk)
             p.RoundKinds = rk.Select(S).Where(x => x.Length > 0).ToList();

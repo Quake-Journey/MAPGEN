@@ -193,8 +193,11 @@ skeleton itself — rooms, levels, the ways between them, the places of weapons,
 well-known maps, builds a real map from the skeleton, dresses it with its edits and checks it.
 
 The easiest start is a preset: «Load» → a category (duels, free for all, big maps, team games, worlds, water and lava,
-weapons, ways, mechanics, look, open space, tower — 187 factory presets in all) → a preset; then «Start generating».
-Any parameter of a preset can be changed before the start.
+weapons, the practice of well-known maps, prizes under water, prizes in nooks and under fire, ways, mechanics, look, open space,
+tower — 287 factory presets in all) → a preset; then «Start generating». Any parameter of a preset can be changed
+before the start. The «Practice of well-known maps» presets take from q2dm, q2duel, q2rdm, ztn2dm, omf, koldduel1, ptrip,
+match1 (and their mixes) not walls and rooms but the item practice: how far apart the valuable items stand and how the
+prizes are earned.
 
 The parameters are laid out in cards. Each list starts with «Default» — the value the generator chooses itself from
 the player count; which one is said in brackets. A new map is built from what this page sets and nothing else: the
@@ -232,9 +235,15 @@ the player count; which one is said in brackets. A new map is built from what th
   and take covers or not. **«Random variant»** (on by default) — each run takes a new number itself, and each time
   another map comes out; the number is in the map's name. To repeat a map, turn it off and enter the number: the same
   parameters and number give the same map.
-- **Liquids** — the floor's shares under water, lava and slime, and deadly pits. Water lies only in hollows, each with
-  steps up. «Let water stand above the floor» (off) lets rooms be flooded over the floor when more water is asked
-  than the pits hold; without it the shortfall is said in the description.
+- **Liquids** — the floor's shares under water, lava and slime, and deadly pits. Water lies only in hollows.
+  **«Water bodies»** — what the water is, as on well-known maps (the Studio studied the water of all 40). «Deep, as on
+  well-known maps» (the default) — pools 224 units deep, as on q2dm1 and q2dm5: one swims in them and climbs out
+  anywhere round them, a pool takes up to 45 % of its hall; two pools or more are joined by a tube under water that runs
+  under the rooms' floors. «Several levels, with tubes» — pools in halls of different heights joined by tubes under
+  water, as on q2dm4 and q2dm5. «Shallow pits, waist-deep» — water in the halls' pits with steps up, as before 3.67.
+  «Let water stand above the floor» (off) lets rooms be flooded over the floor when more water is asked than the pits
+  hold; without it the shortfall is said in the description. The finished map's check looks for a deep pool, a tube
+  under water and, when asked, water on several levels.
 - **Ways** — stairs, ramps, lifts, jump pads, teleporters, ladders, drops, doors and windows between rooms. Jump pads
   and teleporters look as on well-known maps: a lit disc on a plinth for a jump up, a slanted plate with arrows for a
   flight away, arrows running over it the way one flies; a teleporter stands in a frame of two posts with a
@@ -257,9 +266,29 @@ the player count; which one is said in brackets. A new map is built from what th
   stack, a jump pad over a pit, a lift as a weak spot, a ladder under an item. The check looks for each one turned on.
 - **Weapons and items** — how many of each weapon, the armour and the stack (sets or your own), shards, ammo and
   health per player, the share of major items up high. **How hard the powerups are to get**: easy — on a pedestal
-  under its own light; medium — in a nook in a wall, every other one raised (jump in); hard — in a nook behind a door
-  a button on the wall opens; mixed. **«Armour and mega taking turns in one nook»** — the red armour and the mega
-  appear by turns in one place, as on q2dm8.
+  under its own light; medium — in a nook in a wall raised over the floor: one jumps in; hard — in a nook behind a door
+  a button on the wall opens; mixed — the most valuable hard, the rest medium. **«Armour and mega taking turns in one
+  nook»** — the red armour and the mega appear by turns in one place, as on q2dm8.
+
+  Every valuable item must be worth picking up: take it, and the next one is a walk away. So two armours never lie
+  together, a weapon never by a weapon or an armour, the powerups never by each other. The distances come from
+  well-known maps (q2dm, q2duel, q2rdm, ztn2dm, omf, koldduel1, ptrip, match1): valuable items stand no nearer than three
+  in four items on those maps do. The finished map's check measures every pair.
+  - **How the prizes are earned** — the railgun, mega, quad, invulnerability and body armour are taken with an effort,
+    as on well-known maps (q2dm1's railgun is swum for, ztn2dm3's jumped for, q2duel5's taken under fire from three
+    sides). «As on well-known maps» (the default) chooses each prize's way as often as well-known maps take it; «In nooks» — a
+    nook in the wall one jumps into (the most valuable behind a door with a button); «Under water» — each prize dived
+    or swum for; «In the open under fire» — the weapon and the armour in the middle of a hall three ways or more lead
+    into. When the skeleton has no room for a way, the prize goes into a nook to jump into, and the map's record says
+    so. The finished map's check sees that from most spawn points no prize is just walked to — a jump, water, a lift, a
+    ladder, a jump pad or a teleporter is needed — or that it is seen from five sides or more.
+  - **Prizes under water** — how many prizes (the most valuable first) are taken only by a swim: in a room of their own
+    a tube under water 384–768 units long leads to from a deep pool under the floors, as to q2dm1's railgun (the tube
+    comes up in the room's own pool, there is no other way in), or at a deep pool's bottom, as q2dm2's quad. With no
+    water asked, one pool is made for the prize.
+  - **Valuable items apart** — «As on well-known maps» (the default) or «Wider» — by the median of well-known maps.
+  - **Whose item practice** — which well-known maps give these distances and ways: all of them (the default), a family
+    (q2dm, q2duel, q2rdm, ztn2dm) or one map (omf, koldduel1, ptrip, match1), or a mix of two. No map is copied.
 - **Style** — **textures**: «Like well-known maps» (the default: the generator takes one of q2dm, q2duel, ztn2dm,
   koldduel1, omf, ptrip, match1, kaktus and dresses the map in its wall, floor and ceiling textures, its trims, lamps
   and tinted light), «The chosen maps» (a button with every map of the game, a search and ticks; only their dressing
@@ -350,6 +379,11 @@ the run has gone and when it began. The buttons are on the right.
 
 **The stages on the scheme.** Each stage shows on the scheme itself:
 
+- **The map's skeleton** (a map from scratch) — while the generator tries layouts, each layout tried appears on the
+  scheme at once. The words say how many layouts are tried and how many of them made a skeleton; the best so far is
+  marked «this one the best so far». Then the chosen skeleton is built step by step: the places, the halls, the
+  corridors, the ways between them, the floors' heights, water and pits, the stairs, lifts and teleporters, weapons,
+  armour and spawn points. A tower grows storey by storey, islands rise by height. The words say the step under way.
 - **The base's frame changing** — the scheme shows the base itself easing into its new shape and back while the
   generator tries the frame. Its parts are tinted apart, the orange lines are the parts' edges, the item signs move
   with the map. The words at the top right say the size and the parts' spread.
@@ -360,6 +394,12 @@ the run has gone and when it began. The buttons are on the right.
 - **Light and visibility — the light.** Each lamp of the map glows in its colour; rays spread from the lamps as the
   direct light is worked out, and the glow pulses through the bounced light. Spotlights show where they point. The
   words say how many lamps and how much is done.
+- **The map's checks** — the map walked on foot. From every spawn point footprints go to the weapons, armour and
+  power-ups — left and right steps, a walker at the front. The floor reached so far fills with colour: cyan where it
+  was reached early, violet where late. A way through a teleporter, a lift or a jump pad is drawn. An item found is
+  named with its seconds on foot from the nearest spawn point, an item no one can reach is named in red. The words say
+  the seconds walked and how many items are found.
+- **Light on the finished map** — the finished map's lamps glow while its light is fitted and the map is lit again.
 
 ![Full screen](screens/en/run_full.png)
 

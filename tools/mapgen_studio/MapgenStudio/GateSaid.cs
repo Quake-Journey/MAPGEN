@@ -22,6 +22,19 @@ public static class GateSaid
     internal static string N(string v) => double.TryParse(v, NumberStyles.Float, Inv, out var d)
         ? Math.Round(d, Math.Abs(d) >= 100 ? 0 : 2).ToString(Inv) : v;
 
+    /// <summary>An item the check names short («armor_combat», «railgun») in the description's words.</summary>
+    private static string ItemWords(string shortName)
+    {
+        var ru = Loc.Language == "ru";
+        foreach (var prefix in new[] { "", "item_", "weapon_" })
+            if (Describe.PickupName(prefix + shortName, ru) is { Length: > 0 } w && w != prefix + shortName)
+                return w;
+        return shortName;
+    }
+
+    private static string Sec(string v) =>
+        double.TryParse(v, NumberStyles.Float, Inv, out var d) ? StageArt.Seconds((float)d) : v;
+
     public static string Words(string what, string said)
     {
         what = Loc.WithoutAfterRuin(what).Trim();
@@ -62,6 +75,91 @@ public static class GateSaid
             return Loc.T("lib.gates.said.norecords");
         switch (key)
         {
+            // the PO 12.11: the items' pick-up worth - which items, how far, the rule; which prizes are walked to
+            case "gate.majors apart":
+            {
+                var pairs = Regex.Matches(said, @"([a-z_]+)/([a-z_]+) (\d+) u ([\d.]+|None) s \(rule (\d+) u ([\d.]+) s\)");
+                if (pairs.Count == 0)
+                    break;
+                var more = M(said, @"and (\d+) more$");
+                return string.Join("; ", pairs.Select(p => Loc.F("lib.gates.said.majors", ItemWords(p.Groups[1].Value),
+                                                                 ItemWords(p.Groups[2].Value), p.Groups[3].Value, Sec(p.Groups[4].Value),
+                                                                 p.Groups[5].Value, Sec(p.Groups[6].Value))))
+                       + (more.Success ? Loc.F("lib.gates.said.majors.more", more.Groups[1].Value) : "");
+            }
+            case "gate.prizes earned":
+                if (said.StartsWith("walked to: "))
+                    return Loc.F("lib.gates.said.walked", string.Join(", ", said["walked to: ".Length..].Split("; ")
+                                                                                 .Select(x => ItemWords(x.Split(' ')[0]))));
+                break;
+            case "gate.under water":
+                if ((m = M(said, @"^(\d+): (.*)$")).Success)
+                    return m.Groups[2].Value == "none" ? Loc.T("lib.gates.said.swum.none")
+                        : Loc.F("lib.gates.said.swum", string.Join(", ", m.Groups[2].Value.Split(", ").Select(ItemWords)));
+                break;
+            // brief 21+: where each powerup (and a prize put in a nook) lies, as the access asked - in words (his
+            // mg_new_56432 of 12.11: «armor_body hard; weapon_railgun medium (jump in) - one unlit» in English)
+            case "gate.powerups":
+            {
+                var unlit = said.EndsWith(" - one unlit");
+                var body = unlit ? said[..^" - one unlit".Length] : said;
+                var notHad = M(body, @" \(not had: (.*)\)$");
+                if (notHad.Success)
+                    body = body[..notHad.Index];
+                var parts = new List<string>();
+                foreach (var one in body.Split("; "))
+                {
+                    var sp = one.IndexOf(' ');
+                    if (sp <= 0 || !Loc.Has($"lib.gates.said.site.{one[(sp + 1)..]}"))
+                        return null;
+                    parts.Add($"{ItemWords(one[..sp])} — {Loc.T($"lib.gates.said.site.{one[(sp + 1)..]}")}");
+                }
+                return string.Join("; ", parts)
+                       + (notHad.Success ? Loc.F("lib.gates.said.site.nothad", notHad.Groups[1].Value) : "")
+                       + (unlit ? Loc.T("lib.gates.said.site.unlit") : "");
+            }
+            case "gate.mechanic «clock»":
+                if ((m = M(said, @"^heights (-?\d+)/(-?\d+), exits (\d+)/(\d+)( \(nook\))?$")).Success)
+                    return Loc.F("lib.gates.said.clock", m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Value, m.Groups[4].Value)
+                           + (m.Groups[5].Success ? Loc.T("lib.gates.said.clock.nook") : "");
+                break;
+            // the PO 12.11: the water as well-known maps build it
+            case "gate.deep pool":
+                if ((m = M(said, @"^deepest (\d+) \(from (\d+)\), its widest pool (\d+) cells of 64 \(from (\d+); q2dm1 55\)$")).Success)
+                    return Loc.F("lib.gates.said.deeppool", m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Value, m.Groups[4].Value);
+                break;
+            case "gate.tube under water":
+                if ((m = M(said, @"^the longest (\d+) u \(from (\d+); q2dm1 368\)$")).Success)
+                    return Loc.F("lib.gates.said.tube", m.Groups[1].Value, m.Groups[2].Value);
+                break;
+            // the PO 12.11 («приплыл сюда, а там пусто»): what the game frees at spawn, a spawn in a lift's column
+            case "gate.pickups.spawn":
+                if ((m = M(said, @"^(-?\d+) lost, (-?\d+) blocked(?:: (.*))?$")).Success)
+                {
+                    var each = new List<string>();
+                    if (m.Groups[3].Success)
+                        foreach (var one in m.Groups[3].Value.Split("; "))
+                        {
+                            var w = M(one, @"^([a-z_]+) at \(([-\d, ]+)\)");
+                            if (w.Success)
+                                each.Add(Loc.F("lib.gates.said.lost.one",
+                                               w.Groups[1].Value.StartsWith("info_player") ? Loc.T("lib.gates.said.lost.spawn") : ItemWords(w.Groups[1].Value),
+                                               w.Groups[2].Value.Replace(",", "")));
+                        }
+                    return Loc.F("lib.gates.said.lost", m.Groups[1].Value, m.Groups[2].Value) + (each.Count > 0 ? ": " + string.Join("; ", each) : "");
+                }
+                break;
+            case "gate.water worth":
+                if ((m = M(said, @"^(\d+) of (\d+) with none: (.*)$")).Success)
+                    return Loc.F("lib.gates.said.worth.empty", m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Value);
+                if ((m = M(said, @"^\d+: (.*)$")).Success)
+                    return Loc.F("lib.gates.said.worth", string.Join(", ", m.Groups[1].Value.Split(", ")
+                        .Select(g => string.Join(" и ", g.Split('/').Select(ItemWords)))));
+                break;
+            case "gate.water levels":
+                if ((m = M(said, @"^(\d+) levels: (.*)$")).Success)
+                    return Loc.F("lib.gates.said.waterlevels", m.Groups[1].Value, m.Groups[2].Value);
+                break;
             case "gate.lit":
                 if ((m = M(said, @"^floor at 255 ([\d.]+)%, median (\d+), top tenth (\d+); walls at 255 ([\d.]+)%")).Success)
                     return Loc.F("lib.gates.said.lit", m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Value, m.Groups[4].Value);
@@ -145,6 +243,11 @@ public static class GateSaid
             case "gate.mechanic «key gun on a ledge»":
                 if ((m = M(said, @"^(-?\d+) over the floor around, an armour ([\d.]+) s away")).Success)
                     return Loc.F("lib.gates.said.ledge", m.Groups[1].Value, m.Groups[2].Value);
+                // 3.66 (the PO 12.11): its way, the nearest armour - none asked by it any more
+                if ((m = M(said, @"^(-?\d+) over the floor around(?:, its way: ([a-z]+))?, the nearest armour ([\d.]+|None) s away")).Success)
+                    return Loc.F("lib.gates.said.ledge2", m.Groups[1].Value,
+                                 m.Groups[2].Success && Loc.Has($"lib.gates.said.way.{m.Groups[2].Value}") ? Loc.T($"lib.gates.said.way.{m.Groups[2].Value}") : "",
+                                 Sec(m.Groups[3].Value));
                 break;
             case "gate.nothing hanging":
                 // 3.60: every piece in words - «hangs from the ceiling» and «in the air» too (the PO's mg_new_594 on a

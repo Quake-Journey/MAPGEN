@@ -7,6 +7,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.LogicalTree;
 using Avalonia.Media;
+using Avalonia.VisualTree;
 using FluentAvalonia.UI.Controls;
 
 namespace MapgenStudio;
@@ -350,6 +351,116 @@ public sealed partial class MainWindow
         return presenter;
     }
 
+    /// <summary>
+    /// The PO 12.11: no menu of «Загрузить» scrolls - its content no wider than the menu lets it be (a name that is wider
+    /// puts a scroll bar across the bottom and hides the last line) and no higher than a 1080 screen.
+    /// </summary>
+    /// <summary>`--menus-test`: the self-test's row of «Загрузить»'s menus alone, into menus_test.txt.</summary>
+    internal static string MenusTest()
+    {
+        var b = new StringBuilder();
+        App.Settings.ScratchMode = true;
+        var page = new MainWindow { _page = "generate" };
+        page.Rebuild();
+        LayOut(page, ScreenSizes[1], unfold: false);
+        PresetMenusScroll(page, b);
+        CombosScroll(b);
+        return b.ToString();
+    }
+
+    /// <summary>
+    /// The PO 12.11 («в меню скроллбар - так недопустимо … проверяй это и прочее»): every list of the generate page - a map
+    /// of rooms, an open space, a tower, a map from a ready one - opened as it opens: its rows no higher than the list
+    /// lets them be (a list with more rows than fit scrolls).
+    /// </summary>
+    internal static void CombosScroll(StringBuilder b)
+    {
+        var s = App.Settings;
+        var keepScratch = s.Scratch.Save();
+        var keepMode = s.ScratchMode;
+        var bad = new List<string>();
+        var lists = 0;
+        try
+        {
+            foreach (var (mode, shape, page) in new[] { (true, "", "generate"), (true, "space", "generate"), (true, "tower", "generate"),
+                                                          (false, "", "generate"), (true, "", "settings") })
+            {
+                s.ScratchMode = mode;
+                var p = ScratchParams.Load(keepScratch);
+                p.Shape = shape;
+                s.Scratch = p;
+                var w = new MainWindow { _page = page };
+                w.Rebuild();
+                LayOut(w, ScreenSizes[1], unfold: true);
+                foreach (var cb in w.GetLogicalDescendants().OfType<ComboBox>().Where(c => c.ItemCount > 0))
+                {
+                    lists++;
+                    var rows = cb.Items.Cast<object>().Select(x => new ComboBoxItem { Content = x?.ToString() ?? "" }).ToList();
+                    var panel = new StackPanel();
+                    foreach (var r in rows)
+                        panel.Children.Add(r);
+                    var tw = new Window { Content = panel };
+                    LayOut(tw, new Size(900, 900), unfold: false);
+                    // the rows' own height (measured unbounded: the window would stretch them to its own)
+                    panel.Measure(new Size(Math.Max(cb.Bounds.Width, 240), double.PositiveInfinity));
+                    var high = panel.DesiredSize.Height + 8;
+                    if (high > cb.MaxDropDownHeight)
+                        bad.Add($"{page} {(mode ? "scratch" + (shape.Length > 0 ? "/" + shape : "") : "base")} «{ToolTip.GetTip(cb) as string ?? cb.Name}»: {cb.ItemCount} rows {high:0} > {cb.MaxDropDownHeight:0} px");
+                }
+            }
+        }
+        finally
+        {
+            s.Scratch = ScratchParams.Load(keepScratch);
+            s.ScratchMode = keepMode;
+        }
+        b.AppendLine(bad.Count == 0
+            ? $"PASS the generate (rooms, open space, tower, a ready map) and settings pages' {lists} lists open with every row shown, none scrolls"
+            : $"FAIL the generate and settings pages: {bad.Count} of {lists} lists scroll - {string.Join("; ", bad.Take(12))}");
+    }
+
+    internal static void PresetMenusScroll(MainWindow page, StringBuilder b)
+    {
+        var keepLang = Loc.Language;
+        var bad = new List<string>();
+        var menus = 0;
+        try
+        {
+            foreach (var lang in new[] { "ru", "en" })
+            {
+                Loc.Language = lang;
+                var heads = page.PresetMenu(page.CurrentPreset());
+                var lists = new List<(string name, List<MenuItem> rows)> { ("«" + Loc.T("preset.load") + "»", heads) };
+                foreach (var h in heads.ToList())
+                {
+                    var inner = h.Items.OfType<MenuItem>().ToList();
+                    h.Items.Clear();
+                    if (inner.Count > 0)
+                        lists.Add(($"«{h.Header}»", inner));
+                }
+                foreach (var (name, rows) in lists)
+                {
+                    menus++;
+                    var shown = OpenedFlyout(new MenuFlyout { ItemsSource = rows }, out _, out var size);
+                    var sv = shown.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
+                    var across = sv != null && sv.Extent.Width > sv.Viewport.Width + 1;
+                    var down = sv != null && sv.Extent.Height > sv.Viewport.Height + 1;
+                    // laid out in a window 900 high (a 1080 screen less the bar): «down» is a menu higher than the screen
+                    if (across || down)
+                        bad.Add($"{lang} {name}: {(across ? $"across {sv!.Extent.Width:0} > {sv.Viewport.Width:0}" : "")}"
+                                + $"{(down ? $" down {sv!.Extent.Height:0} > {sv.Viewport.Height:0}" : "")} {size.Width:0} x {size.Height:0} px");
+                }
+            }
+        }
+        finally
+        {
+            Loc.Language = keepLang;
+        }
+        b.AppendLine(bad.Count == 0
+            ? $"PASS «Загрузить»: none of its {menus} menus (the categories and each one's presets, Russian and English) scrolls across or down"
+            : $"FAIL «Загрузить»: {bad.Count} of {menus} menus scroll - {string.Join("; ", bad.Take(6))}");
+    }
+
     /// <summary>A Quake II map's head and nothing else - enough for a list or for the style's check.</summary>
     private static void FakeBsp(string path)
     {
@@ -580,9 +691,14 @@ public sealed partial class MainWindow
                 sub.Measure(new Size(456, double.PositiveInfinity));
                 var subHigh = sub.DesiredSize.Height;
                 var factoryHeads = fresh.Count(h => Presets.FactoryCategories(Presets.Scratch).Any(c => Presets.CategoryName(Presets.FactoryPrefix + c) == h.Header as string));
-                Row(factoryHeads == 15 && Presets.Factory(Presets.Scratch).Count == 187 && subShown == rows.Count && subHigh > 0 && subHigh < 900,
-                    $"«Загрузить» of a new map: 15 factory categories, 187 presets (13 of open space, 14 of a tower); the longest, «{longest.Header}», {rows.Count} lines {subHigh:0} px high",
+                // the PO 12.11: four more categories, a hundred presets of the items' pick-up worth (each at most 26 lines)
+                Row(factoryHeads == 19 && Presets.Factory(Presets.Scratch).Count == 287 && subShown == rows.Count && subHigh > 0 && subHigh < 900,
+                    $"«Загрузить» of a new map: 19 factory categories, 287 presets (13 of open space, 14 of a tower, 100 of the items); the longest, «{longest.Header}», {rows.Count} lines {subHigh:0} px high",
                     $"«Загрузить» of a new map: {factoryHeads} factory categories, {Presets.Factory(Presets.Scratch).Count} presets; «{longest.Header}» {subShown} of {rows.Count} lines shown, {subHigh:0} px high");
+                // the PO 12.11 (Bugs\1\2026-11-12 11_18_36): «У тебя в меню скроллбар - так недопустимо» - a category's name
+                // wider than the menu gave it a scroll bar across, which hid the last category. Every menu of «Загрузить» - the
+                // categories and each category's presets - in both languages, laid out as it opens: no scroll bar either way
+                PresetMenusScroll(page, b);
             }
             page.LoadPreset(back ?? vertical);
             var e2 = page._presetEdit?.IsEnabled;

@@ -716,8 +716,11 @@ def plan(P: pm.Plan, rnd: random.Random) -> None:
     if lost:
         P.failed = f"tower: spaces not joined both ways ({len(lost)}: {', '.join(P.spaces[i].kind for i in lost)})"
         return
+    pm.rec("storeys", P)
     teleporters(P, rnd, storeys)
+    pm.rec("movers", P)
     place(P, rnd, storeys, perch_spaces, shaft_spaces)
+    pm.rec("items", P)
     if P.failed:
         return
     import mapgen_scratch_fixtures as fix_mod     # brief 32: the pads', frames' and plates' sizes
@@ -836,6 +839,17 @@ def place(P: pm.Plan, rnd: random.Random, storeys: list, perches: list, shafts: 
         P.items.append((cls, c, P.spaces[P.owner[c]].floor[c][0], note))
         taken.add(c)
 
+    t_cache: dict = {}
+
+    def times_of(c):
+        if c not in t_cache:
+            t_cache[c] = pm.dijkstra(edges, c)
+        return t_cache[c]
+
+    def apart(cls, c) -> bool:
+        """The PO 12.11: a major item apart from every major placed (pm.majors_apart)."""
+        return pm.majors_apart(P, cls, c, P.spaces[P.owner[c]].floor[c][0], times_of)
+
     walk = [s for st in storeys for s in [st["gallery"]] + st["rooms"]]
     want_sp = int(q["spawns"])
     def at(c):
@@ -907,10 +921,14 @@ def place(P: pm.Plan, rnd: random.Random, storeys: list, perches: list, shafts: 
     sites = []
     for cls in order:
         near = cls in ("item_health_mega", "item_armor_body")
-        for s in ([u for u in upper if u in hosts] if near else hosts):
+        tries_ = [u for u in upper if u in hosts] if near else hosts
+        if not pm.OLD_MAJORS:
+            # the PO 12.11: the places that keep apart from the majors placed first (their order kept)
+            tries_ = sorted(tries_, key=lambda s_: 0 if any(apart(cls, x) for x in free(s_)) else 1)
+        for s in tries_:
             c = free(s)
             if c:
-                cc = rnd.choice(c)
+                cc = rnd.choice([x for x in c if apart(cls, x)] or c)
                 put(cls, cc, "on a perch only a pad reaches" if s in perches else "high in the tower")
                 if cls in pm.POWERUPS:
                     P.pedestals.append((cc, P.spaces[P.owner[cc]].floor[cc][0], cls))
@@ -925,7 +943,7 @@ def place(P: pm.Plan, rnd: random.Random, storeys: list, perches: list, shafts: 
     for s in [p_ for p_ in perches if p_ in hosts]:
         for cls in ("weapon_railgun", "weapon_rocketlauncher"):
             if cls in weapons and free(s):
-                cc = rnd.choice(free(s))
+                cc = rnd.choice([x for x in free(s) if apart(cls, x)] or free(s))
                 put(cls, cc, "on a perch only a pad reaches")
                 weapons.remove(cls)
                 ammo = pm.AMMO_OF.get(cls)
@@ -943,7 +961,20 @@ def place(P: pm.Plan, rnd: random.Random, storeys: list, perches: list, shafts: 
     for cls in others + weapons:
         pool.sort(key=lambda s: (count[s.id], rnd.random()))
         s = pool[0]
-        c = free(s)
+        # the PO 12.11: the first room or gallery in turn with a place apart from every major placed
+        pick = None if pm.OLD_MAJORS else next(((s_, ok_) for s_ in pool for ok_ in [[x for x in free(s_) if apart(cls, x)]] if ok_),
+                                                None)
+        if pick:
+            s, c = pick
+        else:
+            c = free(s)
+            if not pm.OLD_MAJORS:
+                # nothing keeps the rule: the place farthest from the majors over every room and gallery
+                every = [(s_, x) for s_ in pool for x in free(s_)]
+                far = pm.farthest_from_majors(P, [x for _s, x in every], lambda x: P.spaces[P.owner[x]].floor[x][0])
+                if far is not None:
+                    s = next(s_ for s_, x in every if x == far)
+                    c = [far]
         if not c:
             continue
         cc = rnd.choice(c)
@@ -988,6 +1019,8 @@ def lights(P: pm.Plan) -> None:
 
 def score(P: pm.Plan) -> float:
     q, m = P.params, P.metrics
+    # the PO 12.11: the majors' pick-up worth - none near another
+    m["majors_near"] = [] if pm.OLD_MAJORS else pm.majors_near(P, pm.plan_graph(P)[1])
     over = m.get("floor_area", 0) - q["floor_area"]
     # a tower forced larger than asked (its smallest form) is not held to the asked floor, but the smaller of them first
     # (4-player towers of 4.5..4.7 M u2 for 3.0 asked, the class's band to 4.6, 06.11)

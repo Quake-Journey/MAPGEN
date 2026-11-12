@@ -175,6 +175,41 @@ public sealed partial class MainWindow
                     && !line283old.StartsWith(overHead, StringComparison.Ordinal) && Math.Abs(p283old.Left!.Value.TotalSeconds - later) < 1,
                     $"a stage 283 s into its expected {RunProgress.Expected(Long(283), "plan"):0}: «{line283}» - grows with it ({p120.Left?.TotalSeconds:0} → {p283.Left?.TotalSeconds:0} s; 3.60 froze at {later:0})",
                     $"past its expectation: «{line283}», left {p120.Left?.TotalSeconds:0} → {p283.Left?.TotalSeconds:0} s (later stages {later:0}); 3.60 «{line283old}» {p283old.Left?.TotalSeconds:0}");
+                // (d2) the PO 11.11 (mg_new_8695): «Осталось не меньше меньше минуты - это как?» - a last stage past its
+                // expectation with under a minute left says the seconds
+                Generation LongCover()
+                {
+                    // the run's own last stage (no «Обложка» where covers are off after a generation)
+                    var g = FreshRun("gates");
+                    var last = RunProgress.StagesOf(g).Last(x => x != "done");
+                    g.SetStageForSelfTest(last);
+                    g.StageBegan[last] = DateTime.Now.AddSeconds(-(RunProgress.Expected(g, last) + 40));
+                    return g;
+                }
+                var pc = RunProgress.Of(LongCover());
+                var lineC = RunProgress.LeftLine(LongCover(), pc);
+                RunProgress.OldOverWords = true;
+                var lineCold = RunProgress.LeftLine(LongCover(), RunProgress.Of(LongCover()));
+                RunProgress.OldOverWords = false;
+                var under = Loc.T("run.progress.under.minute");
+                Row(pc.Over && pc.Left!.Value.TotalSeconds < 60 && !lineC.Contains(under) && lineC.StartsWith(overHead, StringComparison.Ordinal)
+                    && lineCold.Contains(under),
+                    $"the last stage past its expectation, {pc.Left?.TotalSeconds:0} s left: «{lineC}» (3.62: «{lineCold}»)",
+                    $"under a minute past the expectation: «{lineC}»; 3.62's way «{lineCold}»");
+                // (d3) the PO 11.11: «добавить бы визуализации света на готовой карте» - the finished map's lamps drawn
+                // and moving while its light is fitted
+                var lit = new SchemeModel.Snapshot();
+                lit.Lamps.Add(new Lamp(System.Numerics.Vector3.Zero, System.Numerics.Vector3.One, 300, null));
+                var relight = FreshRun("cover");
+                relight.SetStageForSelfTest("relight");
+                var art = StageArt.Now(relight, lit);
+                var moving = StageArt.Moving(relight, lit);
+                StageArt.OldRelight = true;
+                var artOld = StageArt.Now(relight, lit);
+                StageArt.OldRelight = false;
+                Row(art.Lamps && art.Glow > 0.5f && moving && art.Caption == Loc.F("art.relight", 1) && !artOld.Lamps,
+                    $"«{Loc.T("stage.relight")}»: the map's lamps drawn, glowing {art.Glow:0.00}, the picture moving, «{art.Caption}» (3.62: no lamps)",
+                    $"«{Loc.T("stage.relight")}»: lamps {art.Lamps}, glow {art.Glow:0.00}, moving {moving}, «{art.Caption}»; 3.62's way lamps {artOld.Lamps}");
                 // (e) a stage expected from the nearest player count
                 string Rec(string name, int players, int minutes, int plan) => string.Join("\n", new[]
                 {

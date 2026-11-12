@@ -676,6 +676,17 @@ def place_items(P: pm.Plan, rnd: random.Random) -> bool:
     def free(s: pm.Space, r: int = 1) -> list:
         return [c for c in s.floor if c not in taken and inner(P, c, r)] or [c for c in s.floor if c not in taken and inner(P, c, 0)]
 
+    t_cache: dict = {}
+
+    def times_of(c):
+        if c not in t_cache:
+            t_cache[c] = pm.dijkstra(edges, c)
+        return t_cache[c]
+
+    def apart(cls: str, c) -> bool:
+        """The PO 12.11: a major item apart from every major placed (pm.majors_apart)."""
+        return pm.majors_apart(P, cls, c, floor_z(P, c), times_of)
+
     def put(cls: str, c, note: str = "") -> None:
         P.items.append((cls, c, floor_z(P, c), note))
         taken.add(c)
@@ -752,11 +763,19 @@ def place_items(P: pm.Plan, rnd: random.Random) -> bool:
     sites = []
     for cls in order:
         pool = hosts or mids or decks
-        s = pool.pop(0) if hosts else pool[0]
+        # the PO 12.11: the perch (the island) whose places keep apart from the majors placed, the highest such first
+        apart_s = None if pm.OLD_MAJORS else next((s_ for s_ in pool if any(apart(cls, x) for x in free(s_, 1))), None)
+        if apart_s is not None and hosts:
+            hosts.remove(apart_s)
+            s = apart_s
+        elif apart_s is not None:
+            s = apart_s
+        else:
+            s = pool.pop(0) if hosts else pool[0]
         c = free(s, 1)
         if not c:
             continue
-        cc = rnd.choice(c)
+        cc = rnd.choice([x for x in c if apart(cls, x)] or c)
         put(cls, cc, "on a perch only a pad reaches" if s.id in pad_only else "on an island")
         P.pedestals = getattr(P, "pedestals", [])
         if cls in pm.POWERUPS:
@@ -766,7 +785,7 @@ def place_items(P: pm.Plan, rnd: random.Random) -> bool:
         s = hosts.pop(0)
         c = free(s, 1)
         if c:
-            put("weapon_railgun", rnd.choice(c), "on a perch only a pad reaches")
+            put("weapon_railgun", rnd.choice([x for x in c if apart("weapon_railgun", x)] or c), "on a perch only a pad reaches")
             weapons.remove("weapon_railgun")
     # the armours and the rest of the guns over the walkers: at most two majors to a group, mids first
     others = [cls for cls in ("item_armor_combat", "item_armor_jacket", "item_adrenaline") for _ in range(int(stack.get(cls, 0)))]
@@ -777,10 +796,25 @@ def place_items(P: pm.Plan, rnd: random.Random) -> bool:
     for cls in others + weapons:
         if cls == "item_adrenaline":
             s = min(walkers, key=lambda s: s.base)
+            turn = [s]
         else:
             pool_spaces.sort(key=lambda s: (count[s.id], rnd.random()))
             s = pool_spaces[0]
-        c = free(s, 1)
+            turn = list(pool_spaces)
+        # the PO 12.11: the first island in turn with a place apart from every major placed
+        pick = None if pm.OLD_MAJORS else next(((s_, ok_) for s_ in turn for ok_ in [[x for x in free(s_, 1) if apart(cls, x)]]
+                                                 if ok_), None)
+        if pick:
+            s, c = pick
+        else:
+            c = free(s, 1)
+            if not pm.OLD_MAJORS:
+                # no island keeps the rule: the place farthest from the majors over all of them
+                every = [(s_, x) for s_ in turn for x in free(s_, 1)]
+                far = pm.farthest_from_majors(P, [x for _s, x in every], lambda x: floor_z(P, x))
+                if far is not None:
+                    s = next(s_ for s_, x in every if x == far)
+                    c = [far]
         if not c:
             continue
         cc = rnd.choice(c)
@@ -841,13 +875,17 @@ def plan(P: pm.Plan, rnd: random.Random) -> None:
     if not isles:
         P.failed = "space: the islands do not fit the footprint"
         return
+    pm.rec("islands", P)
     br = bridge(P, isles, rnd)
     groups_of(P, isles, br)
+    pm.rec("bridges", P)
     if not link(P, isles, rnd):
         return
     railings(P, rnd)
+    pm.rec("movers", P)
     if not place_items(P, rnd):
         return
+    pm.rec("items", P)
     import mapgen_scratch_fixtures as fix_mod     # brief 32: the pads', frames' and plates' sizes
     fix_mod.plan_sizes(P)
     lights(P)
@@ -869,6 +907,9 @@ def score(P: pm.Plan) -> float:
     span, the pads, the spawns' spread."""
     q, m = P.params, P.metrics
     pen = 3.0 * abs(m.get("islands", 0) - q["islands"])
+    # the PO 12.11: the majors' pick-up worth - none near another
+    m["majors_near"] = [] if pm.OLD_MAJORS else pm.majors_near(P, pm.plan_graph(P)[1])
+    pen += 8.0 * len(m["majors_near"])
     # «только по джампаду» is a floor: at least the perches asked; more than half the islands so is no longer a map one
     # walks (q2_q3dm17: 4 of 12)
     pen += 4.0 * max(0, q["pad_only"] - m.get("pad_only", 0))

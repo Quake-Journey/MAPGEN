@@ -11,6 +11,81 @@ public static class Versions
 
     public static readonly Entry[] All =
     {
+        new("3.67", "12.11.2026",
+            new[]
+            {
+                "Вода на картах с нуля — как на известных картах (изучены все 40: у q2dm1, q2dm2, q2dm4, q2dm5, q2rdm13 глубокие бассейны и подводные трубы): бассейны глубиной 224 единицы, в которых плавают и выныривают на край где угодно; бассейн занимает до 45 % зала. Два бассейна и больше соединяются подводной трубой под полами комнат",
+                "Приз под водой — как рельсотрон на q2dm1: из глубокого бассейна подводная труба 384–768 единиц под полами ведёт в отдельную комнату с призом, труба выходит в бассейн самой комнаты, другого входа нет. Или на дне глубокого бассейна, как квад на q2dm2. Колодец 64 на 64 и тайник с лазом одной клетки 3.66 убраны. Если воды не заказано, для приза делается один бассейн",
+                "Каждая глубокая вода ведёт к ценному предмету, как у 9 водоёмов из 10 на известных картах: сначала приз — неуязвимость, квад, рельсотрон, мега, красная броня, — а если призов не хватает, оружие или броня. Бассейны, соединённые трубой, — одна вода",
+                "Новая строка «Водоёмы» в «Жидкостях»: глубокие, как на известных картах (по умолчанию); на разных уровнях, с трубами (бассейны в залах разной высоты, как на q2dm4 и q2dm5); мелкие ямы по пояс (как до 3.67). «Каналы с водой» и «Вода на 8» и пресеты «Как q2dm, с водой и призом под водой», «Озеро и призы на дне на 8» — на разных уровнях",
+                "Проверки карты: «Глубокий бассейн», «Подводная труба», «Ценность воды», «Вода на разных уровнях» (когда заказано); лучший вариант каркаса выбирается и по ним, и по ценности предметов; схема и картинка каркаса рисуют подводные трубы",
+                "Исправлено: приз на подставке (рельсотрон в нише или в тайнике) стоял в ней и пропадал при загрузке карты — с 3.66; проверка «предметы не пропадают при загрузке» прощала это карте с нуля — больше не прощает. Точки появления не ставятся рядом с площадкой лифта",
+                "Описание карты называет приз в нише по имени (было «weapon railgun»); проверки «усилители на своих местах» и «стек на часах» говорят словами",
+                "Карта с нуля без разрушений больше не проходит этап «Свет на готовой карте»: свет ставится один раз, при генерации, а проверки карты с нуля идут вместе с проверками карты",
+                "Меню «Загрузить» не прокручивается: два раздела названы короче — «Приёмы известных карт: ztn2dm и другие», «Призы: ниши и обстрел»; выпадающие списки страницы открываются целиком (24 точки появления, 18 приёмов раскладки)",
+            },
+            new[]
+            {
+                "Water on maps from scratch as on well-known maps (all 40 studied: q2dm1, q2dm2, q2dm4, q2dm5, q2rdm13 have deep pools and tubes under water): pools 224 units deep one swims in and climbs out of anywhere round them; a pool takes up to 45 % of its hall. Two pools or more are joined by a tube under water under the rooms' floors",
+                "A prize under water as q2dm1's railgun: from a deep pool a tube under water 384-768 units long under the floors leads to a room of the prize's own, the tube comes up in the room's own pool, there is no other way in. Or at a deep pool's bottom, as q2dm2's quad. 3.66's well 64 by 64 and vault behind a one-cell passage are gone. With no water asked, one pool is made for the prize",
+                "Every deep water leads to a valuable item, as 9 bodies of water of 10 on well-known maps do: a prize first - invulnerability, quad, railgun, mega, body armour - and with no prize left a weapon or an armour. Pools joined by a tube are one water",
+                "A new row «Water bodies» in «Liquids»: deep, as on well-known maps (the default); several levels, with tubes (pools in halls of different heights, as on q2dm4 and q2dm5); shallow pits, waist-deep (as before 3.67). «Water canals», «Water for 8» and the presets «As q2dm, water and a prize under it», «A lake and prizes at the bottom for 8» - on several levels",
+                "The map's checks: «Deep pool», «Tube under water», «Water's worth», «Water on several levels» (when asked); the best skeleton is chosen by them too and by the items' worth; the skeleton's scheme and picture draw the tubes under water",
+                "Fixed: a prize on a pedestal (the railgun in a nook or a vault) stood inside it and was gone when the map loaded - since 3.66; the check «no pickup lost at spawn» excused it on a map from scratch - it no longer does. No spawn point by a lift's plat",
+                "The map's description names a prize in a nook (it said «weapon railgun»); the checks «powerups in their places» and «stack on a clock» say their measures in words",
+                "A map from scratch with no ruin no longer goes through the stage «Light on the finished map»: its light is set once, by the generation, and its own checks go with the map's checks",
+                "The «Load» menu does not scroll: two categories have shorter names - «Well-known maps: ztn2dm and others», «Prizes: nooks and fire»; the page's drop-down lists open whole (24 spawn points, 18 item practices)",
+            }),
+        new("3.66", "12.11.2026",
+            new[]
+            {
+                "Карты с нуля: у каждого ценного предмета есть ценность подбора. Две брони больше никогда не лежат рядом, оружие — рядом с оружием и бронёй, усилители — друг с другом: расстояния взяты с 40 известных карт (q2dm, q2duel, q2rdm, ztn2dm, omf, koldduel1, ptrip, match1) — не ближе, чем у трёх из четырёх их предметов. Броня у ключевого оружия больше не кладётся",
+                "Призы — рельсотрон, мега, квад, неуязвимость, красная броня — достаются усилием, как на известных картах: в нише, куда надо запрыгнуть (ниша «средне» теперь всегда приподнята), за дверью с кнопкой, на открытом месте под обстрелом или под водой — на дне колодца (как мега на q2dm5) или в тайнике за стеной, куда ведёт затопленный лаз (как рельсотрон на q2dm1). «Смешанно» больше не оставляет призы на полу",
+                "Новые строки в «Оружие и предметы»: «Как достаются призы», «Призов под водой», «Ценные предметы друг от друга», «Чьи приёмы раскладки» (все известные карты, семейство, карта или смесь двух — берутся только приёмы, не карта)",
+                "Сто новых заводских пресетов в четырёх разделах: «Приёмы известных карт: q2dm, q2duel, q2rdm», «Приёмы известных карт: ztn2dm, koldduel1, ptrip, match1, omf и смеси», «Призы под водой», «Призы: ниши, обстрел, просторнее» — всего 287. Старые пресеты с водой теперь кладут приз под воду, открытые арены — на открытое место, «Трудные паверапы на 8» — в ниши; остальные ставят новые строки на «По умолчанию»",
+                "Проверки карты: «Ценные предметы не рядом», «Призы заработаны», «Под водой» (когда заказано)",
+            },
+            new[]
+            {
+                "Maps from scratch: every valuable item is worth picking up. Two armours never lie together any more, a weapon never by a weapon or an armour, the powerups never by each other: the distances come from 40 well-known maps (q2dm, q2duel, q2rdm, ztn2dm, omf, koldduel1, ptrip, match1) - no nearer than three in four of their items. No armour is put by the key weapon any more",
+                "The prizes - the railgun, mega, quad, invulnerability, body armour - are earned with an effort, as on well-known maps: in a nook one jumps into (a «medium» nook is always raised now), behind a door with a button, in the open under fire or under water - at a well's bottom (as q2dm5's mega) or in a vault behind the wall a drowned passage leads to (as q2dm1's railgun). «Mixed» leaves no prize on the floor any more",
+                "New rows in «Weapons and items»: «How the prizes are earned», «Prizes under water», «Valuable items apart», «Whose item practice» (all well-known maps, a family, a map or a mix of two - only the practice is taken, not the map)",
+                "A hundred new factory presets in four categories: «Practice of well-known maps: q2dm, q2duel, q2rdm», «Practice of well-known maps: ztn2dm, koldduel1, ptrip, match1, omf and mixes», «Prizes under water», «Prizes: nooks, under fire, wider apart» - 287 in all. The old presets with water now put a prize under it, the open arenas in the open, «Hard powerups for 8» in nooks; the rest set the new rows to «Default»",
+                "The map's checks: «Valuable items apart», «Prizes earned», «Under water» (when asked)",
+            }),
+        new("3.65", "12.11.2026",
+            new[]
+            {
+                "«Каркас карты»: схема больше не пустует, пока генератор перебирает варианты планировки, — каждый пробуемый вариант появляется на ней сразу, над схемой написано, сколько вариантов перебрано и сколько получилось, и отмечен лучший на сейчас. Потом, как и в 3.64, по шагам строится выбранный каркас — теперь быстрее, чтобы все шаги успели показаться до конца этапа",
+            },
+            new[]
+            {
+                "«The map's skeleton»: the scheme is no longer empty while the generator tries layouts - each layout tried appears on it at once, with how many are tried and how many made over the scheme, and the best so far marked. Then, as in 3.64, the chosen skeleton is built step by step - quicker now, so every step is shown before the stage ends",
+            }),
+        new("3.64", "11.11.2026",
+            new[]
+            {
+                "Схема на этапе «Каркас карты» (карта с нуля) показывает, как строится каркас: шаг за шагом — помещения, залы, коридоры, проходы, уровни и высоты, вода и ямы, лестницы, лифты и телепорты, оружие, броня и точки появления; башня растёт по этажам, острова — по высоте. Над схемой написано, какой шаг идёт",
+                "Схема на этапе «Проверки карты» показывает обход карты: от каждой точки появления к оружию, броне и усилителям идут следы — отпечатки шагов, левый и правый, а впереди точка-ходок; по ходу закрашивается пол, до которого уже дошли; путь через телепорт, лифт или джампад нарисован; дошли до предмета — он подписан секундами ходьбы от ближайшей точки появления, а предмет, до которого дойти нельзя, подписан красным. Над схемой — сколько секунд ходьбы и сколько предметов уже найдено",
+                "Всё это студия получает в памяти, без записи файлов на диск",
+            },
+            new[]
+            {
+                "On «The map's skeleton» stage (a map from scratch) the scheme shows the skeleton being built, step by step: the places, the halls, the corridors, the ways between them, the levels and the heights, water and pits, the stairs, lifts and teleporters, weapons, armour and spawn points; a tower grows storey by storey, islands rise by height. The step under way is written over the scheme",
+                "On «The map's checks» stage the scheme shows the map being walked: from every spawn point footprints go to the weapons, armour and power-ups - left and right steps with a walker at the front; the floor reached so far fills with colour; a way through a teleporter, a lift or a jump pad is drawn; an item reached is named with its seconds on foot from the nearest spawn point, and an item no one can reach is named in red. Over the scheme - the seconds walked and how many items are found",
+                "The Studio gets all of it in memory, with no files written to the disk",
+            }),
+        new("3.63", "11.11.2026",
+            new[]
+            {
+                "Страница прогона: если этап идёт дольше обычного, а осталось меньше минуты, «Осталось» пишет секунды («Осталось не меньше 25 с») — вместо «не меньше меньше минуты»",
+                "Схема на этапе «Свет на готовой карте» показывает фонари карты, как на этапе «Свет и видимость»: они светятся, пока свет подбирается и карта освещается заново",
+            },
+            new[]
+            {
+                "The run page: when a stage runs longer than usual and under a minute is left, «Time left» says the seconds («At least 25 s left») instead of «at least under a minute»",
+                "On the scheme, the «Light on the finished map» stage shows the map's lamps, as «Light and visibility» does: they glow while the light is fitted and the map lit again",
+            }),
         new("3.62", "11.11.2026",
             new[]
             {

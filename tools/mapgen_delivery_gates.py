@@ -382,7 +382,11 @@ def gate_pickups(bsp: Path, work: Path, donor: Path | None = None) -> None:
     # generator's: cor's own ammo_grenades at (435, -1843, 232) and ammo_rockets at (307, -1715, 386) start inside
     # the floor and never appear in the game. Said on the line; one the donor does not lose still fails.
     inherited = {}
-    if donor and donor.is_file() and (lost or blocked):
+    # a map from scratch: its «donor» is its own base (the scratch folder beside its request) - what it loses the
+    # generator lost; the excuse hid the railgun freed at spawn on every map from scratch with a prize on a pedestal
+    # since 3.66 (the PO 12.11: «приплыл сюда, а там пусто») and six spawns in a lift's column
+    own_base = donor is not None and donor.parent.name == "scratch" and (donor.parent / "request.json").is_file()
+    if donor and donor.is_file() and (lost or blocked) and not own_base:
         _, d_lost, _, d_blocked, _ = ask(exe, donor)
         inherited = {k: v for k, v in list(lost.items()) + list(blocked.items()) if k in d_lost or k in d_blocked}
     own_lost = {k: v for k, v in lost.items() if k not in inherited}

@@ -480,6 +480,24 @@ public sealed partial class MainWindow
                     ("check_mapgen_new_map l.327 (its format)", "texture brightness: textures no lighter than people's", "mean 61 (people's 20..42)", new[] { "61", "20..42" }),
                     ("check_mapgen_new_map l.329 (its format)", "on screen: as bright as people's maps, not washed out", "median 30, top tenth 70 (people's 7..25, 15..55)", new[] { "30", "70" }),
                     ("check_mapgen_new_map l.339 (its format)", "textures: as many as people's maps", "6 textures over 0.5 % of the surface (people's 9..38)", new[] { "6", "9..38" }),
+                    // the PO 12.11: his mg_new_84719 measured by the 3.66 rows (its RED)
+                    ("mg_new_84719", "majors apart: no weapon, armour or powerup near another of a class people keep apart", "armor_body/rocketlauncher 286 u 1.03 s (rule 354 u 1.7 s); armor_combat/armor_jacket 231 u 0.82 s (rule 606 u 3.4 s); armor_jacket/hyperblaster 345 u 1.24 s (rule 354 u 1.7 s); railgun/armor_jacket 264 u 0.94 s (rule 354 u 1.7 s)", new[] { "231", "606", "286" }),
+                    ("mg_new_84719", "prizes earned: the railgun, mega, quad, body armour need a jump, a swim, a mover or the open under fire", "walked to: armor_body effort 0.00 sides 2; health_mega effort 0.00 sides 0; railgun effort 0.00 sides 2", new string[0]),
+                    ("check_mapgen_new_map item_rows_of (its format)", "under water: 1 prize(s) or more taken by a swim", "0: none", new string[0]),
+                    ("mg_new_84719_366 (3.66 test map)", "mechanic «key gun on a ledge»: 128 up or more or earned by its way (brief 19 §6, the PO 12.11)", "96 over the floor around, its way: water, the nearest armour 4.25 s away", new[] { "96" }),
+                    // the PO 12.11: his mg_new_56432 (3.66) - the powerups' and the clock's measures in English
+                    ("mg_new_56432", "powerups: each in a place of its own, marked, as hard to reach as asked", "armor_body hard; weapon_railgun medium (jump in) - one unlit", new string[0]),
+                    ("mg_new_56432", "mechanic «clock»: both 64 up or more, each with two ways out (brief 19 §6; one from a nook)", "heights 136/-32, exits 1/1 (nook)", new[] { "136", "-32" }),
+                    // the PO 12.11: his mg_new_7775 measured by the 3.67 rows (its RED: the 3.66 dive, one cell)
+                    ("mg_new_7775", "deep pool: water one swims in, as on well-known maps", "deepest 152 (from 160), its widest pool 0 cells of 64 (from 12; q2dm1 55)", new[] { "152", "160", "12" }),
+                    ("mg_new_7775", "tube under water: one swims along it, as on q2dm1", "the longest 112 u (from 320; q2dm1 368)", new[] { "112", "320" }),
+                    ("check_mapgen_new_map water_rows_of (its format)", "water levels: deep water on two heights or more", "1 levels: -32", new[] { "1", "-32" }),
+                    // the PO 12.11 on mg_new_7775_367: «приплыл сюда, а там пусто» - the railgun freed at spawn (3.67's
+                    // gate: a map from scratch has no donor to excuse it), and a spawn in a lift's column (mg_new_7775)
+                    ("mg_new_7775_367", "pickups: none lost at spawn, no spawn in a mover's column", "1 lost, 0 blocked: weapon_railgun at (288, 1184, 16) the world", new[] { "288 1184 16" }),
+                    ("mg_new_7775", "pickups: none lost at spawn, no spawn in a mover's column", "1 lost, 1 blocked: weapon_railgun at (288, 992, 16) the world; info_player_deathmatch at (672, 96, 24) func_plat *2", new[] { "288 992 16", "672 96 24" }),
+                    // the PO 12.11 on mg_new_7775_367: «вот приплыл сюда, а там пусто» - its second pool held nothing
+                    ("mg_new_7775_367", "water worth: every deep water leads to a valuable item", "1 of 2 with none: 1024 1472 56", new[] { "1024 1472 56" }),
                 };
                 try
                 {

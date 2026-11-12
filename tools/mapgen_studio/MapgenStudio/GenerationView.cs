@@ -27,6 +27,7 @@ public sealed class GenerationView : DockPanel
     internal static string[] StagesOf(Generation g) =>
         AllStages.Where(s => (s != "scratch" || g.Request.FromScratch)
                           && (s != "destruction" || (g.Request.Options?.Destruction ?? 0) > 0)
+                          && (s != "relight" || g.Relights)
                           && (s != "warp" || (g.Request.Options is { } o && (o.WarpSize != 100 || o.WarpShape > 0))))
                  .ToArray();
 

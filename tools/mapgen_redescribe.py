@@ -107,6 +107,21 @@ def english_rows(ln: str) -> str:
     return f"  {label}: {a} → {b}"
 
 
+CLASS = re.compile(r"\b(weapon|item)[_ ]([a-z]+(?:[_ ](?!—)[a-z]+)?)\b")
+
+
+def class_words(x, ru: bool) -> str:
+    """«weapon railgun», «weapon_railgun», «item_armor_body» by the item's name; a second word that is not the class's
+    («weapon_railgun under») is kept as it was."""
+    words = x.group(2).replace(" ", "_").split("_")
+    for n in (len(words), 1):
+        cls = f"{x.group(1)}_{'_'.join(words[:n])}"
+        if cls in w.ITEMS:
+            rest = x.group(2)[len("_".join(words[:n])):]
+            return w.item(cls, ru).lower() + rest
+    return x.group(0)
+
+
 def redo(text: str, ru: bool, theme: str | None) -> str:
     lines = text.split("\n")
     shapes = [ROW.match(ln).group(2).strip() for ln in lines
@@ -120,6 +135,10 @@ def redo(text: str, ru: bool, theme: str | None) -> str:
             ln = english_rows(ln)
         if ln.startswith("  Главные предметы:") or ln.startswith("  Powerups:"):
             ln = SITES.sub(lambda x: " — " + w.pick(w.SITES, x.group(1), ru), ln)
+        # 3.67 (his mg_new_56432 of 12.11, made by 3.66): a prize in a nook or fallen back said by its class -
+        # «weapon railgun — в нише», «вместо: weapon_railgun под водой» - by its name
+        if ln.startswith(("  Главные предметы:", "  Powerups:", "  Не сделано: призы", "  Not made: prizes")):
+            ln = CLASS.sub(lambda x: class_words(x, ru), ln)
         m = HEAD.match(ln)
         if m:
             mode = m.group(3).lower()

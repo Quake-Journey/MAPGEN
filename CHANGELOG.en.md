@@ -1,5 +1,40 @@
 # MAPGEN Studio by ly — change log
 
+## 3.67 — 12.11.2026
+
+- Water on maps from scratch as on well-known maps (all 40 studied: q2dm1, q2dm2, q2dm4, q2dm5, q2rdm13 have deep pools and tubes under water): pools 224 units deep one swims in and climbs out of anywhere round them; a pool takes up to 45 % of its hall. Two pools or more are joined by a tube under water under the rooms' floors
+- A prize under water as q2dm1's railgun: from a deep pool a tube under water 384-768 units long under the floors leads to a room of the prize's own, the tube comes up in the room's own pool, there is no other way in. Or at a deep pool's bottom, as q2dm2's quad. 3.66's well 64 by 64 and vault behind a one-cell passage are gone. With no water asked, one pool is made for the prize
+- Every deep water leads to a valuable item, as 9 bodies of water of 10 on well-known maps do: a prize first - invulnerability, quad, railgun, mega, body armour - and with no prize left a weapon or an armour. Pools joined by a tube are one water
+- A new row «Water bodies» in «Liquids»: deep, as on well-known maps (the default); several levels, with tubes (pools in halls of different heights, as on q2dm4 and q2dm5); shallow pits, waist-deep (as before 3.67). «Water canals», «Water for 8» and the presets «As q2dm, water and a prize under it», «A lake and prizes at the bottom for 8» - on several levels
+- The map's checks: «Deep pool», «Tube under water», «Water's worth», «Water on several levels» (when asked); the best skeleton is chosen by them too and by the items' worth; the skeleton's scheme and picture draw the tubes under water
+- Fixed: a prize on a pedestal (the railgun in a nook or a vault) stood inside it and was gone when the map loaded - since 3.66; the check «no pickup lost at spawn» excused it on a map from scratch - it no longer does. No spawn point by a lift's plat
+- The map's description names a prize in a nook (it said «weapon railgun»); the checks «powerups in their places» and «stack on a clock» say their measures in words
+- A map from scratch with no ruin no longer goes through the stage «Light on the finished map»: its light is set once, by the generation, and its own checks go with the map's checks
+- The «Load» menu does not scroll: two categories have shorter names - «Well-known maps: ztn2dm and others», «Prizes: nooks and fire»; the page's drop-down lists open whole (24 spawn points, 18 item practices)
+
+## 3.66 — 12.11.2026
+
+- Maps from scratch: every valuable item is worth picking up. Two armours never lie together any more, a weapon never by a weapon or an armour, the powerups never by each other: the distances come from 40 well-known maps (q2dm, q2duel, q2rdm, ztn2dm, omf, koldduel1, ptrip, match1) - no nearer than three in four of their items. No armour is put by the key weapon any more
+- The prizes - the railgun, mega, quad, invulnerability, body armour - are earned with an effort, as on well-known maps: in a nook one jumps into (a «medium» nook is always raised now), behind a door with a button, in the open under fire or under water - at a well's bottom (as q2dm5's mega) or in a vault behind the wall a drowned passage leads to (as q2dm1's railgun). «Mixed» leaves no prize on the floor any more
+- New rows in «Weapons and items»: «How the prizes are earned», «Prizes under water», «Valuable items apart», «Whose item practice» (all well-known maps, a family, a map or a mix of two - only the practice is taken, not the map)
+- A hundred new factory presets in four categories: «Practice of well-known maps: q2dm, q2duel, q2rdm», «Practice of well-known maps: ztn2dm, koldduel1, ptrip, match1, omf and mixes», «Prizes under water», «Prizes: nooks, under fire, wider apart» - 287 in all. The old presets with water now put a prize under it, the open arenas in the open, «Hard powerups for 8» in nooks; the rest set the new rows to «Default»
+- The map's checks: «Valuable items apart», «Prizes earned», «Under water» (when asked)
+
+## 3.65 — 12.11.2026
+
+- «The map's skeleton»: the scheme is no longer empty while the generator tries layouts - each layout tried appears on it at once, with how many are tried and how many made over the scheme, and the best so far marked. Then, as in 3.64, the chosen skeleton is built step by step - quicker now, so every step is shown before the stage ends
+
+## 3.64 — 11.11.2026
+
+- On «The map's skeleton» stage (a map from scratch) the scheme shows the skeleton being built, step by step: the places, the halls, the corridors, the ways between them, the levels and the heights, water and pits, the stairs, lifts and teleporters, weapons, armour and spawn points; a tower grows storey by storey, islands rise by height. The step under way is written over the scheme
+- On «The map's checks» stage the scheme shows the map being walked: from every spawn point footprints go to the weapons, armour and power-ups - left and right steps with a walker at the front; the floor reached so far fills with colour; a way through a teleporter, a lift or a jump pad is drawn; an item reached is named with its seconds on foot from the nearest spawn point, and an item no one can reach is named in red. Over the scheme - the seconds walked and how many items are found
+- The Studio gets all of it in memory, with no files written to the disk
+
+## 3.63 — 11.11.2026
+
+- The run page: when a stage runs longer than usual and under a minute is left, «Time left» says the seconds («At least 25 s left») instead of «at least under a minute»
+- On the scheme, the «Light on the finished map» stage shows the map's lamps, as «Light and visibility» does: they glow while the light is fitted and the map lit again
+
 ## 3.62 — 11.11.2026
 
 - Doors on maps from scratch no longer flicker as they open: a door is half as thick as its wall now, stands in the middle of it and rises into the wall, as on well-known maps. The map's checks watch it

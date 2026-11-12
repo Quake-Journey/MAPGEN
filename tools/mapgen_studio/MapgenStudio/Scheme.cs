@@ -60,12 +60,24 @@ public sealed class SchemeModel
         public WarpMap? Warp;
         public bool IsDonor;
         public List<Vector3[]>? Portals;
+        /// <summary>The PO 11.11: the checks' stage - the walk the map's check made (footprints to the major items).</summary>
+        public WalkShow? Walk;
+        /// <summary>The PO 11.11: a skeleton's step - its words for the scheme's caption.</summary>
+        public string ShowCaption = "";
+
+        /// <summary>The same map with the walk of its check (the card reloads a new snapshot).</summary>
+        public Snapshot WithWalk(WalkShow walk)
+        {
+            var s = With(Warp, Portals);
+            s.Walk = walk;
+            return s;
+        }
 
         /// <summary>The same map with a frame or portals of its own (the card reloads a new snapshot).</summary>
         public Snapshot With(WarpMap? warp, List<Vector3[]>? portals)
         {
             var s = new Snapshot { Lit = Lit, Min = Min, Max = Max, PlayTop = PlayTop, Source = Source, IsDonor = IsDonor,
-                                   Warp = warp, Portals = portals };
+                                   Warp = warp, Portals = portals, Walk = Walk, ShowCaption = ShowCaption };
             s.Faces.AddRange(Faces);
             s.Marks.AddRange(Marks);
             s.Lamps.AddRange(Lamps);
@@ -129,6 +141,92 @@ public sealed class SchemeModel
     private static readonly Regex Row = new(
         @"^\s*(\d+)\s+(\S+)\s+(\S+)\s+\d+(?:\s+(-?\d+) (-?\d+) (-?\d+)\s+(-?\d+) (-?\d+) (-?\d+))?", RegexOptions.Compiled);
 
+    /* the PO 11.11: the skeleton's stage and the checks' drawn - what the tools hand over in memory */
+    private string _showRoot = "";
+    private List<SkeletonShow.Frame>? _frames;
+    private DateTime _framesSince;
+    private WalkShow? _walk;
+
+    /// <summary>3.63's scheme (the skeleton's picture only, no walk on the checks), for the self-test's RED.</summary>
+    internal static bool OldShows;
+
+    /// <summary>3.64's skeleton stage (nothing until the planner has tried every skeleton), for the self-test's RED.</summary>
+    internal static bool OldTries;
+
+    private byte[]? _tryBytes;
+
+    /// <summary>The skeleton's frames got from the skeleton's stage (null before).</summary>
+    public List<SkeletonShow.Frame>? Frames => _frames;
+
+    /// <summary>
+    /// On the window's beat: the skeleton's steps in turn while a map from scratch makes its skeleton
+    /// (`skeleton_show.json`), the walk of the map's check while the checks run (`walk_show.json`) - both read from the
+    /// sections the tools hold in memory (<see cref="MemFiles"/>), once, and kept for the run.
+    /// </summary>
+    public void Shows(Generation g)
+    {
+        var root = g.ShowRoot;
+        if (root != _showRoot)
+        {
+            _showRoot = root;
+            _frames = null;
+            _walk = null;
+            _tryBytes = null;
+        }
+        if (OldShows || !g.Running)
+            return;
+        if (g.Stage == "scratch" && g.Request.FromScratch)
+        {
+            // the PO 12.11: while the planner tries its skeletons, the one just tried (the steps of the chosen come after)
+            if (_frames == null && !OldTries && MemFiles.Read(root, "skeleton_live.json") is { } tb
+                && !(_tryBytes != null && tb.AsSpan().SequenceEqual(_tryBytes)))
+            {
+                _tryBytes = tb;
+                if (SkeletonShow.ParseTry(tb) is { } tried)
+                    Current = tried.Snap;
+            }
+            if (_frames == null && MemFiles.Read(root, "skeleton_show.json") is { } b && SkeletonShow.Parse(b) is { } steps)
+            {
+                var fr = SkeletonShow.Frames(steps);
+                if (fr.Count > 0)
+                {
+                    foreach (var f in fr)
+                        f.Snap.ShowCaption = SkeletonShow.Caption(f);
+                    _frames = fr;
+                    _framesSince = DateTime.Now;
+                }
+            }
+            ShowFrame(DateTime.Now);
+            return;
+        }
+        if (g.Stage == "gates")
+        {
+            if (_walk == null && MemFiles.Read(root, "walk_show.json") is { } b && WalkShow.Parse(b) is { } w)
+                _walk = w;
+            if (_walk != null && Current is { } s && !ReferenceEquals(s.Walk, _walk) && !s.Source.StartsWith("skeleton:"))
+                Current = s.WithWalk(_walk);
+        }
+    }
+
+    /// <summary>The skeleton's frame for this moment made the scheme's map.</summary>
+    internal void ShowFrame(DateTime now)
+    {
+        if (_frames is not { Count: > 0 } fr)
+            return;
+        var k = SkeletonShow.At(fr.Count, _framesSince, now);
+        if (!ReferenceEquals(Current, fr[k].Snap))
+            Current = fr[k].Snap;
+    }
+
+    /// <summary>The self-test's door: frames and a walk as if handed over.</summary>
+    internal void ShowsForSelfTest(List<SkeletonShow.Frame>? frames, WalkShow? walk, Snapshot? current)
+    {
+        _frames = frames;
+        _framesSince = DateTime.Now;
+        _walk = walk;
+        Current = current;
+    }
+
     /// <summary>Read what the run wrote since, on a pool thread, one refresh at a time; never waits.</summary>
     public void RefreshAsync(Generation g)
     {
@@ -160,6 +258,9 @@ public sealed class SchemeModel
 
     /// <summary>One refresh on this thread (the plan test).</summary>
     public void RefreshNow(string job, string memory = "") => Refresh(job, false, "", memory);
+
+    /// <summary>A job's plan read with its finished map named (the pictures' test: a map with no try of its own).</summary>
+    internal void RefreshForTest(string job, string artifact) => Refresh(job, false, artifact);
 
     /// <summary>The light pass's portal file, once, for the visibility's picture - from memory or the disk.</summary>
     private void LoadPortals(string job, string memory)
@@ -730,7 +831,9 @@ public sealed class SchemeView : Control, CopyText.IDrawnText
                 if (!ok)
                     continue;
                 var lit = 0.55f + 0.45f * Math.Max(0, Vector3.Dot(f.N, light));
-                SKColor fill = f.Kind switch
+                static byte Own(float v) => (byte)(255 * Math.Min(1f, 0.08f + v * 1.6f));
+                // a face with its own light (a lit map's lightmap, the skeleton's kinds) as the card draws it
+                SKColor fill = f.Light is { } own && f.Kind is 0 or 1 or 6 ? new SKColor(Own(own.X), Own(own.Y), Own(own.Z)) : f.Kind switch
                 {
                     0 => Shade(0x3a + (byte)((f.ZLo - s.Min.Z) / zspan * 0x90), lit, 4, 12),
                     1 => Shade(0x6e, lit, 6, 14),
@@ -1089,7 +1192,11 @@ public sealed class SchemePanel : DockPanel
     /// <summary>The skeleton's picture while a map from scratch makes its base (its stage «scratch»).</summary>
     private void ShowPlan(Generation g)
     {
-        var path = g.Request.FromScratch && g.Running && g.Stage == "scratch" ? Path.Combine(g.ScratchDir, "plan.png") : "";
+        // the PO 11.11: the skeleton built in 3D on the scheme once the tool hands its steps over - the picture before
+        // (and once a skeleton tried is on it, the PO 12.11 - the flat picture no longer covers it)
+        var path = g.Request.FromScratch && g.Running && g.Stage == "scratch" && Model.Frames is not { Count: > 0 }
+                   && Model.Current?.Source.StartsWith("skeleton:") != true
+            ? Path.Combine(g.ScratchDir, "plan.png") : "";
         if (path.Length == 0 || !File.Exists(path))
         {
             _planBox.IsVisible = false;
@@ -1147,6 +1254,8 @@ public sealed class SchemePanel : DockPanel
         // the PO, 04.11: a map from scratch has no base - the legend and the waiting line say the skeleton's words
         SchemeLegend.ScratchRun = g.Request.FromScratch;
         SchemeLegend.Say(_legend, g.Request.FromScratch);
+        if (App.Settings.Scheme)
+            Model.Shows(g);
         ShowPlan(g);
         if (App.Settings.Scheme)
             Model.RefreshAsync(g);

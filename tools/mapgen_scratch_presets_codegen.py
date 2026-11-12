@@ -27,6 +27,8 @@ TOOLS = Path(__file__).resolve().parent
 ORACLE = TOOLS / "fable_oracles" / "mapgen_2026-11-06_presets_x10.py"
 SPACE = TOOLS / "mapgen_scratch_presets_space.py"         # brief 25 A4: «Открытый космос», checked by its own gate
 TOWER = TOOLS / "mapgen_scratch_presets_tower.py"         # brief 25 B: «Башня», checked by its own gate
+ITEMS = TOOLS / "mapgen_scratch_presets_items.py"         # the PO 12.11: «Приёмы известных карт», «Призы и вода», and the old
+                                                          # presets the new rows change (its UPDATES)
 STUDIO = TOOLS / "mapgen_studio" / "MapgenStudio"
 CAT_KEY = {"liquids": "waters"}          # the base form has its own «liquids»: the scratch one is «waters»
 PCT = ("sky", "water", "lava", "slime", "items_at_height")
@@ -187,9 +189,26 @@ COUNTS = {  # key: (ru one, few, many, ru «без …»; en one, many, en «no 
 DEFAULT_SHARDS = {True: 6, False: 8}
 
 
+def _items_module():
+    spec = importlib.util.spec_from_file_location(ITEMS.stem, ITEMS)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def read_oracle() -> list[tuple[str, str, int, dict, dict]]:
-    """Every table's rows: Fable's 160, then the space's (brief 25 A4) and the tower's (brief 25 B)."""
-    return read_table(ORACLE) + read_table(SPACE) + read_table(TOWER)
+    """Every table's rows: Fable's 160, then the space's (brief 25 A4), the tower's (brief 25 B) and the items' (the PO
+    12.11) - the old ones the items' table updates with the new rows' values («обновить существующие пресеты на новые
+    параметры … на дефолты или нужные значения»: the rest keep «По умолчанию», a factory preset is a fresh form)."""
+    rows = read_table(ORACLE) + read_table(SPACE) + read_table(TOWER) + read_table(ITEMS)
+    upd = _items_module().UPDATES
+    out = []
+    for cat, key, players, lit, q in rows:
+        if key in upd:
+            lit = {**lit, **upd[key]}
+            q = {**q, **upd[key]}
+        out.append((cat, key, players, lit, q))
+    return out
 
 
 def read_table(path: Path) -> list[tuple[str, str, int, dict, dict]]:
@@ -276,7 +295,8 @@ def setters(players: int, lit: dict, q: dict) -> list[str]:
                     "sun": "Sun", "tone": "Tone", "decor": "Decor", "round": "Round", "islands": "Islands",
                     "pad_only": "PadOnly", "edges": "Edges", "height_spread": "HeightSpread", "pad_reach": "PadReach",
                     "bridges": "Bridges", "storeys": "Storeys", "storey_height": "StoreyHeight", "shafts": "Shafts",
-                    "perches": "Perches", "ships": "Ships"}[k]
+                    "perches": "Perches", "ships": "Ships", "prize_access": "PrizeAccess", "underwater": "Underwater",
+                    "item_spacing": "ItemSpacing", "item_practice": "ItemPractice", "water_body": "WaterBody"}[k]
             s.append(f"p.{prop} = {cs_value(v)};")
     return s
 
@@ -385,6 +405,27 @@ def tip(players: int, lit: dict, q: dict, lang: int) -> str:
             parts.append({"easy": ("паверапы на постаментах", "the powerups on pedestals"),
                           "medium": ("паверапы в нишах", "the powerups in nooks"),
                           "hard": ("паверапы за дверями с кнопками", "the powerups behind doors with buttons")}[v][lang])
+        elif k == "prize_access":
+            parts.append({"people": ("призы достаются как на известных картах", "the prizes earned as on well-known maps"),
+                          "nooks": ("призы в нишах: запрыгнуть, дверь с кнопкой", "the prizes in nooks: jump in, a door with a button"),
+                          "water": ("все призы под водой", "every prize under water"),
+                          "exposed": ("призы на открытом месте под обстрелом", "the prizes in the open under fire")}[v][lang])
+        elif k == "underwater":
+            parts.append(plural(v, "приз под водой", "приза под водой", "призов под водой") if ru
+                         else f"{v} prize{'s' if v > 1 else ''} under water")
+        elif k == "water_body":
+            parts.append({"people": ("глубокие бассейны, как на известных картах", "deep pools, as on well-known maps"),
+                          "levels": ("бассейны на разных уровнях с подводными трубами", "pools on several levels with tubes under water"),
+                          "shallow": ("мелкие ямы с водой по пояс", "shallow pits, waist-deep")}[v][lang])
+        elif k == "item_spacing":
+            parts.append({"people": ("ценные предметы врозь, как на известных картах", "valuable items apart as well-known maps keep them"),
+                          "wide": ("ценные предметы просторнее", "valuable items wider apart")}[v][lang])
+        elif k == "item_practice":
+            fam = {"mix": ("всех известных карт", "all well-known maps"), "q2dm": ("q2dm1–q2dm8", "q2dm1-q2dm8"),
+                   "q2duel": ("q2duel1–q2duel8", "q2duel1-q2duel8"), "q2rdm": ("q2rdm1–q2rdm15", "q2rdm1-q2rdm15"),
+                   "ztn2dm": ("ztn2dm1–ztn2dm5", "ztn2dm1-ztn2dm5")}
+            names_ = [fam.get(f, (f, f))[lang] for f in v.split("+")]
+            parts.append(("приёмы раскладки " if ru else "the item practice of ") + (" и " if ru else " and ").join(names_))
         elif k == "items_at_height":
             pct = round(v * 100)
             parts.append(("все предметы на полу" if ru else "every item on the floor") if pct == 0 else
@@ -428,7 +469,8 @@ def replace_between(text: str, begin: str, end: str, body: str) -> str:
 
 def write() -> int:
     rows = read_oracle()
-    assert len(rows) == 187, len(rows)       # brief 34: three of the tower
+    assert len(rows) == 287, len(rows)       # brief 34: three of the tower; the PO 12.11: a hundred of the items
+    NAMES.update(_items_module().NAMES)
     missing = [k for _, k, *_ in rows if k not in KEEP and k not in NAMES]
     if missing:
         raise SystemExit(f"no names for {missing}")

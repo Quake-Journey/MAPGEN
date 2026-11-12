@@ -99,6 +99,14 @@ def build_candidate(job: tuple) -> tuple:
         import mapgen_space_survey as space_survey
         r["space"] = space_survey.space_part(mp.with_suffix(".bsp"))
     res = bands_mod.judge(r, q["players"], q, P.metrics)
+    # the PO 12.11: the candidates are held to the items' worth and the water's too - the test map of 12.11 was chosen
+    # with a pool of 10 cells and a mega 1.8 s from an armour, rows only the finished map's check measured
+    try:
+        bsp_ = mp.with_suffix(".bsp")
+        res = list(res) + bands_mod.item_rows(bsp_, q)
+        res += bands_mod.water_rows(bsp_, q, P.metrics, bands_mod.ITEM_STUDY.pop(str(bsp_), None))
+    except Exception as e:  # noqa: BLE001 - a measure not taken is said, the bands stand
+        said.append(f"  (items and water not measured: {type(e).__name__}: {e})")
     fails = [n for n, ok_, _ in res if not ok_]
     (cdir / "survey.json").write_text(json.dumps(r, ensure_ascii=False, indent=1), encoding="utf-8")
     (cdir / "bands.txt").write_text("\n".join(f"{'PASS' if o else 'FAIL'}  {n}  -- {s}" for n, o, s in res),
@@ -117,8 +125,64 @@ def build_candidate(job: tuple) -> tuple:
     return k, said, (len(fails), over, k, P, r, pal)
 
 
+def show_skeleton(params: dict, P, root: str, log=print) -> bool:
+    """The PO 11.11: «визуализировать построение каркаса … как он строится». The chosen skeleton made again with each
+    step's state kept (mapgen_scratch_plan.RECORD) - the same seed gives the same plan, checked by its text - and handed
+    to the Studio in memory (`Local\\q2mem_<root>/skeleton_show.json`, held while this tool runs: the skeleton's stage).
+    Nothing on the disk (the PO: «SSD не очень любит много записей»)."""
+    steps = []
+    plan_mod.RECORD = lambda step, Q: steps.append({"step": step, **plan_mod.show_state(Q)})
+    try:
+        Q = plan_mod.make_plan(params, P.seed)
+    finally:
+        plan_mod.RECORD = None
+    # the same places, routes, items and movers (the score adds its metrics and «refused» lines to the chosen one)
+    def shape(R) -> list:
+        return [ln for ln in plan_mod.skeleton_text(R).splitlines()
+                if ln.split(" ", 1)[0] in ("space", "route", "place", "spawn", "lift", "ladder", "pad", "teleporter",
+                                           "door", "pit", "flights")]
+    if Q.failed or shape(Q) != shape(P) or not steps:
+        log("  (the skeleton's steps: the plan made again is not the one chosen - not shown)")
+        return False
+    final = plan_mod.show_state(P)
+    if not steps or steps[-1]["step"] != "done":
+        steps.append({"step": "done", **final})
+    text = json.dumps({"version": 1, "shape": P.params.get("shape") or "rooms", "steps": steps}, separators=(",", ":"))
+    ok = survey_mod.mem_publish(root, "skeleton_show.json", text.encode("utf-8"))
+    log(f"the skeleton's steps for the Studio: {len(steps)} ({len(text) // 1024} KB in memory)" if ok else
+        "  (the skeleton's steps: no memory section)")
+    return ok
+
+
+def live_tries(root: str, every: float = 0.5):
+    """The PO 12.11 («когда 27 сек который шел Каркас карты то было вот так» - an empty scheme: the steps came only
+    after the planner's 15 s of trying): `best_plan`'s `seen` - each skeleton tried, as it comes back, handed to the
+    Studio in memory (`skeleton_live.json`, rewritten in place, at most one each `every` seconds and the last one
+    always): how many are tried of how many, how many made a plan, the one just tried and the best so far."""
+    state = {"at": 0.0, "made": 0, "best": None, "plan": None, "is_best": False}
+
+    def seen(done: int, tries: int, r) -> None:
+        if r is not None:
+            state["made"] += 1
+            if state["best"] is None or r[0] < state["best"]:
+                state["best"] = r[0]
+        now = time.time()
+        last = done >= tries
+        # the last count always goes (a last seed that made no plan keeps the picture before it)
+        if (r is None and not (last and state["plan"])) or (now - state["at"] < every and not last):
+            return
+        state["at"] = now
+        if r is not None:
+            state["plan"] = json.dumps({"step": "try", **plan_mod.show_state(r[1])}, separators=(",", ":"))
+            state["is_best"] = r[0] <= state["best"]
+        text = (f'{{"version":1,"done":{done},"tries":{tries},"made":{state["made"]},'
+                f'"best":{"true" if state["is_best"] else "false"},"plan":{state["plan"]}}}')
+        survey_mod.mem_update(root, "skeleton_live.json", text.encode("utf-8"))
+    return seen
+
+
 def make(out: Path, params: dict, seed: int, name: str, candidates: int, game: Path, threads: int,
-         tries: int = 60, log=print, engine: Path | None = None, workers: int = 0) -> dict:
+         tries: int = 60, log=print, engine: Path | None = None, workers: int = 0, show_mem: str = "") -> dict:
     out.mkdir(parents=True, exist_ok=True)
     # the colour reads (the look rows) from the client the map is made for: the Studio's own textures lie there (3.45)
     os.environ["MAPGEN_GAME"] = str(game)
@@ -158,7 +222,8 @@ def make(out: Path, params: dict, seed: int, name: str, candidates: int, game: P
                      default=str)
     plan_seed = seed * 100003 + int(hashlib.sha256(key.encode("utf-8")).hexdigest()[:8], 16) % 100000
     plans = plan_mod.best_plan(params, plan_seed, tries, workers=max(1, workers or threads),
-                               progress=lambda d, n: log(f"plans: {d} of {n}"))
+                               progress=lambda d, n: log(f"plans: {d} of {n}"),
+                               seen=live_tries(show_mem) if show_mem else None)
     log(f"skeletons: {len(plans)} of {tries} seeds made a plan ({time.time() - t0:.1f} s)")
     if not plans:
         return {"ok": False, "why": "no skeleton"}
@@ -176,6 +241,11 @@ def make(out: Path, params: dict, seed: int, name: str, candidates: int, game: P
         (out / "skeleton.txt").write_text(plan_mod.skeleton_text(plans[0]), encoding="utf-8")
     except Exception as e:  # noqa: BLE001
         log(f"  (no early picture: {e})")
+    if show_mem:
+        try:
+            show_skeleton(params, plans[0], show_mem, log)
+        except Exception as e:  # noqa: BLE001 - a picture is a help, never a reason to stop
+            log(f"  (the skeleton's steps: {e})")
     best = None
     made = []
     lines = []
@@ -278,8 +348,8 @@ def plan_doors(P) -> list:
     the middle of each, its sill, half its width; the asked dead end's drop is left open."""
     out = []
     for i, d in enumerate(P.doors):
-        if d.rj or not d.cells:
-            continue
+        if d.rj or not d.cells or d.kind == "swim":
+            continue                # a tube under water is not a doorway (the PO 12.11)
         pcs = [plan_mod.phys(c) for c in d.cells]
         xs, ys = [c[0] for c in pcs], [c[1] for c in pcs]
         x, y = (min(xs) + max(xs) + 1) * plan_mod.CELL / 2, (min(ys) + max(ys) + 1) * plan_mod.CELL / 2
@@ -301,7 +371,7 @@ def skeleton_doors(path: Path) -> list:
             sx, sy = json.loads(line[8:]).get("world_shift") or (0, 0)
     for line in path.read_text(encoding="utf-8").splitlines():
         m_ = re.match(r"route (\d+) (\d+) (\w+) cells ([-\d, ]+) z (-?\d+)", line)
-        if not m_:
+        if not m_ or m_.group(3) == "swim":
             continue
         cells = [tuple(int(v) for v in c.split(",")) for c in m_.group(4).split()]
         if not cells:
@@ -413,6 +483,13 @@ def write_record(out: Path, q: dict, m: dict, r: dict, pal: dict, res: list, fin
         ("sun", "Солнце", "Sun", q.get("sun"), "yes" if pal.get("sun", True) else "no"),
         ("tone", "Цвет света", "Light colour", q.get("tone"), pal.get("tone", "neutral")),
     ]
+    # the PO 12.11: the water as well-known maps build it and the prizes under it, asked → made
+    if q.get("shape") not in ("space", "tower") and (float(q.get("water") or 0) > 0 or int(q.get("underwater") or 0) > 0):
+        at = next((i for i, row in enumerate(rows) if row[0] == "slime"), len(rows) - 1) + 1
+        rows[at:at] = [("water_body", "Водоёмы", "Water bodies", words_mod.water_body(q.get("water_body")),
+                        words_mod.water_made(m.get("pools") or [], m.get("water_tubes") or [], m.get("prize_tubes") or [])),
+                       ("underwater", "Призов под водой", "Prizes under water", int(q.get("underwater") or 0),
+                        words_mod.under_made(m.get("prize_kinds") or [], m.get("prize_tubes") or []))]
     look = r.get("look") or {}
     if look.get("coloured") is not None:
         rows += [
@@ -559,6 +636,7 @@ def main() -> int:
                     help="processes for the plans and the candidates (brief 24 D3; 0 = as many as --threads)")
     ap.add_argument("--engine", type=Path, help="the Studio's run: every candidate built, their order written (order.json)")
     ap.add_argument("--promote", type=int, help="make candidate K of OUT the base (the engine refused the one before)")
+    ap.add_argument("--show-mem", default="", help="the Studio's root: the skeleton's steps into memory as it builds")
     a = ap.parse_args()
     if a.promote is not None:
         return promote(a.out, a.name, a.promote)
@@ -566,7 +644,7 @@ def main() -> int:
     if a.players:
         params["players"] = a.players
     res = make(a.out, params, a.seed, a.name, a.candidates, a.game, a.threads, a.tries, engine=a.engine,
-               workers=a.workers)
+               workers=a.workers, show_mem=a.show_mem)
     print(json.dumps({k: v for k, v in res.items() if k != "survey"}, ensure_ascii=False))
     return 0 if res.get("ok") else 1
 

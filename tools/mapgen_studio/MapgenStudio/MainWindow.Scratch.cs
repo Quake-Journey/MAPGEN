@@ -226,6 +226,14 @@ public sealed partial class MainWindow
         }
         // liquids
         Count(liquids, "scr.water", LiquidPercents, p.WaterPercent, "5 %", v => p.WaterPercent = v);
+        if (p.Shape is not ("space" or "tower"))
+        {
+            // the PO 12.11: deep pools as on well-known maps, pools on several floors joined by tubes, or 3.66's pits
+            var bodies = ScratchParams.WaterBodies;
+            Combo(liquids, "scr.waterbody", bodies.Select(v => v.Length == 0 ? Def(Loc.T("scr.waterbody.people").ToLowerInvariant())
+                                                                            : Loc.T($"scr.waterbody.{v}")).ToArray(),
+                  Array.IndexOf(bodies, p.WaterBody), i => p.WaterBody = bodies[i]);
+        }
         Combo(liquids, "scr.lava", LiquidPercents.Select(v => v == 0 ? Loc.T("scr.none") : $"{v} %").ToArray(),
               Array.IndexOf(LiquidPercents, p.LavaPercent), i => p.LavaPercent = LiquidPercents[i]);
         Combo(liquids, "scr.slime", LiquidPercents.Select(v => v == 0 ? Loc.T("scr.none") : $"{v} %").ToArray(),
@@ -322,6 +330,25 @@ public sealed partial class MainWindow
             Keep();
         };
         items.Add(Loc.T("scr.pw.cycle"), Loc.T("scr.pw.cycle.tip"), cycle, "scr.pw.cycle.tip");
+        // the PO 12.11: the items' pick-up worth - how the prizes are earned, how many under water, how far apart the
+        // majors keep, whose practice (the knowledge base of people's maps)
+        var prizes = ScratchParams.PrizeAccesses;
+        if (p.Shape is not ("space" or "tower"))
+        {
+            // the prizes' ways and the dives are built in rooms and halls (an island or a storey has no floor to sink)
+            Combo(items, "scr.prize", prizes.Select(v => v.Length == 0 ? Def(Loc.T("scr.prize.people").ToLowerInvariant())
+                                                                        : Loc.T($"scr.prize.{v}")).ToArray(),
+                  Array.IndexOf(prizes, p.PrizeAccess), i => p.PrizeAccess = prizes[i]);
+            Count(items, "scr.under", new[] { 1, 2, 3 }, p.Underwater > 0 ? p.Underwater : -1, "0", v => p.Underwater = Math.Max(0, v));
+        }
+        var spacing = new[] { "", "people", "wide" };
+        Combo(items, "scr.spacing", spacing.Select(v => v.Length == 0 ? Def(Loc.T("scr.spacing.people").ToLowerInvariant())
+                                                                     : Loc.T($"scr.spacing.{v}")).ToArray(),
+              Array.IndexOf(spacing, p.ItemSpacing), i => p.ItemSpacing = spacing[i]);
+        var practices = ScratchParams.ItemPractices;
+        Combo(items, "scr.practice", practices.Select(v => v.Length == 0 ? Def(Loc.T("scr.practice.mix"))
+                                                                         : Loc.T($"scr.practice.{v}")).ToArray(),
+              Array.IndexOf(practices, p.ItemPractice), i => p.ItemPractice = practices[i]);
         Count(items, "scr.shards", new[] { 0, 2, 4, 6, 8, 12 }, p.Shards, p.Players <= 2 ? "6" : "8", v => p.Shards = v);
         Count(items, "scr.ammo", new[] { 10, 15, 20, 25, 30, 40 }, p.AmmoPerSpawn10, "2,5", v => p.AmmoPerSpawn10 = v);
         Count(items, "scr.health", new[] { 5, 10, 13, 20, 30 }, p.HealthPerSpawn10, "1,3", v => p.HealthPerSpawn10 = v);

@@ -87,6 +87,7 @@ public sealed class SchemeGlView : OpenGlControlBase
     private int _faceCount, _liquidFirst, _liquidCount, _edgeFirst, _edgeCount;
     /* the PO, 11.10 - each stage drawn: the frame's part lines, the lamps' rays, the light pass's portals */
     private int _partFirst, _partCount, _rayFirst, _rayCount, _portalFirst, _portalCount, _portalLineFirst, _portalLineCount;
+    private int _walkFirst, _walkCount;
     private int _uMvp, _uEye, _uCut, _uBias, _uMorph, _uGlow, _uVis;
     private bool _es;
     private BlendFunc? _blend;
@@ -102,6 +103,11 @@ public sealed class SchemeGlView : OpenGlControlBase
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate void BlendFunc(int s, int d);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    private delegate void PolygonOffset(float factor, float units);
+
+    private PolygonOffset? _offset;
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate void ReadPixels(int x, int y, int w, int h, int format, int type, IntPtr data);
@@ -142,7 +148,7 @@ public sealed class SchemeGlView : OpenGlControlBase
                       GL_TRIANGLES = 4, GL_LINES = 1, GL_DEPTH_TEST = 0x0B71, GL_BLEND = 0x0BE2, GL_SRC_ALPHA = 0x0302,
                       GL_ONE_MINUS_SRC_ALPHA = 0x0303, GL_COLOR_BUFFER_BIT = 0x4000, GL_DEPTH_BUFFER_BIT = 0x100,
                       GL_VERTEX_SHADER = 0x8B31, GL_FRAGMENT_SHADER = 0x8B30, GL_RGBA = 0x1908, GL_UNSIGNED_BYTE = 0x1401,
-                      GL_LEQUAL = 0x0203;
+                      GL_LEQUAL = 0x0203, GL_POLYGON_OFFSET_FILL = 0x8037;
     private const int Stride = 15;            // x y z, nx ny nz, r g b a, zlo, flags, and where the frame takes x y z
 
     public SchemeGlView(SchemeModel model, Func<Generation?> run, SchemeCamera camera)
@@ -190,8 +196,21 @@ uniform float uCut;
 uniform float uVis;
 out vec4 outColor;
 void main() {
-    if (vFlags >= 8.0) { outColor = vColor; return; }
-    if (vFlags >= 4.0) {
+    // the kind rounded: interpolated, a constant 6.0 came as 5.99999 on some pixels of a small square far off - the
+    // walk's floor drawn by the portals' rule there, in specks (the off-screen frame of 11.11)
+    float kind = floor(vFlags + 0.5);
+    if (kind >= 8.0) { outColor = vColor; return; }
+    if (kind >= 6.0) {
+        // the walk (the PO 11.11): vZlo the point's time in the walk's span - there once the walk has reached it,
+        // the newest bright; the floor it never reached (vZlo over 1) only when the walk is over
+        if (vWorld.z > uCut + 1.0) discard;
+        if (vZlo > uVis) discard;
+        vec4 w = vColor;
+        if (vZlo <= 1.0 && vZlo > uVis - 0.03) w = vec4(mix(w.rgb, vec3(1.0, 0.97, 0.85), 0.7), min(1.0, w.a * 2.2));
+        outColor = w;
+        return;
+    }
+    if (kind >= 4.0) {
         // a portal: vZlo its turn in the visibility's wave - done green, still to come faint cyan, the front bright
         if (vWorld.z > uCut + 1.0) discard;
         bool done = vZlo <= uVis;
@@ -200,8 +219,8 @@ void main() {
         outColor = vec4(c.rgb, min(1.0, c.a * vColor.a));
         return;
     }
-    bool wall = mod(vFlags, 2.0) >= 1.0;
-    bool both = vFlags >= 2.0;
+    bool wall = mod(kind, 2.0) >= 1.0;
+    bool both = kind >= 2.0;
     if (!wall && vZlo > uCut + 1.0) discard;
     if (!both && dot(vNormal, uEye - vWorld) <= 0.0) discard;
     outColor = vColor;
@@ -237,6 +256,8 @@ void main() {
             _boxVbo = gl.GenBuffer();
             var blend = gl.GetProcAddress("glBlendFunc");
             _blend = blend != IntPtr.Zero ? Marshal.GetDelegateForFunctionPointer<BlendFunc>(blend) : null;
+            var offset = gl.GetProcAddress("glPolygonOffset");
+            _offset = offset != IntPtr.Zero ? Marshal.GetDelegateForFunctionPointer<PolygonOffset>(offset) : null;
             var read = gl.GetProcAddress("glReadPixels");
             _read = read != IntPtr.Zero ? Marshal.GetDelegateForFunctionPointer<ReadPixels>(read) : null;
             T? Fn<T>(string name) where T : Delegate
@@ -387,6 +408,42 @@ void main() {
             }
     }
 
+    /// <summary>
+    /// The PO 11.11 (the checks' stage): the floor the walk reached, each standing point a small square on its floor in
+    /// the colour of its time - near the spawn points warm, far cool - and its time in the walk's span for the shader;
+    /// the floor never reached grey, after the walk.
+    /// </summary>
+    private static void WalkFloor(SchemeModel.Snapshot s, List<float> walk)
+    {
+        if (s.Walk is not { } w)
+            return;
+        var up = Vector3.UnitZ;
+        void Square(Vector3 p, (float, float, float, float) c, float order)
+        {
+            // most of the walk's grid (32): the floor reached reads as one spreading colour under the footprints
+            const float h = 12;
+            var a = p + new Vector3(-h, -h, 2);
+            var b = p + new Vector3(h, -h, 2);
+            var d = p + new Vector3(h, h, 2);
+            var e = p + new Vector3(-h, h, 2);
+            Put(walk, a, up, c, order, 6);
+            Put(walk, b, up, c, order, 6);
+            Put(walk, d, up, c, order, 6);
+            Put(walk, a, up, c, order, 6);
+            Put(walk, d, up, c, order, 6);
+            Put(walk, e, up, c, order, 6);
+        }
+        foreach (var (p, t) in w.Floor)
+        {
+            var f = Math.Clamp(t / w.Span, 0f, 1f);
+            // cool on the maps' warm floors: cyan where the walk began, violet where it ended
+            Square(p, (0.20f + 0.50f * f, 0.85f - 0.45f * f, 1.0f, 0.42f), f);
+        }
+        // the floor never reached: grey once the walk is over (the stage's Vis 2)
+        foreach (var p in w.Unreached)
+            Square(p, (0.30f, 0.30f, 0.34f, 0.55f), 1.5f);
+    }
+
     /// <summary>The map into the card: opaque faces, then the liquids, then every face's edges.</summary>
     private unsafe void Load(GlInterface gl, SchemeModel.Snapshot s)
     {
@@ -444,6 +501,8 @@ void main() {
         var portals = new List<float>();
         var portalLines = new List<float>();
         Stages(s, warp, parts, rays, portals, portalLines);
+        var walk = new List<float>();
+        WalkFloor(s, walk);
         _faceCount = opaque.Count / Stride;
         _liquidFirst = _faceCount;
         _liquidCount = liquid.Count / Stride;
@@ -457,9 +516,12 @@ void main() {
         _portalCount = portals.Count / Stride;
         _portalLineFirst = _portalFirst + _portalCount;
         _portalLineCount = portalLines.Count / Stride;
-        var all = new float[opaque.Count + liquid.Count + edges.Count + parts.Count + rays.Count + portals.Count + portalLines.Count];
+        _walkFirst = _portalLineFirst + _portalLineCount;
+        _walkCount = walk.Count / Stride;
+        var all = new float[opaque.Count + liquid.Count + edges.Count + parts.Count + rays.Count + portals.Count + portalLines.Count
+                            + walk.Count];
         var at = 0;
-        foreach (var list in new[] { opaque, liquid, edges, parts, rays, portals, portalLines })
+        foreach (var list in new[] { opaque, liquid, edges, parts, rays, portals, portalLines, walk })
         {
             list.CopyTo(all, at);
             at += list.Count;
@@ -701,6 +763,25 @@ void main() {
         }
         if (art.Lamps && art.Glow > 0 && _rayCount > 0)
             gl.DrawArrays(GL_LINES, _rayFirst, new IntPtr(_rayCount));
+        // the PO 11.11: the floor the walk has reached by now, on the floor (the footprints are the overlay's)
+        if (art.Walk && _walkCount > 0)
+        {
+            // a decal on the floor: pulled toward the eye by the floor's own slope (a fixed bias let the floor show
+            // through it in specks far off - the off-screen frame of 11.11)
+            if (_offset != null)
+            {
+                gl.Enable(GL_POLYGON_OFFSET_FILL);
+                _offset(-2f, -16f);
+                gl.DrawArrays(GL_TRIANGLES, _walkFirst, new IntPtr(_walkCount));
+                gl.Disable(GL_POLYGON_OFFSET_FILL);
+            }
+            else
+            {
+                gl.Uniform1f(_uBias, 0.0006f);
+                gl.DrawArrays(GL_TRIANGLES, _walkFirst, new IntPtr(_walkCount));
+                gl.Uniform1f(_uBias, 0);
+            }
+        }
         // the edits over everything, as the CPU drawing had them
         var boxes = Boxes(Camera.Cut).ToArray();
         if (boxes.Length > 0)
@@ -835,6 +916,9 @@ public sealed class SchemeOverlay : Control, CopyText.IDrawnText
                 ctx.DrawEllipse(new SolidColorBrush(Color.FromRgb(0x0e, 0x74, 0x90)), null, eye, pulse * 0.45, pulse * 0.45);
             }
         }
+        // the PO 11.11: «карта ходьбы … визуализировалась как ходьба, ножками» - the walk of the map's check
+        if (art.Walk && s.Walk is { } wk)
+            Walk(ctx, wk, art.WalkT, _camera, size);
         // the frame's stage: the marks go with the map as it stretches
         var morph = s.Warp is { } warp && s.IsDonor ? warp : null;
         foreach (var (what, at0) in s.Marks)
@@ -924,7 +1008,9 @@ public sealed class SchemeOverlay : Control, CopyText.IDrawnText
           .OrderByDescending(x => x.when).Take(7);
         foreach (var x in timeline)
             feed.Add((x.dot, x.text));
-        DrawnText = string.Join(Environment.NewLine, feed.Select(f => f.text).Concat(rebuilt.Select(e => Kind(e.Family))));
+        // the stage's words too (they are drawn - «Копировать» takes them with the rest)
+        DrawnText = string.Join(Environment.NewLine, (art.Caption.Length > 0 ? new[] { art.Caption } : Array.Empty<string>())
+                                                     .Concat(feed.Select(f => f.text)).Concat(rebuilt.Select(e => Kind(e.Family))));
         if (feed.Count > 0)
         {
             var texts = feed.Select(f => new FormattedText(f.text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
@@ -937,6 +1023,152 @@ public sealed class SchemeOverlay : Control, CopyText.IDrawnText
                 ctx.DrawEllipse(feed[i].dot, null, new Point(26, y0 + 18 + 22 * i), 5, 5);
                 ctx.DrawText(texts[i], new Point(40, y0 + 9 + 22 * i));
             }
+        }
+    }
+
+    /// <summary>
+    /// The PO 11.11 (the checks' stage, «карта ходьбы … визуализировалась как ходьба, ножками»): from every spawn point
+    /// the walk starts at once, a ring going out; along the way to each major item its footprints as far as the walk has
+    /// come by `now` (seconds of walking) - a sole and a heel along the way, left and right in turn, the newest bright,
+    /// the older fading - and the walker at the front; a lift ridden rises, a teleporter gone through is a dashed jump, a
+    /// pad's flight its arc; an item reached is named with its seconds from the nearest spawn point, the names kept off
+    /// one another; an item no walk reaches is named red once the walk is over.
+    /// </summary>
+    internal static void Walk(DrawingContext ctx, WalkShow w, float now, SchemeCamera cam, Size size)
+    {
+        bool Hidden(Vector3 p) => cam.Cut is { } c && p.Z > c + 64;
+        var start = Math.Clamp(1 - now / 1.2f, 0, 1);
+        foreach (var sp in w.Spawns)
+        {
+            if (Hidden(sp) || cam.Project(sp, size) is not { } p)
+                continue;
+            var r = 6 + 22 * (1 - start);
+            ctx.DrawEllipse(null, new Pen(new SolidColorBrush(Color.FromArgb((byte)(50 + 170 * start), 0xff, 0xe0, 0x8a)), 2), p, r, r * 0.6);
+            ctx.DrawEllipse(new SolidColorBrush(Color.FromRgb(0xff, 0xe0, 0x8a)), null, p, 3, 3);
+        }
+        var up = new Vector3(0, 0, 2);
+        var ru = Loc.Language == "ru";
+        var walkers = new List<Point>();
+        var labels = new List<(Point at, string text, bool fresh, bool lost)>();
+        var shade = new Pen(new SolidColorBrush(Color.FromArgb(0x90, 0x10, 0x10, 0x14)), 1);
+        foreach (var tr in w.Trails)
+        {
+            foreach (var mv in tr.Moves)
+            {
+                if (mv.T > now || Hidden(mv.From) || cam.Project(mv.From, size) is not { } a || cam.Project(mv.To, size) is not { } b)
+                    continue;
+                switch (mv.Kind)
+                {
+                    case "teleport":
+                    {
+                        var violet = new SolidColorBrush(Color.FromArgb(0xd0, 0xc0, 0x84, 0xfc));
+                        ctx.DrawLine(new Pen(violet, 2, dashStyle: new DashStyle(new double[] { 3, 3 }, 0)), a, b);
+                        ctx.DrawEllipse(null, new Pen(violet, 2), a, 7, 4.5);
+                        ctx.DrawEllipse(null, new Pen(violet, 2), b, 7, 4.5);
+                        break;
+                    }
+                    case "push" when mv.Path is { Count: > 1 } path:
+                    {
+                        var green = new Pen(new SolidColorBrush(Color.FromArgb(0xd0, 0x4a, 0xde, 0x80)), 2.2);
+                        Point? last = a;
+                        foreach (var q in path)
+                            if (cam.Project(q, size) is { } pq)
+                            {
+                                if (last is { } l)
+                                    ctx.DrawLine(green, l, pq);
+                                last = pq;
+                            }
+                        break;
+                    }
+                    default:
+                    {
+                        // a lift, a train, a ladder, a pad without its flight: up (or down) to where it leaves one
+                        var cyan = new SolidColorBrush(Color.FromArgb(0xd0, 0x22, 0xd3, 0xee));
+                        ctx.DrawLine(new Pen(cyan, 2.4, dashStyle: mv.Kind == "ladder" ? new DashStyle(new double[] { 2, 2 }, 0) : null), a, b);
+                        var d = new Avalonia.Vector(b.X - a.X, b.Y - a.Y);
+                        var len = Math.Max(1, Math.Sqrt(d.X * d.X + d.Y * d.Y));
+                        var u = d / len;
+                        var n = new Avalonia.Vector(-u.Y, u.X);
+                        ctx.DrawLine(new Pen(cyan, 2.4), b, b - u * 8 + n * 5);
+                        ctx.DrawLine(new Pen(cyan, 2.4), b, b - u * 8 - n * 5);
+                        break;
+                    }
+                }
+            }
+            Point? front = null;
+            foreach (var st in tr.Steps)
+            {
+                if (st.T > now)
+                    break;
+                if (Hidden(st.At))
+                    continue;
+                var age = now - st.T;
+                var alpha = 0.30 + 0.70 * Math.Exp(-age / 1.2);
+                var yaw = st.Yaw * MathF.PI / 180;
+                var dir = new Vector3(MathF.Cos(yaw), MathF.Sin(yaw), 0);
+                if (cam.Project(st.At + up, size) is not { } c || cam.Project(st.At + dir * 8 + up, size) is not { } ahead)
+                    continue;
+                // a footprint the screen's own size: a sole and a heel turned along the way, to its side of the way
+                var along = new Avalonia.Vector(ahead.X - c.X, ahead.Y - c.Y);
+                var px = Math.Sqrt(along.X * along.X + along.Y * along.Y);
+                if (px < 0.01)
+                    continue;
+                var u = along / px;
+                var foot = Math.Clamp(px / 8 * 15, 10, 16) * (age < 0.15 ? 1.25 : 1.0);
+                var wide = foot * 0.42;
+                var side = new Avalonia.Vector(-u.Y, u.X) * (st.Side * wide * 0.8);
+                var at = c + side;
+                var brush = new SolidColorBrush(Color.FromArgb((byte)(255 * alpha), 0xff, 0xfa, 0xf0));
+                using (ctx.PushTransform(Matrix.CreateRotation(Math.Atan2(u.Y, u.X)) * Matrix.CreateTranslation(at.X, at.Y)))
+                {
+                    ctx.DrawEllipse(brush, shade, new Point(foot * 0.16, 0), foot * 0.32, wide * 0.5);
+                    ctx.DrawEllipse(brush, shade, new Point(-foot * 0.32, 0), foot * 0.17, wide * 0.4);
+                }
+                front = c;
+            }
+            // the walker: at the newest footprint while the way to its item goes on
+            if (tr.T > now && front is { } fp && !walkers.Any(q => Math.Abs(q.X - fp.X) + Math.Abs(q.Y - fp.Y) < 8))
+                walkers.Add(fp);
+            if (tr.T > now || Hidden(tr.At) || cam.Project(tr.At, size) is not { } ip)
+                continue;
+            labels.Add((ip, Loc.F("art.walk.item", Describe.PickupName(tr.Cls, ru), StageArt.Seconds(tr.T)), now - tr.T < 0.6, false));
+        }
+        foreach (var p in walkers)
+        {
+            ctx.DrawEllipse(new SolidColorBrush(Color.FromArgb(0x55, 0xff, 0xe0, 0x8a)), null, p, 10, 10);
+            ctx.DrawEllipse(Brushes.White, new Pen(new SolidColorBrush(Color.FromRgb(0x14, 0x16, 0x1c)), 1.5), p, 4.5, 4.5);
+        }
+        if (now > w.Span)
+            foreach (var (cls, at) in w.Lost)
+                if (!Hidden(at) && cam.Project(at, size) is { } lp)
+                    labels.Add((lp, Loc.F("art.walk.lost", Describe.PickupName(cls, ru)), false, true));
+        // the names: each beside its item where it covers no name put before it (right, left, under, over)
+        var placed = new List<Rect>();
+        foreach (var (ip, label, fresh, lost) in labels)
+        {
+            var ring = lost ? Color.FromRgb(0xf8, 0x71, 0x71) : Color.FromArgb((byte)(fresh ? 255 : 120), 0xff, 0xe0, 0x8a);
+            ctx.DrawEllipse(null, new Pen(new SolidColorBrush(ring), 2), ip, fresh ? 15 : 9, fresh ? 15 : 9);
+            var text = new FormattedText(label, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, Typeface.Default, 13,
+                                         lost ? new SolidColorBrush(Color.FromRgb(0xfe, 0xca, 0xca)) : Brushes.White);
+            var bw = text.Width + 10;
+            var bh = text.Height + 4;
+            Rect? best = null;
+            var bestCover = double.MaxValue;
+            foreach (var (dx, dy) in new[] { (12.0, -bh - 4), (-12 - bw, -bh - 4), (12.0, 6.0), (-12 - bw, 6.0), (-bw / 2, -bh - 16), (-bw / 2, 16.0) })
+            {
+                var r = new Rect(ip.X + dx, ip.Y + dy, bw, bh);
+                var cover = placed.Sum(q => q.Intersects(r) ? q.Intersect(r).Width * q.Intersect(r).Height : 0);
+                if (cover < bestCover)
+                {
+                    (best, bestCover) = (r, cover);
+                    if (cover == 0)
+                        break;
+                }
+            }
+            var box = best!.Value;
+            placed.Add(box);
+            ctx.FillRectangle(new SolidColorBrush(lost ? Color.FromArgb(0xd8, 0x45, 0x0a, 0x0a) : Color.FromArgb(0xc8, 0x14, 0x16, 0x1c)), box, 4);
+            ctx.DrawText(text, new Point(box.X + 5, box.Y + 2));
         }
     }
 

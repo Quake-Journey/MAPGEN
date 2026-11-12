@@ -19,9 +19,21 @@ public static class SchemeTest
         var at = Array.IndexOf(args, "--scheme-gl-test");
         var job = at >= 0 && at + 1 < args.Length ? args[at + 1] : "";
         var png = at >= 0 && at + 2 < args.Length ? args[at + 2] : "scheme_gl.png";
+        string? Opt(string flag) => Array.IndexOf(args, flag) is var k and >= 0 && k + 1 < args.Length ? args[k + 1] : null;
         var model = new SchemeModel();
-        model.RefreshNow(job);
-        var host = new SchemeHost(model, () => null);
+        // `--map MAP.bsp`: a finished map; `--walk WALK.json`: its walk on «Проверки карты» (the PO 11.11), the card's floor
+        if (Opt("--map") is { } bsp)
+            model.RefreshForTest(job, bsp);
+        else
+            model.RefreshNow(job);
+        var walk = Opt("--walk") is { } wf ? WalkShow.Parse(File.ReadAllBytes(wf)) : null;
+        Generation? run = null;
+        if (walk != null && model.Current is { } cur)
+        {
+            model.ShowsForSelfTest(null, null, cur.WithWalk(walk));
+            run = Generation.ForSelfTest(App.Settings, "gates");
+        }
+        var host = new SchemeHost(model, () => run);
         var w = new Avalonia.Controls.Window
         {
             Width = 2560, Height = 1080, ShowInTaskbar = false, ShowActivated = false,
@@ -83,6 +95,9 @@ public static class SchemeTest
                 }
                 done.TrySetResult(true);
             };
+            // the walk caught at 60 % of its span: the floor reached so far, its front bright
+            if (walk != null)
+                walk.Since = DateTime.Now - TimeSpan.FromSeconds(walk.Span * 0.6 / Math.Max(1, walk.Span / 12));
             host.Gl.RequestNextFrameRendering();
             await Task.WhenAny(done.Task, Task.Delay(5000));
             if (!done.Task.IsCompleted)
@@ -212,6 +227,242 @@ public static class SchemeTest
             t.Start();
         };
         return w;
+    }
+
+    /// <summary>
+    /// `--show-test JOB_DIR MAP.bsp WALK.json OUT [SKELETON.json ...]` (the PO 11.11): the two new stage pictures drawn
+    /// without a window, on the CPU - the scheme's own overlay (the footprints, the moves, the items named, the stage's
+    /// words) over the map, the reached floor as the card draws it - the map's checks at four moments of the walk
+    /// (OUT_walk_N.png), and every skeleton's steps frame by frame (OUT_skelK_N.png). PASS / FAIL lines.
+    /// </summary>
+    public static string ShowTest(string[] args)
+    {
+        var at = Array.IndexOf(args, "--show-test");
+        if (at < 0 || at + 4 >= args.Length)
+            return "FAIL usage: --show-test JOB_DIR MAP.bsp WALK.json OUT [SKELETON.json ...]\n";
+        var (job, bsp, walkFile, png) = (args[at + 1], args[at + 2], args[at + 3], args[at + 4]);
+        var b = new System.Text.StringBuilder();
+        void Check(string what, bool ok, string detail = "") =>
+            b.AppendLine($"{(ok ? "PASS" : "FAIL")} {what}" + (detail.Length > 0 ? $" -- {detail}" : ""));
+        var size = new Size(1600, 1000);
+        var model = new SchemeModel();
+        model.RefreshForTest(job, bsp);
+        var s = model.Current;
+        Check("the map is read", s is { Faces.Count: > 0 }, s == null ? "none" : $"{s.Faces.Count} faces, {s.Marks.Count} marks");
+        var walk = WalkShow.Parse(File.ReadAllBytes(walkFile));
+        Check("the walk is read", walk is { Trails.Count: > 0 },
+              walk == null ? "none" : $"{walk.Spawns.Count} spawn points, {walk.Trails.Count} ways, "
+                                      + $"{walk.Trails.Sum(t => t.Steps.Count)} footprints, {walk.Floor.Count} floor points, "
+                                      + $"{walk.Unreached.Count} not reached, {walk.Span:0.0} s");
+        if (s == null || walk == null)
+            return b.ToString();
+        var gates = Generation.ForSelfTest(App.Settings, "gates");
+        var walked = s.WithWalk(walk);
+        var cut = s.PlayTop < s.Max.Z ? s.PlayTop : (double?)null;
+        var k = 0;
+        foreach (var part in new[] { 0.06f, 0.3f, 0.65f, 1.05f })
+        {
+            // the walk's clock set back so that it shows this moment now
+            var pace = Math.Max(1f, walk.Span / 12f);
+            walk.Since = DateTime.Now - TimeSpan.FromSeconds(walk.Span * part / pace);
+            var art = StageArt.Now(gates, walked);
+            var file = $"{png}_walk_{++k}.png";
+            var words = Draw(model, walked, cut, size, file, gates, art.Walk ? walk : null);
+            // the words follow the walk's clock: the overlay's own moment, a few milliseconds on - the head compared
+            var head = art.Caption.Split('—', '-')[0].Trim();
+            Check($"the checks' walk at {art.WalkT:0.0} s of {walk.Span:0.0}", art.Walk && File.Exists(file)
+                  && words.Contains(head) && (part < 0.5f || walk.Trails.Any(t => t.T <= art.WalkT))
+                  && (part < 1f || (art.Vis > 1.5f && art.Caption.Contains($" {walk.Trails.Count} "))),
+                  $"«{art.Caption}», {walk.Trails.Count(t => t.T <= art.WalkT)} items reached, {walk.Lost.Count} out of reach, {file}");
+        }
+        // 3.63: «Свет на готовой карте» - the finished map's lamps glowing while its light is fitted
+        var relight = Generation.ForSelfTest(App.Settings, "cover");
+        relight.SetStageForSelfTest("relight");
+        var lit = StageArt.Now(relight, s);
+        var relightFile = $"{png}_relight.png";
+        var relightWords = Draw(model, s, cut, size, relightFile, relight, null);
+        Check("the finished map's lamps while its light is fitted", lit.Lamps && s.Lamps.Count > 0 && File.Exists(relightFile)
+              && relightWords.Contains(Loc.F("art.relight", s.Lamps.Count)),
+              $"{s.Lamps.Count} lamps, glow {lit.Glow:0.00}, «{lit.Caption}», {relightFile}");
+        var n = 0;
+        foreach (var sk in args.Skip(at + 5))
+        {
+            n++;
+            var steps = SkeletonShow.Parse(File.ReadAllBytes(sk));
+            var frames = steps == null ? new List<SkeletonShow.Frame>() : SkeletonShow.Frames(steps);
+            Check($"skeleton {n}: frames", frames.Count > 1 && frames.All(f => f.Snap.Faces.Count > 0),
+                  $"{frames.Count} frames: " + string.Join(", ", frames.Select(f => $"{f.Step} {f.Snap.Faces.Count}")));
+            var scratch = Generation.ForSelfTest(App.Settings, "scratch");
+            var i = 0;
+            foreach (var f in frames)
+            {
+                f.Snap.ShowCaption = SkeletonShow.Caption(f);
+                var file = $"{png}_skel{n}_{++i:00}.png";
+                var words = Draw(model, f.Snap, null, size, file, scratch, null);
+                Check($"skeleton {n} frame {i}", File.Exists(file) && words.Contains(f.Snap.ShowCaption), $"«{f.Snap.ShowCaption}»");
+            }
+        }
+        return b.ToString();
+    }
+
+    /// <summary>One picture: the map on the CPU from the south-west, the card's walk floor, the scheme's overlay.</summary>
+    private static string Draw(SchemeModel model, SchemeModel.Snapshot snap, double? cut, Size size, string file, Generation run,
+                               WalkShow? walk)
+    {
+        model.ShowsForSelfTest(null, null, snap);
+        var cam = new SchemeCamera { Yaw = -125, Pitch = 40, Cut = cut };
+        cam.Fit(snap);
+        var view = new SchemeView(model, () => null) { Cut = cut };
+        var floor = new WalkFloorForTest(model, run, cam);
+        var overlay = new SchemeOverlay(model, () => run, cam);
+        var panel = new Avalonia.Controls.Panel { Children = { view, floor, overlay } };
+        panel.Measure(size);
+        panel.Arrange(new Rect(size));
+        view.Slant();
+        using var bmp = new RenderTargetBitmap(new PixelSize((int)size.Width, (int)size.Height));
+        bmp.Render(panel);
+        bmp.Save(file);
+        return overlay.DrawnText + " " + string.Join(" ", walk?.Trails.Select(t => t.Cls) ?? Array.Empty<string>());
+    }
+
+    /// <summary>The floor the walk reached by now as the card draws it (<c>SchemeGlView.WalkFloor</c>'s colours).</summary>
+    private sealed class WalkFloorForTest(SchemeModel model, Generation run, SchemeCamera cam) : Avalonia.Controls.Control
+    {
+        public override void Render(Avalonia.Media.DrawingContext ctx)
+        {
+            if (model.Current is not { Walk: { } w } s)
+                return;
+            var art = StageArt.Now(run, s);
+            if (!art.Walk)
+                return;
+            void Square(System.Numerics.Vector3 p, Avalonia.Media.Color colour)
+            {
+                const float h = 12;
+                if (cam.Cut is { } c && p.Z > c + 1)
+                    return;
+                var corners = new[] { (-h, -h), (h, -h), (h, h), (-h, h) }
+                    .Select(d => cam.Project(p + new System.Numerics.Vector3(d.Item1, d.Item2, 2), Bounds.Size)).ToList();
+                if (corners.Any(q => q == null))
+                    return;
+                var geo = new Avalonia.Media.StreamGeometry();
+                using (var g = geo.Open())
+                {
+                    g.BeginFigure(corners[0]!.Value, true);
+                    foreach (var q in corners.Skip(1))
+                        g.LineTo(q!.Value);
+                    g.EndFigure(true);
+                }
+                ctx.DrawGeometry(new Avalonia.Media.SolidColorBrush(colour), null, geo);
+            }
+            foreach (var (p, t) in w.Floor)
+            {
+                var f = Math.Clamp(t / w.Span, 0f, 1f);
+                if (f > art.Vis)
+                    continue;
+                var front = f > art.Vis - 0.03f;
+                Square(p, Avalonia.Media.Color.FromArgb((byte)(255 * (front ? 0.92 : 0.42)), (byte)(255 * (0.20f + 0.50f * f)),
+                                                        (byte)(255 * (0.85f - 0.45f * f)), 255));
+            }
+            if (art.Vis > 1.5f)
+                foreach (var p in w.Unreached)
+                    Square(p, Avalonia.Media.Color.FromArgb(0x8c, 0x4d, 0x4d, 0x57));
+        }
+    }
+
+    /// <summary>
+    /// `--walk-code-test MAP.bsp` (the PO 11.11): the checks' step's walk code (<see cref="Generation.WalkCode"/>) run as
+    /// the step runs its Python - the same program, the same quoting - on a map, held a few seconds; its walk read from
+    /// memory as the scheme reads it. PASS / FAIL lines.
+    /// </summary>
+    public static string WalkCodeTest(string[] args)
+    {
+        var at = Array.IndexOf(args, "--walk-code-test");
+        if (at < 0 || at + 1 >= args.Length)
+            return "FAIL usage: --walk-code-test MAP.bsp\n";
+        var b = new System.Text.StringBuilder();
+        void Check(string what, bool ok, string detail = "") =>
+            b.AppendLine($"{(ok ? "PASS" : "FAIL")} {what}" + (detail.Length > 0 ? $" -- {detail}" : ""));
+        var map = Path.GetFullPath(args[at + 1]);
+        var tools = Path.Combine(Engine.Repo ?? "", "tools");
+        var root = $"mgs_walktest_{Environment.ProcessId}";
+        var code = Generation.WalkCode(tools, map, root);
+        Check("the code is one line", !code.Contains('\n') && !code.Contains('\r'), code);
+        using var job = new NativeJob();
+        var since = DateTime.Now;
+        job.Start(Engine.Python!, new[] { "-c", "import subprocess,sys;" + code + "import time;time.sleep(6)" }, Path.GetTempPath());
+        WalkShow? walk = null;
+        while (walk == null && (DateTime.Now - since).TotalSeconds < 30)
+        {
+            Thread.Sleep(200);
+            if (MemFiles.Read(root, "walk_show.json") is { } bytes)
+                walk = WalkShow.Parse(bytes);
+        }
+        Check("the walk is read from memory while the step's Python runs", walk is { Trails.Count: > 0 },
+              walk == null ? $"nothing in {(DateTime.Now - since).TotalSeconds:0} s ({Engine.Python})"
+                           : $"{(DateTime.Now - since).TotalSeconds:0.0} s: {walk.Spawns.Count} spawn points, {walk.Trails.Count} ways, "
+                             + $"{walk.Trails.Sum(t => t.Steps.Count)} footprints, {walk.Lost.Count} out of reach, {walk.Span:0.0} s");
+        var broken = Generation.WalkCode(tools, map + ".none", root + "_none");
+        // the step's own code after it runs: here an exit of its own (7), not the 1 of an error that got out
+        using var bad = new NativeJob();
+        bad.Start(Engine.Python!, new[] { "-c", "import subprocess,sys;" + broken + "sys.exit(7)" }, Path.GetTempPath());
+        var waited = DateTime.Now;
+        uint exit;
+        while (!bad.Exited(out exit) && (DateTime.Now - waited).TotalSeconds < 30)
+            Thread.Sleep(100);
+        Check("a map it cannot read stops nothing: the step's code goes on", exit == 7, $"exit {exit}");
+        return b.ToString();
+    }
+
+    /// <summary>
+    /// `--tries-test PARAMS.json [TRIES] [WORKERS]` (the PO 12.11): the planner's tries over its pool, as the skeleton's
+    /// stage runs them (mapgen_scratch.live_tries handed to best_plan), in a Python of their own; the Studio reads the
+    /// section on its own beat meanwhile, as the scheme does - how soon the first skeleton is on it, how many it saw.
+    /// Nothing is written to the disk.
+    /// </summary>
+    public static string TriesTest(string[] args)
+    {
+        var at = Array.IndexOf(args, "--tries-test");
+        if (at < 0 || at + 1 >= args.Length)
+            return "FAIL usage: --tries-test PARAMS.json [TRIES] [WORKERS]\n";
+        var tries = at + 2 < args.Length && int.TryParse(args[at + 2], out var t) ? t : 40;
+        var workers = at + 3 < args.Length && int.TryParse(args[at + 3], out var wk) ? wk : 4;
+        var b = new System.Text.StringBuilder();
+        void Check(string what, bool ok, string detail = "") =>
+            b.AppendLine($"{(ok ? "PASS" : "FAIL")} {what}" + (detail.Length > 0 ? $" -- {detail}" : ""));
+        var tools = Path.Combine(Engine.Repo ?? "", "tools");
+        var root = $"mgs_triestest_{Environment.ProcessId}";
+        var code = $"_tp=r'{tools}';_pp=r'{Path.GetFullPath(args[at + 1])}';" +
+                   "import sys,json,time;sys.path.insert(0,_tp);import mapgen_scratch as sc,mapgen_scratch_plan as pm;" +
+                   $"p=json.load(open(_pp,encoding='utf-8'));ps=pm.best_plan(p,7,{tries},workers={workers},seen=sc.live_tries('{root}'));" +
+                   "print(len(ps));time.sleep(2)";
+        using var job = new NativeJob();
+        var since = DateTime.Now;
+        job.Start(Engine.Python!, new[] { "-c", code }, Path.GetTempPath());
+        double? first = null;
+        var seen = new List<int>();
+        var faces = 0;
+        var caption = "";
+        byte[]? last = null;
+        uint exit;
+        while (!job.Exited(out exit) && (DateTime.Now - since).TotalSeconds < 120)
+        {
+            Thread.Sleep(100);
+            if (MemFiles.Read(root, "skeleton_live.json") is not { } bytes || (last != null && bytes.AsSpan().SequenceEqual(last)))
+                continue;
+            last = bytes;
+            if (SkeletonShow.ParseTry(bytes) is not { } tr)
+                continue;
+            first ??= (DateTime.Now - since).TotalSeconds;
+            seen.Add(tr.Done);
+            faces = tr.Snap.Faces.Count;
+            caption = tr.Snap.ShowCaption;
+        }
+        var total = (DateTime.Now - since).TotalSeconds;
+        Check("the planner's tries are on the scheme as they come", exit == 0 && first != null && seen.Count >= 3
+              && seen.SequenceEqual(seen.OrderBy(x => x)) && seen[^1] == tries && faces > 0,
+              $"python exit {exit}; the first skeleton after {first:0.0} s of {total:0.0}; seen {seen.Count} tries: "
+              + $"{string.Join(",", seen)}; the last «{caption}», {faces} faces");
+        return b.ToString();
     }
 
     public static string Run(string[] args)

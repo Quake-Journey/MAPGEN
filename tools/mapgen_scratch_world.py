@@ -576,7 +576,7 @@ def _build_plan(P, pal: dict, title: str = "") -> tuple:
                 air[c].append([d.z if c in P.ramps else d.z + 16, d.z + 32 + DOOR_H, role, role])
                 steps.append((c, d.z, d.stair[0], d.stair[1], role))
             else:
-                air[c].append([d.z, d.top or d.z + DOOR_H, role, role])
+                air[c].append([d.z, plan_mod.door_top(d) if d.kind == "swim" else (d.top or d.z + DOOR_H), role, role])
     for (cells, z0, z1, *_w) in P.windows:
         for c in cells:
             air[c].append([z0, z1, ("door", -1), ("door", -1)])
@@ -825,7 +825,8 @@ def finish_entities(P, pal: dict, spaces: dict, brushes: list, ents: list, linte
     for (cells, kind, z0, level) in P.liquids:
         sf = pal[kind][0]
         contents = {"water": C_WATER | C_TRANSLUCENT, "lava": C_LAVA, "slime": C_SLIME}[kind]
-        for (x0, y0, x1, y1) in rects_of(set(cells)):
+        # the world's cells (the PO 12.11: a tube under the floors has its cells on a layer of its own)
+        for (x0, y0, x1, y1) in rects_of({ph(c) for c in cells}):
             brushes.append(box((x0 * CELL, y0 * CELL, z0), (x1 * CELL, y1 * CELL, level), {"default": sf},
                                contents=contents, note=kind))
     for (plat, zl, zh, bottom, top) in P.lifts:
@@ -955,7 +956,10 @@ def finish_entities(P, pal: dict, spaces: dict, brushes: list, ents: list, linte
         keys = {"classname": cls}
         if cls in plan_mod.POWERUPS and c in team_of:
             keys["team"] = team_of[c]
-        lift = 8 if c in ped and cls in plan_mod.POWERUPS else 0
+        # on its pedestal, whatever it is: the railgun in its room past a tube stood 16 over the floor on a pedestal 8
+        # high - its box in the pedestal, the game freed it at spawn (the PO 12.11 on mg_new_7775_367: «приплыл сюда,
+        # а там пусто»; his mg_new_7775 of 3.66: «внутри ничего нет»)
+        lift = 8 if c in ped else 0
         c = ph(c)
         keys["origin"] = f"{c[0] * CELL + CELL // 2} {c[1] * CELL + CELL // 2} {z + 16 + lift}"
         ents.append(Entity(keys))

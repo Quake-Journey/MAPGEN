@@ -43,6 +43,9 @@ INCLUDE = [
     "doc/mapgen_studio/**",
     # brief 11 D3: the texture pack's record - its catalogue and contact sheets (the pack itself is a release asset)
     "tools/mapgen_textures_*.json", "doc/mapgen_textures/**",
+    # 3.66: the rules the planner and the map's checks read (people's distances between majors, the prizes' ways -
+    # aggregated from the knowledge base, no map's own layout)
+    "tools/mapgen_item_rules.json",
 ]
 EXCLUDE = ["**/bin/**", "**/obj/**", "**/*.bsp", "**/*.bak", "**/__pycache__/**", "**/*.pyc", "**/.vs/**",
            "**/*.user", "**/*.ini", "**/*.exe", "**/*.dll", "**/*.pdb"]

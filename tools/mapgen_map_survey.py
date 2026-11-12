@@ -35,6 +35,7 @@ import argparse
 import heapq
 import json
 import math
+import os
 import random
 import struct
 import sys
@@ -223,6 +224,7 @@ class Graph:
         # brief 19 §6: what the movers' mechanics are measured by
         self.edge_kind: dict = {}          # (a, b) -> plat | ladder | teleport | push
         self.push_paths: list = []         # each pad's flight, points (x, y, z) until it lands
+        self.push_src: list = []           # the walk node each of those flights leaves from
         self.tele_dests: list = []         # (dest node, dest origin, dest yaw)
         self.ladder_tops: list = []        # (x, y, z) of each ladder's top
 
@@ -518,6 +520,7 @@ def movers(g: Graph, w: World):
             apex = None
             path = []
             g.push_paths.append(path)
+            g.push_src.append(src)
             while t < 4.0:
                 px += vx * dt
                 py += vy * dt
@@ -574,7 +577,211 @@ def movers(g: Graph, w: World):
                     g.link(a_, u, rise / 200.0, "ladder")
                     g.link(u, a_, rise / 300.0, "ladder")
             n_ladder += 1
-    return {"plats": n_plat, "teleporters": n_tel, "pads": n_push, "ladders": n_ladder, "trains": n_train}
+    n_swim = swim_up(g, w) if SWIM_UP else 0
+    return {"plats": n_plat, "teleporters": n_tel, "pads": n_push, "ladders": n_ladder, "trains": n_train,
+            "swims": n_swim}
+
+
+# The PO 12.11 («не видел пока у тебя карт аналогичных q2dm1 - чтобы нужно было плыть под водой куда то за важными
+# целями - типа за рельсой. Или как q2dm5»): the walk knew only a pool's bottom - a water column one swims up and out
+# of at its top was a trap to it (q2dm1's railgun out of reach). A man in water rises to the column's top and climbs
+# out onto a floor at the surface (up to 48 over it - the game's water jump). MAPGEN_NO_SWIM_UP=1: the walk before.
+SWIM_UP = os.environ.get("MAPGEN_NO_SWIM_UP") != "1"
+
+
+def swim_up(g: Graph, w: World) -> int:
+    """Edges from each water point up its column to the dry floor at the surface within two cells."""
+    made = 0
+    for i, (x, y, z) in enumerate(g.nodes):
+        if not g.water[i]:
+            continue
+        top = z
+        while top < z + 1024 and w.contents_all(x, y, top + 40) & WATER:
+            top += 16
+        if top <= z + 16:
+            continue
+        cx, cy = int(math.floor(x / GRID)), int(math.floor(y / GRID))
+        for dx in (-2, -1, 0, 1, 2):
+            for dy in (-2, -1, 0, 1, 2):
+                for j in g.at.get((cx + dx, cy + dy), ()):
+                    zj = g.nodes[j][2]
+                    if not g.water[j] and top - 24 <= zj <= top + 48 and zj > z + 44:
+                        g.link(i, j, (zj - z) / (SPEED * 0.6) + 0.4, "swim")
+                        made += 1
+    return made
+
+
+# The PO 11.11 (the checks' stage of a run): «на этапе проверка карты мы можем что то визуализировать?»; «было бы круто
+# чтобы карта ходьбы и визуализировалась как ходьба, ножками»; «свет то у нас сейчас именно как свет визуализируется».
+# survey() hands over, when asked, the walk it has just made: the floor it reached and when, and footprints along the
+# way from the nearest spawn point to every major item. The PO 11.11: «SSD не очень любит много записей … ты много чего
+# вынес на работу в RAM» - to the Studio in memory: a named section as the engine's (MemFiles.cs: «Q2MEM1», room,
+# size, present, the bytes), `Local\q2mem_<SHOW_MEM>/walk_show.json`, held while this process lives
+# (check_mapgen_new_map.py --show-mem ROOT); SHOW_PATH - a file instead, for a check outside the Studio.
+SHOW_PATH: str | None = None
+SHOW_MEM: str | None = None
+_HELD: list = []         # the sections handed over: alive as long as this process
+
+
+def mem_publish(root: str, relative: str, data: bytes) -> bool:
+    """`data` into the named section `Local\\q2mem_<root>/<relative>` the Studio reads (MemFiles.Read), kept open until
+    this process ends; False where Windows has none."""
+    import mmap
+    import os
+    import struct as _st
+    if os.name != "nt":
+        return False
+    try:
+        m = mmap.mmap(-1, 32 + max(1, len(data)), tagname=f"Local\\q2mem_{root}/{relative}")
+    except OSError:
+        return False
+    m[0:32] = b"Q2MEM1\0\0" + _st.pack("<QQQ", len(data), len(data), 0)
+    m[32:32 + len(data)] = data
+    m[24:32] = _st.pack("<Q", 1)
+    _HELD.append(m)
+    return True
+
+
+_LIVE: dict = {}         # the sections rewritten in place: name -> (mapping, room)
+
+
+def mem_update(root: str, relative: str, data: bytes) -> bool:
+    """`data` into a section the Studio reads again and again (the skeleton's tries as they come): made the first
+    time with room to spare (a megabyte, or four times the first data), rewritten in place after - «present» off
+    while it is written (MemFiles.Read skips it then); False where Windows has none or the data outgrows the room."""
+    import mmap
+    import os
+    import struct as _st
+    if os.name != "nt":
+        return False
+    name = f"Local\\q2mem_{root}/{relative}"
+    if name not in _LIVE:
+        room = max(1 << 20, 4 * len(data))
+        try:
+            m = mmap.mmap(-1, 32 + room, tagname=name)
+        except OSError:
+            return False
+        m[0:32] = b"Q2MEM1\0\0" + _st.pack("<QQQ", room, 0, 0)
+        _LIVE[name] = (m, room)
+    m, room = _LIVE[name]
+    if len(data) > room:
+        return False
+    m[24:32] = _st.pack("<Q", 0)
+    m[16:24] = _st.pack("<Q", len(data))
+    m[32:32 + len(data)] = data
+    m[24:32] = _st.pack("<Q", 1)
+    return True
+STRIDE = 44.0            # a footprint every this many units walked (a player's stride at a run, to the eye)
+FOOT_SIDE = 7.0          # left and right of the way
+SHOW_FLOOR_MAX = 6000    # the floor points sent, at most
+SHOW_ITEMS = MAJORS | {"item_power_shield", "item_adrenaline"}
+
+
+def publish_walk(path: Path, root: str) -> bool:
+    """The walk of a map alone (the graph, the spawn points' shortest ways - none of survey()'s measures) handed to the
+    Studio in memory under `root` (the checks' stage: the Studio's checks step makes it before it waits for its checks,
+    and holds it while they run); False when the map has no spawn point or no floor."""
+    global SHOW_MEM
+    w = World(Path(path))
+    hurt = []
+    for e in w.ents:
+        if e.get("classname") == "trigger_hurt":
+            mb = model_bounds(w, e)
+            if mb:
+                hurt.append(mb)
+    g = build_graph(w, hurt)
+    link_graph(g, w)
+    movers(g, w)
+    spawns = [fvec(e.get("origin", "")) for e in w.ents if e.get("classname") == "info_player_deathmatch"
+              and not (int(e.get("spawnflags", "0") or 0) & 0x800)]
+    sources = [s for s in (g.nearest(s_, below=96) for s_ in spawns) if s is not None]
+    if not sources:
+        return False
+    prev = [-1] * len(g.nodes)
+    reach = dijkstra(g, sources, prev=prev)
+    SHOW_MEM = root
+    write_walk_show(None, g, w, reach, prev, spawns)
+    return True
+
+
+def write_walk_show(path: Path | None, g: Graph, w: World, reach: list, prev: list, spawns: list) -> dict:
+    """The walk as the Studio draws it - JSON, into memory (SHOW_MEM) or a file written whole (`path`):
+    floor  [[x, y, z, t]]          reached standing points (t: seconds from the nearest spawn), sampled
+    unreached [[x, y, z]]          standing points the walk did not reach, sampled
+    spawns [[x, y, z]]
+    trails [{cls, at, t, steps: [[x, y, z, yaw, t, side]], moves: [{kind, from, to, t, path}]}]
+           the shortest way from the nearest spawn to each major item: a footprint every STRIDE units of walking,
+           left and right in turn; a lift, a ladder, a teleporter or a pad on the way as a move
+    lost   [{cls, at}]               the major items no walk from a spawn point reaches
+    tmax   the latest time of any trail's item, else of the floor"""
+    import json as _json
+    n = len(g.nodes)
+    reached = [i for i in range(n) if reach[i] < math.inf]
+    unreached = [i for i in range(n) if reach[i] == math.inf]
+    rnd = random.Random(7)
+    floor_ids = reached if len(reached) <= SHOW_FLOOR_MAX else sorted(rnd.sample(reached, SHOW_FLOOR_MAX))
+    un_ids = unreached if len(unreached) <= 1500 else sorted(rnd.sample(unreached, 1500))
+    R1 = lambda v: round(v, 1)
+    push_of = {src: path for src, path in zip(g.push_src, g.push_paths)}
+    trails, lost = [], []
+    for e in w.ents:
+        cls = e.get("classname", "")
+        if cls not in SHOW_ITEMS:
+            continue
+        o = fvec(e.get("origin", ""))
+        end = g.nearest(o, below=96)
+        if end is None or reach[end] == math.inf:
+            lost.append({"cls": cls, "at": [R1(v) for v in o]})
+            continue
+        way = [end]
+        while prev[way[-1]] >= 0 and len(way) < n:
+            way.append(prev[way[-1]])
+        way.reverse()
+        steps, moves = [], []
+        walked, side = STRIDE * 0.5, 1
+        for a, b in zip(way, way[1:]):
+            kind = g.edge_kind.get((a, b))
+            pa, pb = g.nodes[a], g.nodes[b]
+            if kind:
+                mv = {"kind": kind, "from": [R1(v) for v in pa], "to": [R1(v) for v in pb], "t": R1(reach[a])}
+                if kind == "push" and a in push_of:
+                    pts = push_of[a]
+                    mv["path"] = [[R1(v) for v in q] for q in pts[::max(1, len(pts) // 24)]]
+                moves.append(mv)
+                walked = STRIDE * 0.5
+                continue
+            dx, dy, dz = pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]
+            seg = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if seg < 1e-6:
+                continue
+            yaw = math.degrees(math.atan2(dy, dx))
+            nx, ny = -dy / max(1e-6, math.hypot(dx, dy)), dx / max(1e-6, math.hypot(dx, dy))
+            pos = 0.0
+            while walked + (seg - pos) >= STRIDE:
+                pos += STRIDE - walked
+                walked = 0.0
+                f = pos / seg
+                x, y, z = pa[0] + dx * f, pa[1] + dy * f, pa[2] + dz * f
+                tt = reach[a] + (reach[b] - reach[a]) * f
+                steps.append([R1(x + nx * FOOT_SIDE * side), R1(y + ny * FOOT_SIDE * side), R1(z), round(yaw),
+                              round(tt, 2), side])
+                side = -side
+            walked += seg - pos
+        trails.append({"cls": cls, "at": [R1(v) for v in o], "t": round(reach[end], 2), "steps": steps, "moves": moves})
+    tmax = max((t_["t"] for t_ in trails), default=max((reach[i] for i in reached), default=0.0))
+    data = {"version": 1, "tmax": round(tmax, 2), "reached": len(reached), "points": n,
+            "spawns": [[R1(v) for v in s_] for s_ in spawns],
+            "floor": [[R1(g.nodes[i][0]), R1(g.nodes[i][1]), R1(g.nodes[i][2]), round(reach[i], 2)] for i in floor_ids],
+            "unreached": [[R1(v) for v in g.nodes[i]] for i in un_ids],
+            "trails": trails, "lost": lost}
+    text = _json.dumps(data, separators=(",", ":"))
+    if SHOW_MEM:
+        mem_publish(SHOW_MEM, "walk_show.json", text.encode("utf-8"))
+    if path is not None:
+        tmp = path.with_suffix(path.suffix + ".part")
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(path)
+    return data
 
 
 def dijkstra(g: Graph, sources, blocked: set | None = None, prev: list | None = None):
@@ -653,7 +860,14 @@ def survey(path: Path, seed: int = 1, doors: list | None = None) -> dict:
     spawns = [fvec(e.get("origin", "")) for e in w.ents if e.get("classname") == "info_player_deathmatch"
               and not (int(e.get("spawnflags", "0") or 0) & 0x800)]
     spawn_nodes = [g.nearest(s, below=96) for s in spawns]
-    reach = dijkstra(g, [s for s in spawn_nodes if s is not None])
+    prev = [-1] * len(g.nodes) if (SHOW_PATH or SHOW_MEM) else None
+    reach = dijkstra(g, [s for s in spawn_nodes if s is not None], prev=prev)
+    if prev is not None:
+        # the Studio's picture of the checks (the PO 11.11): handed over before the slow measures, read while they run
+        try:
+            write_walk_show(Path(SHOW_PATH) if SHOW_PATH else None, g, w, reach, prev, spawns)
+        except OSError:
+            pass
     R = [i for i in range(len(g.nodes)) if reach[i] < math.inf]
     Rset = set(R)
     out: dict = {"map": Path(path).stem, "spawns": len(spawns), "floor_points": len(g.nodes),

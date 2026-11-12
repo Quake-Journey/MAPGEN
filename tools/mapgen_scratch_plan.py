@@ -55,6 +55,225 @@ def phys(c):
     return (c[0], c[1] % UP) if c[1] >= UP // 2 else c
 
 
+# --------------------------------------------------------------------------------------------- the majors apart
+# The PO 12.11 on his mg_new_84719 (a yellow and a green armour 231 u / 0.8 s apart in one room, the railgun 270 u off -
+# the green one «armour by the key gun», brief 19's key_gun_ledge): «нельзя класть рядом предметы одного класса - это же
+# глупо. Арморы должны лежать далеко друг от друга, так же как оружия далеко друг от друга и не близко к арморам, и
+# паверапы так же»; «айтемы, оружие, броня, паверапы, они должны иметь ценность подбора. Когда ты пихаешь их рядом то
+# ценность становится равна почти нулю»; «люди выстраивают тактику в подборе айтемов, а тут пришел, сел около них и почти
+# ничего больше делать не надо»; «туже рельсу класть в шаге от двух арморов - глупо». His rule, not people's: people's
+# maps put a gun by an armour now and then (q2duel1 HB 237 u from the GA, koldduel1 SSG 197 u) - none near, here.
+ARMOURS = ("item_armor_body", "item_armor_combat", "item_armor_jacket")
+POWER_ITEMS = ("item_quad", "item_invulnerability", "item_power_shield", "item_power_screen", "item_health_mega",
+               "item_adrenaline")
+MAJORS_APART_SAME = (2.5, 512.0)     # two of one class (armours, guns, powerups): seconds on foot, units straight
+MAJORS_APART_CROSS = (1.5, 384.0)    # a gun and an armour, a powerup and either
+MAJORS_PLAN_SLACK = 1.2              # the compiled map walks quicker than the plan's cells (a duel of 12.11: 1.47 s
+                                     # measured for 1.65 planned) - the plan asks 20 % more
+# the RED: 3.65's placement (an armour by the key gun, nothing kept apart); MAPGEN_OLD_MAJORS=1 sets it for a process
+OLD_MAJORS = __import__("os").environ.get("MAPGEN_OLD_MAJORS") == "1"
+# the knowledge base's rules (tools/mapgen_item_practice.py --rules): each pair of classes no nearer than people's lower
+# quartile (the median with «item_spacing» wide), each prize's ways as people's take them; per family for
+# «item_practice» (a family of few pairs takes the whole base's number for that pair)
+ITEM_PRACTICES = ("mix", "q2dm", "q2duel", "q2rdm", "ztn2dm", "omf", "koldduel1", "ptrip", "match1",
+                  "q2duel+ztn2dm", "q2dm+q2rdm", "q2duel+koldduel1", "q2dm+ztn2dm", "q2rdm+omf", "ptrip+match1",
+                  "q2dm+q2duel", "ztn2dm+q2rdm")
+PRIZE_ACCESS = ("people", "nooks", "movers", "water", "exposed")
+PRIZE_ORDER = ("item_invulnerability", "item_quad", "weapon_railgun", "item_health_mega", "item_armor_body",
+               "item_power_shield")
+DIVE_DEPTH = 160                     # a dive: the well's floor under the room's (a man of 56 under water, his eyes too)
+# The PO 12.11 on his mg_new_7775 («q2dm1 с призами под водой»): «никакого глубокого бассейна по типу как на q2dm1 в
+# котором плывешь за рейлом - я не получил, только узкая небольшая подводная нычка под стенкой», «на q2dm1 там глубокий
+# большой водоем через который нужно плыть и там еще и труба есть по которой плывут до выхода на рейл», «на q2dm4 или
+# q2dm5 там вообще многоуровневые конструкции с множеством глубоких водоемов через которые можно плавать», «плоская
+# карта». Water as well-known maps build it (tools/mapgen_water_practice.py, the BSPs of his 40 maps): the deep bodies
+# q2dm1 248 deep (a pool of 55 cells, a tube 368 u long, 112 high, to the railgun's room and its own pool), q2dm2 120
+# and 216 (three pools joined by tubes of 528..752 u), q2dm4 232 and 432 (pools on four levels, tubes of 720..1024 u),
+# q2dm5 208 (two levels, a tube 784 u, 128 high), q2rdm13 224 (two levels, a tube 384 u). Ours to 3.66: pits 48 deep.
+WATER_BODIES = ("people", "levels", "shallow")
+POOL_DEPTH = 224         # the water's depth: people's deep bodies' median (120 208 216 224 232 248 432)
+POOL_SURFACE = 8         # the water under the rim's floor (q2dm1's 8): one climbs out anywhere round the pool - the
+                         # game's jump out of water needs the floor under 20 over the man's middle; at 24 under the
+                         # rim nobody came out (a test map of 12.11: 1392 trapped places by the game's movement)
+POOL_MIN = 12            # a pool's cells at least: people's deep pools 14..195 (a room's own pool past a tube aside) - the check
+                         # asks 12 (a duel's pool of 10 cells read as a well, 12.11)
+TUBE_H = 96              # people's tubes 64..128 high (q2dm1 112, q2dm2 80 and 96, q2dm4 64 and 96, q2dm5 128)
+TUBE_CELLS = (6, 12)     # a tube's cells: 384..768 u - people's 368..1024; a breath is 12 s, one swims 150 u/s
+VAULT_CEIL = DOOR_H + 16       # the prize's room: a doorway's height and a slab
+# the RED: 3.66's water (pits 48 deep, a dive 64 x 64 into a vault one cell wide); MAPGEN_OLD_WATER=1 for a process
+OLD_WATER = os.environ.get("MAPGEN_OLD_WATER") == "1"
+
+
+def door_top(d) -> int:
+    """A doorway's top: a tube's roof (the PO 12.11 - its top may be 0, which `top` cannot say), an overlook's own, or
+    the doorway's height over its sill."""
+    if d.kind == "swim":
+        return d.z + TUBE_H
+    return d.top or (d.z + 32 + DOOR_H if d.stair else d.z + DOOR_H)
+
+
+def beside_water(P, cells) -> bool:
+    """A window's cells beside water (the PO 12.11: a deep pool's floor is its bottom - a window over it opened under
+    its surface, a test plan of 12.11)."""
+    if OLD_WATER:
+        return False
+    wet = {c for (cs, kind, _z0, _lv) in P.liquids for c in cs}
+    return any((c[0] + dx, c[1] + dy) in wet for c in cells for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)))
+
+
+def water_deep(q: dict) -> bool:
+    """Water as well-known maps have it - deep pools one swims in (the PO 12.11) - unless 3.66's shallow pits asked."""
+    return not OLD_WATER and (q or {}).get("water_body", "people") != "shallow"
+
+
+def deep_pools_only(q: dict) -> bool:
+    """Every sunken middle asked is a deep pool of water: water (or a prize under water) and no lava, slime or chasm."""
+    q = q or {}
+    return (water_deep(q) and (float(q.get("water") or 0) > 0 or int(q.get("underwater") or 0) > 0)
+            and not float(q.get("lava") or 0) and not float(q.get("slime") or 0) and not int(q.get("pits") or 0))
+
+
+POOL_SHARE = 0.45        # a deep pool's share of its hall at most (brief 20 D4's third for the pits of before: a pool
+                         # one swims across is a way of its own - q2dm1's is most of its hall)
+
+
+def _item_rules() -> dict:
+    try:
+        return json.loads((Path(__file__).resolve().parent / "mapgen_item_rules.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+ITEM_RULES = _item_rules()
+
+
+def item_rules(q: dict | None) -> dict:
+    """The rules of the practice asked (the whole base by default; two families joined by «+» - a mix of them: the
+    distances their mean, the prizes' ways both families' together)."""
+    fam = (q or {}).get("item_practice") or "mix"
+    fams = ITEM_RULES.get("families") or {}
+    if fam == "mix":
+        return ITEM_RULES
+    if "+" not in fam:
+        return fams.get(fam) or ITEM_RULES
+    parts = [fams[f] for f in fam.split("+") if f in fams]
+    if not parts:
+        return ITEM_RULES
+    out = {"apart": {}, "prizes": {}}
+    for key in {k for p_ in parts for k in (p_.get("apart") or {})}:
+        rs = [p_["apart"][key] for p_ in parts if key in (p_.get("apart") or {}) and p_["apart"][key].get("units")]
+        if not rs:
+            continue
+        merged = {"n": sum(r.get("n") or 0 for r in rs)}
+        for f_ in ("units", "s", "p10_units", "p10_s", "median_units", "median_s"):
+            vals = [float(r[f_]) for r in rs if r.get(f_) is not None]
+            merged[f_] = round(sum(vals) / len(vals), 2) if vals else None
+        out["apart"][key] = merged
+    for cls in {c for p_ in parts for c in (p_.get("prizes") or {})}:
+        rs = [p_["prizes"][cls] for p_ in parts if cls in (p_.get("prizes") or {})]
+        n = sum(r.get("n") or 0 for r in rs)
+        moves = {}
+        for r in rs:
+            for k, v in (r.get("moves") or {}).items():
+                moves[k] = moves.get(k, 0) + v
+        out["prizes"][cls] = {"n": n, "moves": moves,
+                              "exposed": round(sum((r.get("exposed") or 0) * (r.get("n") or 0) for r in rs) / max(1, n), 2)}
+    return out
+
+
+def major_kind(cls: str) -> str | None:
+    """«armour», «weapon», «power» - the items whose worth is picking them up; None for the rest."""
+    if cls in ARMOURS:
+        return "armour"
+    if cls in POWER_ITEMS:
+        return "power"
+    if cls.startswith("weapon_") and cls != "weapon_blaster":
+        return "weapon"
+    return None
+
+
+def majors_need(a: str, b: str, q: dict | None = None) -> tuple:
+    """The distance two major items keep: (seconds on foot, units straight) - people's lower quartile for their two
+    classes (the knowledge base), the median with «item_spacing» wide."""
+    ka, kb = major_kind(a), major_kind(b)
+    if ka is None or kb is None:
+        return (0.0, 0.0)
+    order = ("power", "weapon", "armour")
+    x, y = sorted((ka, kb), key=order.index)
+    wide = (q or {}).get("item_spacing") == "wide"
+    key_s, key_u = ("median_s", "median_units") if wide else ("s", "units")
+    whole = (ITEM_RULES.get("apart") or {}).get(f"{x}-{y}") or {}
+    for src in (item_rules(q), ITEM_RULES):
+        r = (src.get("apart") or {}).get(f"{x}-{y}")
+        if r and (r.get("n") or 0) >= 8 and r.get(key_u) and r.get(key_s):
+            t, u = float(r[key_s]), float(r[key_u])
+            if whole.get("p10_s") and whole.get("p10_units"):
+                # a family never nearer than the whole base's tenth; two armours never nearer than its quarter (the PO
+                # 12.11: «никогда арморы не лежат рядом !!! Никогда !»)
+                floor_ = (whole["s"], whole["units"]) if x == y == "armour" else (whole["p10_s"], whole["p10_units"])
+                t, u = max(t, float(floor_[0])), max(u, float(floor_[1]))
+            return (t, u)
+    return MAJORS_APART_SAME if ka == kb else MAJORS_APART_CROSS
+
+
+def _item_at(c, z) -> tuple:
+    pc = phys(c)
+    return ((pc[0] + 0.5) * CELL, (pc[1] + 0.5) * CELL, z)
+
+
+def majors_apart(P: Plan, cls: str, c, z, times_of, skip: int | None = None, extra: float = 0.0, at=None) -> bool:
+    """Whether `cls` at cell `c` (floor `z`) keeps the PO's distance from every major item already placed - on foot
+    (`times_of(cell)`: the plan's seconds from that cell) and straight (through a wall or a floor it is near too);
+    `skip`: the item's own index when it moves; `extra`, `at`: a place not in the plan's walk yet (a room past a tube
+    under water) - its seconds past `c` and where it stands."""
+    if OLD_MAJORS or major_kind(cls) is None:
+        return True
+    at = at or _item_at(c, z)
+    for k2, (cls2, c2, z2, _n) in enumerate(P.items):
+        if major_kind(cls2) is None or k2 == skip:
+            continue
+        t_need, d_need = majors_need(cls, cls2, P.params)
+        if majors_close(math.dist(at, _item_at(c2, z2)), times_of(c2).get(c, 99.0) + extra, t_need * MAJORS_PLAN_SLACK, d_need):
+            return False
+    return True
+
+
+def farthest_from_majors(P: Plan, cells, z_of):
+    """Where nothing keeps the rule (a small map, many majors): the cell farthest straight from every major placed."""
+    its = [_item_at(c2, z2) for cls2, c2, z2, _n in P.items if major_kind(cls2)]
+    if not its or not cells:
+        return cells[0] if cells else None
+    return max(cells, key=lambda x: min(math.dist(_item_at(x, z_of(x)), a) for a in its))
+
+
+def majors_close(units: float, seconds: float, t_need: float, d_need: float) -> bool:
+    """Near: a short walk from one to the other, or near straight and not far on foot either (a prize through a wall
+    that takes 5 s to walk round to is not taken with the other - its pick-up worth stays)."""
+    return seconds < t_need or (units < d_need and seconds < t_need * 1.5)
+
+
+def majors_near(P: Plan, edges) -> list:
+    """Every pair of major items nearer than the rule, on the plan: «cls/cls2 seconds s units u»."""
+    cache: dict = {}
+
+    def tim(c):
+        if c not in cache:
+            cache[c] = dijkstra(edges, c)
+        return cache[c]
+    its = [(cls, c, z) for cls, c, z, _n in P.items if major_kind(cls)]
+    out = []
+    for i, (a, ca, za) in enumerate(its):
+        for b, cb, zb in its[i + 1:]:
+            if ca == cb:
+                continue            # an item team taking turns on one spot (the powerups' cycle, q2dm8's)
+            t_need, d_need = majors_need(a, b, P.params)
+            d = math.dist(_item_at(ca, za), _item_at(cb, zb))
+            t = min(tim(ca).get(cb, 99.0), tim(cb).get(ca, 99.0))
+            if majors_close(d, t, t_need, d_need):
+                out.append(f"{a}/{b} {t:.1f} s {d:.0f} u")
+    return out
+
+
 def layer_of(c) -> int:
     """The layer a plan cell is on: 0 the ground, 1 a room over a room (or a tower's first storey), k a tower's k-th."""
     return c[1] // UP if c[1] >= UP // 2 else 0
@@ -185,6 +404,19 @@ def defaults(p: dict) -> dict:
     # brief 21+ (the PO 05.11): how hard the powerups are to get - easy | medium | hard | mixed (default)
     if q.get("powerup_access") not in ("easy", "medium", "hard", "mixed"):
         q["powerup_access"] = "mixed"
+    # the PO 12.11: the items' pick-up worth - how the prizes are earned, how many under water, how far apart the
+    # majors keep, whose practice (tools/mapgen_item_rules.json)
+    if q.get("prize_access") not in PRIZE_ACCESS:
+        q["prize_access"] = "people"
+    q["underwater"] = max(0, min(3, int(q.get("underwater") or 0)))
+    if q.get("item_spacing") not in ("people", "wide"):
+        q["item_spacing"] = "people"
+    if q.get("item_practice") not in ITEM_PRACTICES:
+        q["item_practice"] = "mix"
+    # the PO 12.11: water as well-known maps build it - deep pools (people), pools on several floors joined by tubes
+    # under water (levels: q2dm4, q2dm5), or 3.66's pits 48 deep (shallow)
+    if q.get("water_body") not in WATER_BODIES:
+        q["water_body"] = "people"
     q["powerup_cycle"] = bool(q.get("powerup_cycle"))
     # 3.46: medusa_b1's round shapes - none unless asked
     if q.get("round") not in ("few", "some", "many"):
@@ -288,6 +520,7 @@ class Plan:
     pads: list = field(default_factory=list)
     teleports: list = field(default_factory=list)
     liquids: list = field(default_factory=list)    # (cells, kind, z_floor, level)
+    prize_kind: dict = field(default_factory=dict)  # the PO 12.11: an item's index -> how its prize is earned
     pillars: list = field(default_factory=list)    # (cell, z0, z1)
     chamfers: list = field(default_factory=list)   # (cell, corner, z0, z1)
     windows: list = field(default_factory=list)    # (cells, z0, z1)
@@ -333,6 +566,8 @@ class Plan:
     # brief 34: why each pad is there - (take-off, landing) -> «express» | «chain» | «perch» | «shaft» | «pit» |
     # «shortcut» | «link» (the description says the ways by it; «perch» and «pit» are pads by design)
     pad_why: dict = field(default_factory=dict)
+    # the PO 12.11: the deep pools of water ({space, cells, bottom, surface}) and the tubes under water between them
+    pools: list = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------------------------- 1. the floor plan
@@ -829,15 +1064,33 @@ def heights(P: Plan, rnd: random.Random) -> None:
     n_pits = int(q.get("pits") or 0)
     # every liquid asked gets a hall of its own at least (04.11: lava 10 % took every pool, the 5 % of water got none)
     n_kinds = sum(1 for k in ("water", "lava", "slime") if float(q.get(k) or 0) > 0)
-    for s in sorted(live, key=lambda s: -s.area()):
+    # the PO 12.11: a prize under water asks a pool though no water is asked; «levels» asks pools on three floors
+    deep_w = water_deep(q)
+    wants_w = float(q.get("water") or 0) > 0 or (deep_w and int(q.get("underwater") or 0) > 0)
+    if deep_w and wants_w and not float(q.get("water") or 0) > 0:
+        n_kinds += 1
+    if deep_w and wants_w and q.get("water_body") == "levels":
+        n_kinds += 2
+    order_ = sorted(live, key=lambda s: -s.area())
+    if deep_w and wants_w and q.get("water_body") == "levels":
+        # a hall of each floor first: a pool a floor
+        seen_, first_, rest_ = set(), [], []
+        for s in order_:
+            if not (s.atrium or s.kind == "corridor" or min(s.rect.w, s.rect.h) < 6) and s.base not in seen_:
+                seen_.add(s.base)
+                first_.append(s)
+            else:
+                rest_.append(s)
+        order_ = first_ + rest_
+    for s in order_:
         if need <= 0 and n_pits <= 0 and len(wet_halls) >= n_kinds + int(q.get("pits") or 0):
             break
         if s.atrium or s.kind == "corridor" or min(s.rect.w, s.rect.h) < 6:
             continue
         wet_halls.add(s.id)
         # the walkway round the pit chosen so the pit holds what is still wanted (a chasm: the widest pit)
-        if n_pits > 0:
-            s.rim = 1
+        if n_pits > 0 or (deep_w and wants_w and need <= 0):
+            s.rim = 1           # a deep pool: as big as a third of its hall lets it (the pit's cap)
         else:
             s.rim = min((1, 2, 3), key=lambda rr: abs(max(0, s.rect.w - 2 * rr) * max(0, s.rect.h - 2 * rr) - need)
                         if min(s.rect.w, s.rect.h) - 2 * rr >= 2 else 1e9)
@@ -846,7 +1099,8 @@ def heights(P: Plan, rnd: random.Random) -> None:
     for s in live:
         if s.id in wet_halls:
             s.wet = True
-            s.pattern = rnd.choice(["pit", "bridge"]) if min(s.rect.w, s.rect.h) >= 7 else "pit"
+            # a deep pool whole (a bridge would cut it in two)
+            s.pattern = rnd.choice(["pit", "bridge"]) if min(s.rect.w, s.rect.h) >= 7 and not deep_pools_only(q) else "pit"
             terrace(s, rnd, q)
             continue
         if s.atrium:
@@ -1006,7 +1260,8 @@ def terrace(s: Space, rnd: random.Random, q: dict) -> None:
         if s.wet:
             # brief 20 D4: a pool takes a third of its hall at most (the 3.40 FFA-8's rocket hall: two pools, half
             # the floor) - the rest of the hall stays a floor to fight on
-            while pw * ph > (w * h) / 3 and max(pw, ph) > 2:
+            share = POOL_SHARE if deep_pools_only(q) else 1 / 3
+            while pw * ph > (w * h) * share and max(pw, ph) > 2:
                 if pw >= ph:
                     pw -= 1
                     px += pw % 2
@@ -1015,7 +1270,7 @@ def terrace(s: Space, rnd: random.Random, q: dict) -> None:
                     py += ph % 2
         down = 64
         pit = [(x, y) for x in range(px, px + pw) for y in range(py, py + ph)]
-        if s.wet and pw >= 4 and ph >= 3:
+        if s.wet and pw >= 4 and ph >= 3 and not deep_pools_only(q):
             # and not a plain rectangle: one corner of it stays floor (an L), on a side the seed picks
             cx_ = px if rnd.random() < 0.5 else px + pw - 2
             cy_ = py if rnd.random() < 0.5 else py + ph - 1
@@ -1450,6 +1705,9 @@ def lift_in(P: Plan, d: Door, low: Space, zl: int, zh: int) -> bool:
     # another mover, a ladder's foot or another lift's step-off holds - two lifts of one room shared a cell
     taken = set(P.no_items) | {c for (_p, _zl, _zh, _b, top) in P.lifts for c in top}
     taken |= {(c[0] + dx, c[1] + dy) for (pl, *_r) in P.lifts for c in pl for dx in (-1, 0, 1) for dy in (-1, 0, 1)}
+    # the PO 12.11: a plat rests in a recess 16 deep - beside a deep pool (its water 8 under the floor) the water would
+    # stand in it: no plat at a pool's side
+    taken |= {(c[0] + dx, c[1] + dy) for pool in P.pools for c in pool["cells"] for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))}
     for c in plat + beyond:
         f = low.floor.get(c)
         if f is None or f[1] != "flat" or f[0] != zl or c in taken:
@@ -1644,25 +1902,82 @@ def liquids(P: Plan, rnd: random.Random) -> None:
     total = sum(len(s.floor) for s in live) or 1
     pits = [s for s in live if s.pit]
     rnd.shuffle(pits)
+    deep = water_deep(q)
     for kind in ("lava", "slime", "water"):
         want = float(q.get(kind) or 0) * total
+        if kind == "water" and want <= 0 and deep and int(q.get("underwater") or 0) > 0:
+            want = max((len(s_.pit) for s_ in pits), default=1)     # the PO 12.11: a prize under water - one pool
         if want <= 0:
             continue
         got = 0
         pits.sort(key=lambda s: abs(len(s.pit) - want))
+        levels = kind == "water" and deep and q.get("water_body") == "levels"
+        if levels:
+            # pools on three floors at least: a hall of each floor first, the biggest pits first
+            seen_, first_, rest_ = set(), [], []
+            for s in sorted(pits, key=lambda s: -len(s.pit)):
+                (first_ if s.base not in seen_ else rest_).append(s)
+                seen_.add(s.base)
+            pits[:] = first_ + rest_
+        made_ = 0
         later = [k for k in ("lava", "slime", "water")[("lava", "slime", "water").index(kind) + 1:]
                  if float(q.get(k) or 0) > 0]
         for s in list(pits):
-            if got >= want * 0.85:
+            if got >= want * 0.85 and not (levels and made_ < 3):
                 break
             if got > 0 and len(pits) <= len(later):
                 break               # a pit is left for each liquid still to come
-            if got > 0 and got + len(s.pit) > want * 1.8:
+            if got > 0 and got + len(s.pit) > want * 1.8 and not (levels and made_ < 3):
                 continue            # this pit would take far more than asked: a smaller one, or a flooded room
             pits.remove(s)
+            made_ += 1
             cells = list(s.pit)
             z0 = min(s.floor[c][0] for c in cells)
-            if kind != "water":
+            if kind == "water" and deep:
+                # the pit's own steps go into the pool - those joined to it; a flight of the hall down to a doorway
+                # stays (the test plan of 12.11: a flight to the hall's door became a well 224 deep)
+                pitset = set(cells)
+                bx0, bx1 = min(c[0] for c in cells) - 1, max(c[0] for c in cells) + 1
+                by0, by1 = min(c[1] for c in cells) - 1, max(c[1] for c in cells) + 1
+                grew = True
+                while grew:
+                    grew = False
+                    for c, f in s.floor.items():
+                        if f[1] == "stair" and f[0] < s.base and c not in pitset and bx0 <= c[0] <= bx1                                 and by0 <= c[1] <= by1 and any((c[0] + dx, c[1] + dy) in pitset
+                                                               for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+                            pitset.add(c)
+                            grew = True
+                # the water keeps off what is lower than the rim beside it - a flight of the hall down to a doorway, a
+                # doorway, a window (the test plans of 12.11: water stood in a doorway's opening and behind a window):
+                # a pool's cell beside such a one is the rim's floor
+                low = {c for d in P.doors for c in d.cells} | {c for (cs, *_w) in P.windows for c in cs}
+                low |= {c for (pl, *_r) in P.lifts for c in pl}       # a plat's recess, 16 under the floor
+                bad = True
+                while bad:
+                    bad = [c for c in pitset if any(
+                        n not in pitset and (n in low or (n in s.floor and (s.floor[n][1] == "stair" or s.floor[n][0] < s.base)))
+                        for n in ((c[0] + 1, c[1]), (c[0] - 1, c[1]), (c[0], c[1] + 1), (c[0], c[1] - 1)))]
+                    for c in bad:
+                        pitset.discard(c)
+                        # a flight stays the flight it was (duel_big, seed 708: a hall's flight made flat floor cut
+                        # its terrace off); the pit's own floor comes up to the rim's
+                        if s.floor[c][1] != "stair":
+                            s.floor[c] = (s.base, "flat", 0, 0)
+                cells = sorted(pitset)
+                if len(cells) < POOL_MIN:
+                    # what the doorways and flights left is a well, not a pool (the PO 12.11: «узкая небольшая подводная
+                    # нычка»): the pit is filled to the rim's floor, no water here
+                    for c in cells:
+                        s.floor[c] = (s.base, "flat", 0, 0)
+                    continue
+                # the PO 12.11: a pool as people's - its water 224 deep, 8 under the rim's floor; no steps: one swims
+                # up and climbs out anywhere round it (q2dm1, q2dm5)
+                z0, level = s.base - POOL_SURFACE - POOL_DEPTH, s.base - POOL_SURFACE
+                for c in cells:
+                    s.floor[c] = (z0, "flat", 0, 0)
+                P.pools.append({"space": s.id, "cells": list(cells), "bottom": z0, "surface": level,
+                                "liq": len(P.liquids)})
+            elif kind != "water":
                 # the steps into it go: the whole sunken part is liquid
                 for c, f in list(s.floor.items()):
                     if f[1] == "stair" and f[0] < s.base:
@@ -1698,6 +2013,200 @@ def liquids(P: Plan, rnd: random.Random) -> None:
                 P.liquids.append((cells, "water", s.base, s.base + 32))
                 P.no_items.update(cells)
                 got += len(cells)
+
+
+# --------------------------------------------------------------------------------------------- the water under rock
+# A tube runs under the rooms' floors, as q2dm1's does: its cells are keys of a layer of their own (phys() puts them in
+# the ground cell's column, the world builds them as a second span of air under the floor) - the plan's walk keeps
+# the room's floor and the tube apart. A slab of 16 at least between a tube and any air round it.
+WATER_LAYER = 15
+
+
+def wl(c):
+    """A ground cell's key on the tubes' layer."""
+    return (c[0], c[1] + UP * WATER_LAYER)
+
+
+def air_spans(P: Plan) -> dict:
+    """What air each world cell holds (its spans low..high): the spaces' floors to their ceilings, the doorways, the
+    windows, the overlooks - what a tube or a room carved into the rock keeps off; "_taken": the cells a carved room
+    never takes (doorways, windows, overlooks)."""
+    occ: dict = {}
+    for s in P.spaces:
+        if s.solid:
+            continue
+        for c0, f in s.floor.items():
+            occ.setdefault(phys(c0), []).append((f[0] - 16, P.cell_ceil.get(c0, s.ceil)))
+    for d in P.doors:
+        for c0 in d.cells:
+            occ.setdefault(phys(c0), []).append((d.z, door_top(d)))
+    for (cells, z0, z1, *_w) in P.windows:
+        for c in cells:
+            occ.setdefault(phys(c), []).append((z0, z1))
+    for (cells, z0, z1, *_r) in P.overlooks:
+        for c in cells:
+            occ.setdefault(phys(c), []).append((z0, z1))
+    occ["_taken"] = ({phys(c) for d in P.doors for c in d.cells} | {phys(c) for (cs, *_w) in P.windows for c in cs}
+                     | {phys(c) for (cs, *_r) in P.overlooks for c in cs})
+    return occ
+
+
+def _free(P: Plan, occ: dict, c, lo: int, hi: int, keep=frozenset()) -> bool:
+    """Air from lo to hi fits at the ground cell `c` with a slab of 16 to any air in it or beside it (the cells of
+    `keep` aside - what it is meant to open into)."""
+    if not (1 <= c[0] < P.W - 1 and 1 <= c[1] < P.H - 1):
+        return False
+    for n in (c, (c[0] + 1, c[1]), (c[0] - 1, c[1]), (c[0], c[1] + 1), (c[0], c[1] - 1)):
+        if n != c and n in keep:
+            continue
+        if any(a < hi + 16 and b > lo - 16 for (a, b) in occ.get(n, ())):
+            return False
+    return True
+
+
+def _rock(P: Plan, occ: dict, c, lo: int, hi: int, keep=frozenset()) -> bool:
+    """A ground cell of rock a room may be carved in: nobody's, no doorway or window, its air free (`_free`)."""
+    return c not in P.owner and c not in occ["_taken"] and _free(P, occ, c, lo, hi, keep)
+
+
+def _water_held(P: Plan) -> set:
+    held = _prize_held(P) | {c for (src, dst, *_r) in P.pads for c in (src, dst)} | {c for t in P.teleports for c in t}
+    held |= {c for (*_r, front) in P.ladders for c in front} | button_cells(P) | set(P.fx_cells)
+    return held
+
+
+def _tube_bfs(P: Plan, occ: dict, pool: dict, zt: int, most: int, goal=None):
+    """Through the rock (under the floors) from the side of a pool: each reached ground cell's (steps, the cell it came
+    from). The first cell opens into the pool; the others keep off it and off all air. `goal`: the cells another pool
+    holds - a cell beside them that may open into them arrives (it goes no farther)."""
+    lo, hi = zt, zt + TUBE_H
+    mine = frozenset(phys(c) for c in pool["cells"])
+    goal = frozenset(goal or ())
+    seen, q, came = {}, [], set()
+    for p in sorted(mine):
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            n = (p[0] + dx, p[1] + dy)
+            if n in mine or n in seen or not _free(P, occ, n, lo, hi, mine):
+                continue
+            seen[n] = (1, None)
+            q.append(n)
+    for c in q:
+        n0 = seen[c][0]
+        if n0 >= most or c in came:
+            continue
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            n = (c[0] + dx, c[1] + dy)
+            if n in seen or n in mine or n in goal:
+                continue
+            if _free(P, occ, n, lo, hi):
+                seen[n] = (n0 + 1, c)
+                q.append(n)
+            elif goal and _free(P, occ, n, lo, hi, goal):
+                seen[n] = (n0 + 1, c)
+                came.add(n)
+    return seen, came
+
+
+def _path_to(seen: dict, c) -> list:
+    out = []
+    while c is not None:
+        out.append(c)
+        c = seen[c][1]
+    return out[::-1]
+
+
+def _tube_z(a: dict, b: dict) -> int | None:
+    """The tube's floor: in both pools' water, its roof under both surfaces. A pool on a far higher floor is sunk to
+    it (q2dm4's water 432 deep); more than 256 apart - a breath is not enough."""
+    if abs(a["surface"] - b["surface"]) > 256:
+        return None
+    zt = max(a["bottom"], b["bottom"])
+    # its roof 40 under the lower surface at least: it passes under the rims' floors (a slab and the plats' recess)
+    top = min(a["surface"], b["surface"]) - TUBE_H - 40
+    return zt if zt <= top else top
+
+
+def _sink(P: Plan, pool: dict, zt: int) -> None:
+    """A pool's floor down to `zt` (its water too)."""
+    if zt >= pool["bottom"]:
+        return
+    s = P.spaces[pool["space"]]
+    for c in pool["cells"]:
+        s.floor[c] = (zt, "flat", 0, 0)
+    i = pool.get("liq")
+    if i is not None and i < len(P.liquids):
+        cells, kind, _z0, level = P.liquids[i]
+        P.liquids[i] = (cells, kind, zt, level)
+    pool["bottom"] = zt
+
+
+def _lay_tube(P: Plan, occ: dict, path: list, zt: int, a: int, b: int) -> Door:
+    cells = [wl(c) for c in path]
+    d = Door(a, b, cells, za=zt, zb=zt, z=zt, kind="swim", top=zt + TUBE_H, cross=True)
+    P.doors.append(d)
+    P.liquids.append((list(cells), "water", zt, zt + TUBE_H))
+    for c in path:
+        occ.setdefault(c, []).append((zt, zt + TUBE_H))
+    return d
+
+
+def water_network(P: Plan, rnd: random.Random) -> None:
+    """The PO 12.11 («на q2dm4 или q2dm5 там вообще многоуровневые конструкции с множеством глубоких водоемов через
+    которые можно плавать»): the deep pools joined by tubes under water, as people join theirs (q2dm2, q2dm4, q2dm5,
+    q2rdm13 - every map of his families with two deep pools or more) - the nearest pairs first, a tree."""
+    pools = [p for p in P.pools if len(p["cells"]) >= 2]
+    tubes = []
+    if len(pools) >= 2 and water_deep(P.params):
+        occ = air_spans(P)
+
+        def mid(p):
+            return (sum(c[0] for c in p["cells"]) / len(p["cells"]), sum(c[1] for c in p["cells"]) / len(p["cells"]))
+        pairs = sorted(((abs(mid(a)[0] - mid(b)[0]) + abs(mid(a)[1] - mid(b)[1]), i, j)
+                        for i, a in enumerate(pools) for j, b in enumerate(pools) if i < j))
+        root = list(range(len(pools)))
+
+        def find(i):
+            while root[i] != i:
+                i = root[i]
+            return i
+        for _d, i, j in pairs:
+            if find(i) == find(j):
+                continue
+            a, b = pools[i], pools[j]
+            zt = _tube_z(a, b)
+            if zt is None:
+                continue
+            # the higher pool sunk to the tube first: its water then holds the tube's mouth whole
+            keep_a, keep_b = a["bottom"], b["bottom"]
+            _sink(P, a, zt)
+            _sink(P, b, zt)
+            occ = air_spans(P)
+            seen, came = _tube_bfs(P, occ, a, zt, TUBE_CELLS[1], [phys(c) for c in b["cells"]])
+            ends = sorted((c for c in came if seen[c][0] >= 4), key=lambda c: (seen[c][0], c))
+            if not ends:
+                # no tube: the pools as they were
+                for p, z_ in ((a, keep_a), (b, keep_b)):
+                    if p["bottom"] != z_:
+                        s = P.spaces[p["space"]]
+                        for c in p["cells"]:
+                            s.floor[c] = (z_, "flat", 0, 0)
+                        cells, kind, _z0, level = P.liquids[p["liq"]]
+                        P.liquids[p["liq"]] = (cells, kind, z_, level)
+                        p["bottom"] = z_
+                continue
+            path = _path_to(seen, ends[0])
+            _lay_tube(P, occ, path, zt, a["space"], b["space"])
+            root[find(i)] = find(j)
+            tubes.append(len(path))
+            P.reasons.append(("water", say(f"подводная труба {len(path) * CELL} ед. между бассейнами залов {a['space']} и {b['space']}",
+                                           f"a tube under water {len(path) * CELL} u long between the pools of halls {a['space']} and {b['space']}")))
+    P.metrics["water_tubes"] = tubes
+    P.metrics["pools"] = [[len(p["cells"]), p["surface"] - p["bottom"], p["surface"]] for p in P.pools]
+    if P.params.get("water_body") == "levels" and P.pools:
+        lv = sorted({p["surface"] for p in P.pools})
+        if len(lv) < 3 or len(tubes) < len(P.pools) - 1:
+            P.notes.append(say(f"вода на разных уровнях: бассейнов на разных высотах {len(lv)}, подводных труб {len(tubes)} - на этом каркасе больше не нашлось места",
+                               f"water on several levels: pools at {len(lv)} heights, {len(tubes)} tubes under water - no more room on this skeleton"))
 
 
 def flights_and_ramps(P: Plan, rnd: random.Random) -> None:
@@ -2248,7 +2757,7 @@ def openings(P: Plan, rnd: random.Random) -> None:
         mid = len(clear) // 2
         cells = clear[max(0, mid - width // 2): max(0, mid - width // 2) + width]
         za, zb = side_floor_at(sa, cells), side_floor_at(sb, cells)
-        if len(cells) < width or za is None or zb is None:
+        if len(cells) < width or za is None or zb is None or beside_water(P, cells):
             continue
         z0 = max(za, zb) + 64
         z1 = z0 + {"box": 64, "arch": 96, "slit": 96, "band": 48}[kind]
@@ -2344,6 +2853,69 @@ def plan_graph(P: Plan):
             for t_ in top:
                 if b in edges and t_ in edges:
                     edges[b].append((t_, 0.4 + (zh - zl) / 220.0))
+    # the PO 12.11: a nook raised 40 is jumped into (the map's walk jumps up to 44) - the plan's walk took it for a wall
+    # and missed an armour in it 2.2 s from a gun (the test map of 12.11)
+    if not OLD_MAJORS:
+        for i_, d in enumerate(P.doors):
+            if d.mover or d.stair or not (20 < d.z - min(d.za, d.zb) <= 44):
+                continue
+            low = d.a if d.za <= d.zb else d.b
+            for c in d.cells:
+                if c not in edges:
+                    continue
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    n = (c[0] + dx, c[1] + dy)
+                    if n in edges and P.owner.get(n) == low and n not in door_of and abs(nodes[n][0] - min(d.za, d.zb)) <= 20:
+                        edges[n].append((c, CELL / 300.0 + 0.2))
+                        edges[c].append((n, CELL / 300.0))
+    # the PO 12.11 (a dive, q2dm1's and q2dm5's): out of a deep pool up onto the floor at its surface
+    for (cells, kind, z0, level) in P.liquids:
+        if kind != "water" or level - z0 < 96:
+            continue
+        cs = set(cells)
+        for c in cells:
+            if c not in edges:
+                continue
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                n = (c[0] + dx, c[1] + dy)
+                g = nodes.get(n)
+                if n in cs or g is None or n not in edges or not (level - 24 <= g[0] <= level + 48):
+                    continue
+                edges[c].append((n, (g[0] - z0) / 180.0 + 0.4))
+    # the PO 12.11: under water one swims any way - up a tube's step, up a channel to the pool, along a tube (150 u/s)
+    if not OLD_WATER:
+        deep_ = {}
+        for (cells, kind, z0, level) in P.liquids:
+            if kind == "water" and level - z0 >= 64:
+                for c in cells:
+                    deep_[c] = level
+        for c in deep_:
+            if c not in edges:
+                continue
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                n = (c[0] + dx, c[1] + dy)
+                if n not in deep_ or n not in edges:
+                    continue
+                if (c in door_of) != (n in door_of) or (c in door_of and door_of[c] != door_of.get(n)):
+                    if not door_link(P, c, n, door_of):
+                        continue
+                elif P.owner.get(c) != P.owner.get(n) and c not in door_of and n not in door_of \
+                        and frozenset((P.owner.get(c), P.owner.get(n))) not in P.joined:
+                    continue
+                edges[c].append((n, CELL / 150.0 + abs(nodes[n][0] - nodes[c][0]) / 150.0))
+        for i_, d in enumerate(P.doors):
+            if d.kind != "swim":
+                continue
+            for c in d.cells:
+                if c not in edges:
+                    continue
+                p = phys(c)
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    n = (p[0] + dx, p[1] + dy)
+                    if n in edges and n in deep_ and P.owner.get(n) in (d.a, d.b) and n not in door_of:
+                        t_ = CELL / 150.0 + abs(nodes[n][0] - nodes[c][0]) / 150.0
+                        edges[c].append((n, t_))
+                        edges[n].append((c, t_))
     # brief 34: a lift stopping on every storey - from any stop's doorway to any other's (the wait and the ride)
     for (_cells, stops, doors, _name) in P.trains:
         for i, a_ in enumerate(doors):
@@ -2680,7 +3252,7 @@ def show_more(P: Plan, rnd: random.Random) -> None:
             mid = len(clear) // 2
             cells = clear[max(0, mid - width // 2): max(0, mid - width // 2) + width]
             za, zb = side_floor_at(s, cells), side_floor_at(o, cells)
-            if len(cells) < width or za is None or zb is None:
+            if len(cells) < width or za is None or zb is None or beside_water(P, cells):
                 continue
             z0 = max(za, zb) + 64
             z1 = z0 + {"box": 64, "arch": 96, "slit": 96}[kind]
@@ -2816,6 +3388,9 @@ def places(P: Plan, rnd: random.Random) -> None:
         used.add(c)
         P.items.append((cls, c, nodes[c][0], note))
 
+    def apart(cls, c):
+        return majors_apart(P, cls, c, nodes[c][0], times)
+
     cands = [c for c in good if free(c)]
     rnd.shuffle(cands)
     stack = STACK_SETS.get(q["stack"], STACK_SETS["ra_mh"]) if isinstance(q["stack"], str) else dict(q["stack"])
@@ -2898,6 +3473,8 @@ def places(P: Plan, rnd: random.Random) -> None:
             # the compiled map walks about 8 % quicker than the plan's cells (r9/r10, 04.11: 7.0 -> 6.3..6.6): aim
             # half a second over the band's middle
             sc = -abs(t + nook_allow - (target[0] + target[1]) / 2 - 0.5) + (0.5 if P.owner.get(a) != P.owner.get(b) else 0)
+            if not OLD_MAJORS and math.dist(_item_at(a, nodes[a][0]), _item_at(b, nodes[b][0])) < majors_need(first, second)[1]:
+                sc -= 50.0          # the PO 12.11: the pair seen side by side through a wall or a floor
             if best is None or sc > best[0]:
                 best = (sc, a, b, t)
     if not best:
@@ -2916,7 +3493,8 @@ def places(P: Plan, rnd: random.Random) -> None:
                 n -= 1
             for h in (0, 1):
                 for _ in range(max(0, n)):
-                    c = farthest(cands, used, times, free, prefer=lambda c, h=h: half_of(c) == h and high(c))
+                    c = farthest(cands, used, times, free, prefer=lambda c, h=h: half_of(c) == h and high(c),
+                                 ok=lambda c, cls=cls: apart(cls, c))
                     if c and half_of(c) == h:
                         put(cls, c, f"stack of base {h + 1}")
     else:
@@ -2929,7 +3507,8 @@ def places(P: Plan, rnd: random.Random) -> None:
             if cls == "item_adrenaline":
                 continue            # tucked low, after the guns (brief 19 §6 «adrenaline tucked»)
             for _ in range(max(0, n)):
-                c = farthest(cands, used, times, free, prefer=lambda c: high(c) and two_ways(c))
+                c = farthest(cands, used, times, free, prefer=lambda c: high(c) and two_ways(c),
+                             ok=lambda c, cls=cls: apart(cls, c))
                 if c:
                     put(cls, c, "stack")
     # 2. the key gun on a ledge with an armour within 2 s
@@ -2941,10 +3520,11 @@ def places(P: Plan, rnd: random.Random) -> None:
     if "three_approaches" in mech and weapons.get("weapon_chaingun"):
         key = "weapon_chaingun"
     if key0 in pinned and "key_gun_ledge" in mech:
-        # the key gun is on the lift's ledge: its armour beside it
+        # the key gun is on the lift's ledge: its armour beside it (3.65; the PO 12.11 - «рельсу класть в шаге от двух
+        # арморов - глупо»: no armour by a gun now)
         tk = times(pinned[key0][0])
         near = [c for c in cands if free(c) and 0.6 <= tk.get(c, 99) <= 2.0]
-        if near:
+        if near and OLD_MAJORS:
             put("item_armor_combat" if "item_armor_combat" not in stack else "item_armor_jacket", near[0],
                 "armour by the key gun")
         key = None
@@ -2979,11 +3559,14 @@ def places(P: Plan, rnd: random.Random) -> None:
             ledge.sort(key=lambda c: (-min(ta_.get(c, 0), 9.0), -min((times(c).get(u, 99) for u in used), default=0)))
         else:
             ledge.sort(key=lambda c: -min(times(c).get(u, 99) for u in used) if used else 0)
+        # the PO 12.11: the key gun apart from every major placed, when a ledge allows it (the order kept)
+        ledge = [c for c in ledge if apart(key, c)] or ledge
         if ledge:
             kc = ledge[0]
             put(key, kc, "key gun on a ledge" if "key_gun_ledge" in mech else "key gun")
             weapons[key] -= 1
-            if "key_gun_ledge" in mech:
+            if "key_gun_ledge" in mech and OLD_MAJORS:
+                # 3.65: an armour by the key gun - the PO 12.11 «туже рельсу класть в шаге от двух арморов - глупо»
                 tk = times(kc)
                 near = [c for c in cands if free(c) and 0.6 <= tk.get(c, 99) <= 2.0]
                 if near:
@@ -2999,6 +3582,8 @@ def places(P: Plan, rnd: random.Random) -> None:
                              key=lambda c: min(abs(c[0] - x[0]) + abs(c[1] - x[1]) for x in d.cells))[:6]
             gun = next((g_ for g_ in ("weapon_hyperblaster", "weapon_grenadelauncher", "weapon_supershotgun",
                                        "weapon_rocketlauncher") if weapons.get(g_, 0) > 0), None)
+            if gun:
+                ledge_c = [c for c in ledge_c if apart(gun, c)]     # the PO 12.11: apart, or by another overlook
             if ledge_c and gun:
                 put(gun, ledge_c[0], "asymmetry: down by the ledge, up the long way")
                 weapons[gun] -= 1
@@ -3010,13 +3595,18 @@ def places(P: Plan, rnd: random.Random) -> None:
             # the others low: the share at height follows the asked one (brief 21 - with the rooms over rooms most
             # «anywhere» places were high, majors at height came out 100 % for 67 % asked)
             c = farthest(cands, used, times, free, prefer=(lambda c: high(c) and two_ways(c)) if at_h
-                         else (lambda c: not high(c) and two_ways(c)))
+                         else (lambda c: not high(c) and two_ways(c)), ok=lambda c, cls=cls: apart(cls, c))
             if c:
                 put(cls, c, "")
     # 4. spawns: each within 2.5 s of a gun, spawns 1.5 s apart at least, two thirds at height
     guns = [c for (cls, c, z, n) in P.items if cls.startswith("weapon_")]
     want = int(q["spawns"])
-    sp_c = [c for c in cands if free(c, 1)]
+    # nor beside a lift's plat (the PO's maps from scratch: six spawns stood in a lift's column - the pickups' gate
+    # excused them as the donor's own until 3.67)
+    by_plat = {(c[0] + dx, c[1] + dy) for (pl, *_r) in P.lifts for c in map(phys, pl) for dx in (-1, 0, 1) for dy in (-1, 0, 1)}
+    by_plat |= {(c[0] + dx, c[1] + dy) for (cs, *_r) in getattr(P, "trains", []) for c in map(phys, cs)
+                for dx in (-1, 0, 1) for dy in (-1, 0, 1)}
+    sp_c = [c for c in cands if free(c, 1) and (OLD_WATER or phys(c) not in by_plat)]
     # two thirds at height (brief 19 §4): the high cells first, until two thirds are taken; nearer the stack first
     stack_at = [c for (cls, c, z, n) in P.items if cls in MAJOR_ITEMS]
 
@@ -3129,7 +3719,8 @@ def places(P: Plan, rnd: random.Random) -> None:
     # the adrenaline tucked: the lowest level, 3 s or more from every major (brief 19 §6)
     for _ in range(int(stack.get("item_adrenaline") or 0)):
         majors_at = [c for (cls, c, z, n) in P.items if cls in MAJOR_W or cls in MAJOR_ITEMS]
-        low = [c for c in cands if free(c) and nodes[c][0] <= lowband and all(times(m_).get(c, 99) >= 3.0 for m_ in majors_at)]
+        low = [c for c in cands if free(c) and nodes[c][0] <= lowband and all(times(m_).get(c, 99) >= 3.0 for m_ in majors_at)
+               and apart("item_adrenaline", c)]
         low = low or [c for c in cands if free(c) and nodes[c][0] <= lowband]
         if low:
             put("item_adrenaline", low[0], "adrenaline tucked low")
@@ -3213,8 +3804,11 @@ def mech_places(P: Plan, q: dict, mech: set, nodes, times, cands, free, put, use
                 te = times(end)
                 near = sorted((c for c in cands if free(c, 0) and 0.5 <= te.get(c, 99) <= 3.0), key=lambda c: te[c])
                 for cls in ("item_armor_combat", "item_health_large"):
-                    if near:
-                        put(cls, near.pop(0), "teleport to a mirrored stack")
+                    # the PO 12.11: the armour apart from every major placed
+                    fit = [c for c in near if majors_apart(P, cls, c, nodes[c][0], times)]
+                    if fit:
+                        near.remove(fit[0])
+                        put(cls, fit[0], "teleport to a mirrored stack")
             P.reasons.append(("misc_teleporter", "у обоих концов телепорта броня и аптечка в 3 с"))
     if "three_approaches" in mech and not P.teleports:
         missing.append(say("three_approaches: выход телепорта напротив не поставлен - телепортов 0",
@@ -3255,9 +3849,12 @@ def mech_places(P: Plan, q: dict, mech: set, nodes, times, cands, free, put, use
     P.metrics["mech_missing"] = missing
 
 
-def farthest(cands, used, times, free, prefer=None):
+def farthest(cands, used, times, free, prefer=None, ok=None):
     best, bd = None, -1
     pool = [c for c in cands if free(c)]
+    if ok:
+        # the PO 12.11: the places that keep the majors apart, when there are any
+        pool = [c for c in pool if ok(c)] or pool
     if prefer:
         pref = [c for c in pool if prefer(c)]
         pool = pref or pool
@@ -3329,7 +3926,7 @@ def lamp_sites(P: Plan, s: Space, held: set) -> list:
         pcs = [phys(c) for c in d.cells]
         xs, ys = [c[0] for c in pcs], [c[1] for c in pcs]
         along_x = len(set(ys)) == 1
-        top_ = d.top or (d.z + 32 + DOOR_H if d.stair else d.z + DOOR_H)
+        top_ = door_top(d)
         for sgn in (-1, 1):
             front = (sum(xs) / len(xs), ys[0] + sgn) if along_x else (xs[0] + sgn, sum(ys) / len(ys))
             fc = (int(front[0]), int(front[1]))
@@ -3542,11 +4139,17 @@ def powerup_sites(P: Plan, rnd: random.Random) -> None:
             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                 held.add((c[0] + dx, c[1] + dy))
     order = {cls: k for k, cls in enumerate(POWERUPS)}
-    pw = [(k, it) for k, it in enumerate(P.items) if it[0] in order]
-    pw.sort(key=lambda t: order[t[1][0]])
+    kinds = {} if OLD_MAJORS else dict(P.prize_kind)
+    # the PO 12.11: the prizes earned (prize_sites put the dives, the movers' ledges and the open spots already) - the
+    # nooks' kinds here, the key gun among them
+    pw = [(k, it) for k, it in enumerate(P.items)
+          if (it[0] in order or k in kinds) and kinds.get(k, "jump") in ("jump", "hard", "easy")]
+    pw.sort(key=lambda t: order.get(t[1][0], len(order)))
     levels = {}
     for rank, (k, it) in enumerate(pw):
-        if access == "mixed":
+        if k in kinds:
+            levels[k] = {"jump": "medium", "hard": "hard", "easy": "easy"}[kinds[k]]
+        elif access == "mixed":
             levels[k] = "hard" if rank == 0 else "medium" if rank == 1 else "easy"
         else:
             levels[k] = access
@@ -3554,7 +4157,7 @@ def powerup_sites(P: Plan, rnd: random.Random) -> None:
     team_cells = []
     sites = []
     P.buttons = []
-    P.pedestals = []
+    P.pedestals = list(getattr(P, "pedestals", None) or [])     # a vault's prize has its own already (prize_sites)
     nook_no = 0
     for rank, (k, it) in enumerate(pw):
         cls, c, z, note = P.items[k]
@@ -3631,7 +4234,16 @@ def powerup_sites(P: Plan, rnd: random.Random) -> None:
                         others = [(0 if lo_b <= tm.get(cc, 99) <= hi_b else 1, d_, oid_, cc)
                                   for (d_, oid_, cc) in others]
                         others = [(b_ * 1000 + d_, oid_, cc) for (b_, d_, oid_, cc) in others]
+                _nodes_h, edges_h = plan_graph(P)
+                cache_h: dict = {}
+
+                def times_h(c_):
+                    if c_ not in cache_h:
+                        cache_h[c_] = dijkstra(edges_h, c_)
+                    return cache_h[c_]
                 for _d, oid, cc in sorted(others)[:5]:
+                    if not OLD_MAJORS and not _halves_ok(P, k, cc, times_h):
+                        continue        # the PO 12.11: a nook in a room that brings the key gun and the stack near
                     spot = find_spot(P.spaces[oid], cc)
                     if spot:
                         s = P.spaces[oid]
@@ -3641,7 +4253,9 @@ def powerup_sites(P: Plan, rnd: random.Random) -> None:
                 zf = s.floor[fronts[0]][0]
                 # medium, every other one: the nook raised 40 over the floor - jumped into (the walk's jump up is 44),
                 # as people's ledges (q2duel5's quad, q2dm5's quad 368 up by steps; ours a jump, never a climb)
-                raise_ = 40 if level == "medium" and rnd.random() < 0.5 else 0
+                # the PO 12.11 («рельса должна быть заслуженной … в нычку в стене прыгать», q2dm8): every medium
+                # nook a jump now (3.65: every other)
+                raise_ = 40 if level == "medium" and (not OLD_MAJORS or rnd.random() < 0.5) else 0
                 zf_in = zf + raise_
                 N = Space(len(P.spaces), "nook", Rect(min(x[0] for x in cells), min(x[1] for x in cells),
                                                       max(x[0] for x in cells) + 1, max(x[1] for x in cells) + 1), base=zf_in)
@@ -3689,6 +4303,649 @@ def powerup_sites(P: Plan, rnd: random.Random) -> None:
     P.metrics["powerup_sites"] = sites
     P.metrics["powerup_access"] = access
     P.metrics["powerup_cycle"] = cycle
+
+
+# --------------------------------------------------------------------------------------------- the prizes earned
+# The PO 12.11: «рельса должна быть заслуженной - заработанной, достанной не просто так, а через усилия … на q2dm1 -
+# там плыть нужно. На ztn2dm3 нужно прыгать за ней. На q2duel5 … пройти через обстрел аж с трех сторон», «на q2rdm2
+# через пропасть нужно прыгать», «на q2dm8 прыгать в нычку в стене», «не видел пока у тебя карт аналогичных q2dm1 -
+# чтобы нужно было плыть под водой … Или как q2dm5». People's (tools/mapgen_item_rules.json, 40 maps): the railgun
+# earned on 27 of 41 (a gap jump, a jump up, a teleporter, a lift, a swim), the mega 26 of 30, the quad 13 of 15, the
+# body armour 16 of 25; ours 0..0.15 of the spawns needed anything. Each prize gets a way:
+#   jump    - a nook in the wall raised 40, jumped into (q2dm8); hard - the nook shut by a door a button opens
+#   lift / ladder - a ledge only a lift (a ladder) reaches
+#   water   - a dive: a well 160 deep with the prize at its bottom (q2dm5's mega), or a vault behind the wall reached by
+#             a drowned doorway at a well's bottom, its own well up into it (q2dm1's railgun)
+#   exposed - the open middle of a place where three ways meet (q2duel5's railgun, under fire from three sides)
+def prize_plan(P: Plan, rnd: random.Random) -> None:
+    """How each prize is earned: «prize_access» people (the knowledge base's ways for its class, by their shares), nooks,
+    movers, water, exposed; the first «underwater» prizes by worth under water; a nook kind takes the powerups' access
+    asked (the form's «Доступ к усилителям»)."""
+    if OLD_MAJORS:
+        return
+    q = P.params
+    key = next((k for k, it in enumerate(P.items) if it[0].startswith("weapon_") and it[3].startswith("key gun")), None)
+    if key is None:
+        key = next((k for k, it in enumerate(P.items) if it[0] == "weapon_railgun"), None)
+    prizes = {k for k, it in enumerate(P.items) if it[0] in PRIZE_ORDER and it[0] != "weapon_railgun"}
+    if key is not None:
+        prizes.add(key)
+
+    def worth(k):
+        cls = P.items[k][0]
+        return PRIZE_ORDER.index(cls) if cls in PRIZE_ORDER else PRIZE_ORDER.index("weapon_railgun")
+    prizes = sorted(prizes, key=lambda k: (worth(k), k))
+    access = q.get("prize_access") or "people"
+    rules = item_rules(q).get("prizes") or ITEM_RULES.get("prizes") or {}
+    move_kind = {"gap": "jump", "jump": "jump", "teleport": "jump", "push": "jump", "plat": "lift", "ladder": "ladder",
+                 "swim": "water"}
+    # a ledge only a lift (a ladder) reaches is rare on our skeletons (a stair leads up too): people's lift is then the
+    # nearest we build - a nook jumped into - not a way asked and refused
+    has_ledge = {k_: bool(_mover_ledges(P, k_)) for k_ in ("lift", "ladder")}
+    kinds = {}
+    for k in prizes:
+        cls, c, z, note = P.items[k]
+        if note.startswith("lift as exposure"):
+            kinds[k] = "lift"
+            continue
+        if note.startswith("ladder under"):
+            kinds[k] = "ladder"
+            continue
+        if note.startswith("dead-end stack"):
+            kinds[k] = "kept"           # dropped into, left by a rocket jump: earned already
+            continue
+        if access == "people":
+            r = rules.get(cls) or rules.get("item_health_mega") or {}
+            w = {"jump": 0.0, "lift": 0.0, "ladder": 0.0, "water": 0.0, "exposed": 0.0}
+            for mv, n in (r.get("moves") or {}).items():
+                w[move_kind.get(mv, "jump")] += float(n)
+            if cls.startswith("weapon_") or cls == "item_armor_body":
+                w["exposed"] += float(r.get("exposed") or 0) * float(r.get("n") or 0)
+            if sum(w.values()) <= 0:
+                w["jump"] = 1.0
+            pick = rnd.random() * sum(w.values())
+            for kind_, v in w.items():
+                pick -= v
+                if pick <= 0:
+                    break
+            if kind_ in has_ledge and not has_ledge[kind_]:
+                kind_ = "jump"
+            kinds[k] = kind_
+        elif access == "nooks":
+            kinds[k] = "jump"
+        elif access == "movers":
+            kinds[k] = "lift" if P.lifts and (not P.ladders or rnd.random() < 0.6) else "ladder" if P.ladders else "lift"
+        elif access == "water":
+            kinds[k] = "water"
+        else:   # exposed: a gun and an armour in the open, the powerups in their nooks
+            kinds[k] = "exposed" if cls.startswith("weapon_") or cls.startswith("item_armor") else "jump"
+    for k in [k for k in prizes if kinds.get(k) != "kept"][:int(q.get("underwater") or 0)]:
+        kinds[k] = "water"
+    # the PO 12.11 on mg_new_7775_367: «глубокие бассейны ... не несут никакого смысла для того чтобы туда плыть - а
+    # там должны лежать важнейшие на карте айтемы - например как рейлган на q2dm1 или мега или красный армор»: each
+    # water of pools joined by tubes takes a prize, the most valuable first (people's deep water: 9 bodies of 10 hold
+    # majors - q2dm1's railgun, q2dm2's quad, q2dm4's quad, mega, BFG and body armour, q2dm5's mega)
+    if water_deep(q) and access in ("people", "water"):
+        need = len(water_systems(P)) - sum(1 for k in prizes if kinds.get(k) == "water")
+        for k in prizes:
+            if need <= 0:
+                break
+            if kinds.get(k) in ("kept", "water", "lift", "ladder"):
+                continue
+            # the stack on a clock stays up high where the mechanic wants it (64 up, two ways out); the next prize goes
+            if "clock" in (q.get("mechanics") or []) and P.items[k][0] in (P.metrics.get("stack_pair") or []):
+                continue
+            kinds[k] = "water"
+            need -= 1
+    nooked = [k for k in prizes if kinds[k] == "jump" and P.items[k][0] in POWERUPS]
+    pw_access = q.get("powerup_access") or "mixed"
+    for j, k in enumerate(nooked):
+        if pw_access == "hard" or (pw_access == "mixed" and j == 0):
+            kinds[k] = "hard"
+        elif pw_access == "easy":
+            kinds[k] = "easy"           # the form asks them on the floor (the PO 05.11: «на простом на полу лежат»)
+    P.prize_kind = kinds
+    P.metrics["prize_kinds"] = [[P.items[k][0], kinds[k]] for k in prizes]
+
+
+HALVES_S = 7.0           # brief 19 §6 «halves»: the key gun and the stack's first item at least this far on foot
+
+
+def _halves_ok(P: Plan, k: int, cell, times_of, extra: float = 0.0) -> bool:
+    """The PO 12.11, his test map: a prize moved into a vault (a nook in the next room) took «halves» from 7.9 s to
+    4.6 s - the key gun and the stack's first item keep HALVES_S (with the plan's slack) when either moves."""
+    q = P.params
+    if "halves" not in (q.get("mechanics") or []) or not P.half or q.get("mode") == "tdm":
+        return True
+    pair = P.metrics.get("stack_pair") or []
+    key_k = next((j for j, it in enumerate(P.items) if it[0].startswith("weapon_") and it[3].startswith("key gun")), None)
+    first_k = next((j for j, it in enumerate(P.items) if pair and it[0] == pair[0]), None)
+    if key_k is None or first_k is None or k not in (key_k, first_k):
+        return True
+    other = P.items[first_k if k == key_k else key_k][1]
+    return times_of(other).get(cell, 0.0) + extra >= HALVES_S * MAJORS_PLAN_SLACK
+
+
+def _prize_held(P: Plan) -> set:
+    """What a prize's new place must keep off: items, spawns, movers, doors and their sides, pits, liquids, windows."""
+    held = ({c for (_cls, c, _z, _n) in P.items} | {c for (c, _z, _a) in P.spawns} | set(P.no_items)
+            | {c for d in P.doors for c in d.cells} | {c for (cs, *_r) in P.lifts for c in cs}
+            | {c for (cs, _b, _sid) in P.pits for c in cs} | {c for (c, *_r) in P.pillars}
+            | {c for (cells, *_r) in P.liquids for c in cells} | {c for (cells, *_w) in P.windows for c in cells})
+    for d in P.doors:
+        for c in d.cells:
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                held.add((c[0] + dx, c[1] + dy))
+    return held
+
+
+def _stacked_over(P: Plan, cells) -> bool:
+    """A cell with another layer's floor in its column (a room over a room, a tower's storey)."""
+    for c in cells:
+        p = phys(c)
+        for j in range(0, 4):
+            y = (p[0], p[1] + UP * j)
+            if y != c and y in P.owner:
+                return True
+    return False
+
+
+def prize_sites(P: Plan, rnd: random.Random) -> None:
+    """The prizes' ways that are not a nook: the dives, the movers' ledges, the open spots. A way that finds no room
+    falls back to a nook jumped into (said in the record)."""
+    if OLD_MAJORS or not P.prize_kind:
+        return
+    nodes, edges = plan_graph(P)
+    cache: dict = {}
+
+    def times_of(c):
+        if c not in cache:
+            cache[c] = dijkstra(edges, c)
+        return cache[c]
+    held = _prize_held(P)
+    fell = []
+    for k, kind in sorted(P.prize_kind.items(), key=lambda t: t[0]):
+        if kind in ("jump", "hard", "easy", "kept"):
+            continue
+        cls = P.items[k][0]
+        made = False
+        if kind == "water":
+            if OLD_WATER or not water_deep(P.params):
+                # 3.66: the swim to a vault for the railgun and the powerups first (q2dm1), a well else (q2dm5)
+                first = (_dive_vault, _dive_well) if cls in ("weapon_railgun", "item_quad", "item_invulnerability") \
+                    else (_dive_well, _dive_vault)
+            else:
+                # the PO 12.11: a pool, a tube under the rock, the prize's room above its own water (q2dm1's railgun);
+                # at a deep pool's bottom else (q2dm2's quad)
+                first = (_dive_tube, _dive_pool) if cls in ("weapon_railgun", "item_quad", "item_invulnerability") \
+                    else (_dive_pool, _dive_tube)
+            made = any(f(P, k, held, times_of) for f in first)
+        elif kind in ("lift", "ladder"):
+            made = _mover_ledge(P, k, kind, held, times_of)
+        elif kind == "exposed":
+            made = _open_spot(P, k, held, times_of)
+        if not made:
+            P.prize_kind[k] = "jump"
+            fell.append((cls, kind))
+    if fell:
+        import mapgen_scratch_words as words_mod
+        words = {"water": ("под водой", "under water"), "lift": ("только лифтом", "by a lift only"),
+                 "ladder": ("только по лестнице", "by a ladder only"), "exposed": ("на открытом месте", "in the open")}
+        # the items by their names (his mg_new_56432 of 12.11 said «weapon_railgun под водой» in Russian)
+        P.notes.append(say("призы в нише с прыжком вместо: "
+                           + ", ".join(f"{words_mod.item(c_, True).lower()} {words[k_][0]}" for c_, k_ in fell)
+                           + " - на этом каркасе для них нет места",
+                           "prizes in a nook jumped into instead of: "
+                           + ", ".join(f"{words_mod.item(c_, False).lower()} {words[k_][1]}" for c_, k_ in fell)
+                           + " - no room for it on this skeleton"))
+    P.metrics["prize_fell_back"] = [[c_, k_] for c_, k_ in fell]
+    P.metrics["prize_kinds"] = [[P.items[k][0], P.prize_kind[k]] for k in sorted(P.prize_kind)]
+
+
+def _spaces_near(P: Plan, c, kinds=("hall", "room")) -> list:
+    """The places to try for a prize at `c`: its own first, then the nearest - halls and rooms of the ground layer."""
+    own = P.owner.get(c)
+    out = [s for s in P.spaces if not s.solid and s.kind in kinds and not getattr(s, "atrium", False) and s.floor
+           and layer_of(next(iter(s.floor))) == 0]
+
+    def dist(s):
+        return 0 if s.id == own else min(abs(x[0] - c[0]) + abs(x[1] - c[1]) for x in s.floor)
+    return sorted(out, key=dist)
+
+
+def _dive_well(P: Plan, k: int, held: set, times_of) -> bool:
+    """A well 160 deep, 2 x 2 cells, in the floor of a hall or a room - surrounded by that floor, off the doors and the
+    items - water up to 8 under the floor; the prize at its bottom (q2dm5's mega)."""
+    cls, c, z, note = P.items[k]
+    for s in _spaces_near(P, c)[:6]:
+        best = None
+        for x, f, block in ((x, f, b_) for x, f in s.floor.items() for b_ in (
+                [x, (x[0] + 1, x[1]), (x[0], x[1] + 1), (x[0] + 1, x[1] + 1)], [x, (x[0] + 1, x[1])], [x, (x[0], x[1] + 1)])):
+            if f[1] != "flat":
+                continue
+            if any(s.floor.get(b) != (f[0], "flat", 0, 0) or b in held for b in block):
+                continue
+            ring = {(b[0] + dx, b[1] + dy) for b in block for dx in (-1, 0, 1) for dy in (-1, 0, 1)} - set(block)
+            # in a hollow of the floor: round it that floor itself or rock - no step, no other place, no door or
+            # item beside it
+            bad = False
+            for r in ring:
+                if r in s.floor:
+                    bad = s.floor[r][0] != f[0] or r in held
+                else:
+                    bad = P.owner.get(r) is not None or r in held
+                if bad:
+                    break
+            if bad:
+                continue
+            if _stacked_over(P, block):
+                continue
+            zb = f[0] - DIVE_DEPTH
+            if not majors_apart(P, cls, block[-1], zb, times_of, skip=k) or not _halves_ok(P, k, block[-1], times_of):
+                continue
+            # the 2 x 2 well first (room to turn in), then the nearest
+            d = (0 if len(block) == 4 else 1, abs(x[0] - c[0]) + abs(x[1] - c[1]))
+            if best is None or d < best[0]:
+                best = (d, block, f[0])
+        if best:
+            _d, block, zf = best
+            zb = zf - DIVE_DEPTH
+            for b in block:
+                s.floor[b] = (zb, "flat", 0, 0)
+            P.liquids.append((list(block), "water", zb, zf - 8))
+            P.no_items.update(block)
+            held.update(block)
+            P.items[k] = (cls, block[-1], zb, (f"{note}; " if note else "") + "under water: a dive into a well (q2dm5)")
+            P.reasons.append((cls, say("приз на дне колодца - за ним нырять", "the prize at a well's bottom - one dives for it")))
+            return True
+    return False
+
+
+def _dive_vault(P: Plan, k: int, held: set, times_of) -> bool:
+    """A vault carved into the rock behind a wall, its only way in under water (q2dm1's railgun): a well in the room at
+    the wall, a drowned doorway through the wall at the well's bottom, the vault's own well up into it, its dry floor
+    with the prize."""
+    cls, c, z, note = P.items[k]
+    for s in _spaces_near(P, c)[:6]:
+        near = min(s.floor, key=lambda x: abs(x[0] - c[0]) + abs(x[1] - c[1]))
+        spot = nook_spot(P, s, near, 1, 3, held, None, None)
+        if not spot:
+            continue
+        fronts, opening, cells, (dx, dy) = spot
+        if _stacked_over(P, fronts + opening + cells):
+            continue
+        zf = s.floor[fronts[0]][0]
+        zb = zf - DIVE_DEPTH
+        # the front cell's sides: that floor too (a well in a hollow, not at a step)
+        side = [(fronts[0][0] + ex, fronts[0][1] + ey) for ex, ey in ((1, 0), (-1, 0), (0, 1), (0, -1))]
+        if any(x in s.floor and s.floor[x][0] != zf for x in side):
+            continue
+        if not majors_apart(P, cls, cells[-1], zf, times_of, skip=k) or not _halves_ok(P, k, fronts[0], times_of):
+            continue
+        s.floor[fronts[0]] = (zb, "flat", 0, 0)
+        V = Space(len(P.spaces), "nook", Rect(min(x[0] for x in cells), min(x[1] for x in cells),
+                                              max(x[0] for x in cells) + 1, max(x[1] for x in cells) + 1), base=zf)
+        V.floor = {cells[0]: (zb, "flat", 0, 0), cells[1]: (zf, "flat", 0, 0), cells[2]: (zf, "flat", 0, 0)}
+        V.ceil = zf + DOOR_H + 16
+        V.pattern = "flat"
+        P.spaces.append(V)
+        for x in cells:
+            P.owner[x] = V.id
+        if s.id in P.half:
+            P.half[V.id] = P.half[s.id]
+        d = Door(s.id, V.id, list(opening), za=zb, zb=zb, z=zb, kind="door", top=zb + 96)
+        P.doors.append(d)
+        P.asked.add(V.id)
+        P.liquids.append(([fronts[0]], "water", zb, zf - 8))
+        P.liquids.append((list(opening), "water", zb, zb + 96))
+        P.liquids.append(([cells[0]], "water", zb, zf - 8))
+        P.no_items.update(fronts + opening + cells[:1])
+        held.update(fronts + opening + cells)
+        P.items[k] = (cls, cells[-1], zf, (f"{note}; " if note else "") + "under water: a swim to a vault (q2dm1)")
+        P.pedestals = list(getattr(P, "pedestals", None) or []) + [(cells[-1], zf, cls)]
+        P.reasons.append((cls, say("приз в тайнике за стеной - вход только под водой",
+                                   "the prize in a vault behind the wall - the only way in under water")))
+        return True
+    return False
+
+
+def _pools_near(P: Plan, c) -> list:
+    """The pools to dive from: those of a water no valuable item is in yet first (the PO 12.11), then the nearest."""
+    def dist(p):
+        return min(abs(x[0] - c[0]) + abs(x[1] - c[1]) for x in p["cells"])
+    served = _served_systems(P)
+    sys_of = {i: n for n, g in enumerate(water_systems(P)) for i in g}
+    return sorted((p for p in P.pools if len(p["cells"]) >= 2),
+                  key=lambda p: (sys_of.get(P.pools.index(p)) in served, dist(p)))
+
+
+def water_systems(P: Plan) -> list:
+    """The deep pools joined by tubes under water: each a set of pools' indexes (one water to swim in)."""
+    idx = [i for i, p in enumerate(P.pools) if len(p["cells"]) >= POOL_MIN]
+    root = {i: i for i in idx}
+
+    def find(i):
+        while root[i] != i:
+            i = root[i]
+        return i
+    of_space = {}
+    for i in idx:
+        of_space.setdefault(P.pools[i]["space"], []).append(i)
+    for d in P.doors:
+        if d.kind == "swim" and d.a in of_space and d.b in of_space:
+            root[find(of_space[d.a][0])] = find(of_space[d.b][0])
+    for ids in of_space.values():
+        for i in ids[1:]:
+            root[find(i)] = find(ids[0])
+    groups: dict = {}
+    for i in idx:
+        groups.setdefault(find(i), set()).add(i)
+    return sorted(groups.values(), key=min)
+
+
+def _served_systems(P: Plan) -> set:
+    """The waters a valuable item is reached through already (its pool's index kept by the dive)."""
+    sys_of = {i: n for n, g in enumerate(water_systems(P)) for i in g}
+    return {sys_of[i] for i in getattr(P, "pool_served", set()) if i in sys_of}
+
+
+def _serve(P: Plan, pool: dict) -> None:
+    if not hasattr(P, "pool_served"):
+        P.pool_served = set()
+    P.pool_served.add(P.pools.index(pool))
+
+
+# what an empty water takes when the prizes are placed (the PO 12.11), the most valuable first; people's: q2dm2's
+# chaingun in its water, q2dm5's grenade launcher and chaingun at its rim, q2dm4's shotguns
+POOL_ITEMS = ("weapon_rocketlauncher", "item_armor_combat", "weapon_hyperblaster", "weapon_grenadelauncher",
+              "weapon_chaingun", "weapon_supershotgun", "item_armor_jacket", "weapon_bfg", "weapon_machinegun")
+
+
+def pool_purpose(P: Plan) -> None:
+    """The PO 12.11 («вот приплыл сюда, а там пусто»): a water no prize went into takes a valuable item that no
+    mechanic holds - by a tube to its room (q2dm1) or at the pool's bottom (q2dm2), apart from the other majors as
+    the rule asks. Said in the record when none can."""
+    if OLD_MAJORS or OLD_WATER or not water_deep(P.params):
+        return
+    systems = water_systems(P)
+    nodes, edges = plan_graph(P)
+    cache: dict = {}
+
+    def times_of(c):
+        if c not in cache:
+            cache[c] = dijkstra(edges, c)
+        return cache[c]
+    fixed = ("stack", "key gun", "asymmetry", "lift as", "ladder", "dead-end", "teleport to", "armour by",
+             "adrenaline tucked", "in a nook", "under water", "only a", "in the open", "cycle", "clock")
+    held = _prize_held(P)
+    empty = 0
+    for n, g in enumerate(systems):
+        if n in _served_systems(P):
+            continue
+        pools = sorted((P.pools[i] for i in g), key=lambda p: -len(p["cells"]))
+        done = False
+        for cls in POOL_ITEMS:
+            for k, (c_, cell, z, note) in enumerate(P.items):
+                if c_ != cls or k in P.prize_kind or any(f in note for f in fixed):
+                    continue
+                if _dive_tube(P, k, held, times_of, pools=pools) or _dive_pool(P, k, held, times_of, pools=pools):
+                    done = True
+                    break
+            if done:
+                break
+        if not done:
+            empty += 1
+    P.metrics["pools_empty"] = empty
+    if empty:
+        P.notes.append(say(f"водоёмов без ценного предмета: {empty} - на этом каркасе ни одному не нашлось места",
+                           f"waters with no valuable item: {empty} - no room for one on this skeleton"))
+
+
+def _dive_tube(P: Plan, k: int, held: set, times_of, pools=None) -> bool:
+    """The PO 12.11 («на q2dm1 там глубокий большой водоем через который нужно плыть и там еще и труба есть по которой
+    плывут до выхода на рейл»): from a deep pool's side a tube under the floors, 6..12 cells (q2dm1's 368 u), into the
+    prize's room carved in the rock - the tube comes up in the room's own pool (q2dm1's rail room has one at the big
+    pool's surface), the prize at the back of its dry floor. The room has no other way in."""
+    cls, c, z, note = P.items[k]
+    for pool in (pools if pools is not None else _pools_near(P, c)[:4]):
+        s = P.spaces[pool["space"]]
+        zt, zv = pool["bottom"], s.base
+        occ = air_spans(P)
+        seen, _came = _tube_bfs(P, occ, pool, zt, TUBE_CELLS[1])
+        lo, hi = zt, zv + VAULT_CEIL
+        found = None
+        for e in sorted((e for e, v_ in seen.items() if v_[0] >= TUBE_CELLS[0]), key=lambda e: (abs(seen[e][0] - 8), e)):
+            path = _path_to(seen, e)
+            on = set(path)
+            for (w, h) in ((3, 3), (3, 2), (2, 3)):
+                for ox in range(-w, 2):
+                    for oy in range(-h, 2):
+                        R = [(e[0] + ox + i_, e[1] + oy + j_) for i_ in range(w) for j_ in range(h)]
+                        if on & set(R):
+                            continue
+                        side = [r for r in R if abs(r[0] - e[0]) + abs(r[1] - e[1]) == 1]
+                        if len(side) != 1:
+                            continue
+                        v = side[0]
+                        # the room's pool: the row (the column) the tube comes up into
+                        wet = [r for r in R if r[0] == v[0]] if v[0] != e[0] else [r for r in R if r[1] == v[1]]
+                        dry = [r for r in R if r not in wet]
+                        if len(dry) < 3:
+                            continue
+                        if not all(_rock(P, occ, r, lo, hi, frozenset(R)) for r in R):
+                            continue
+                        # the tube's other cells keep off the room (its water opens into the room's pool alone)
+                        if any(abs(p_[0] - r[0]) + abs(p_[1] - r[1]) == 1 for p_ in path[:-1] for r in R):
+                            continue
+                        far = max(dry, key=lambda r: (min(abs(r[0] - x[0]) + abs(r[1] - x[1]) for x in wet), -abs(r[0] - v[0]) - abs(r[1] - v[1])))
+                        # the prize's seconds and place past the tube's mouth: the swim (150 u/s), up the room's pool
+                        mouth = min((x for x in pool["cells"] if abs(phys(x)[0] - path[0][0]) + abs(phys(x)[1] - path[0][1]) == 1),
+                                    default=pool["cells"][0])
+                        extra = (len(path) + 2) * CELL / 150.0 + (zv - zt) / 150.0
+                        at = _item_at(far, zv)
+                        if not majors_apart(P, cls, mouth, zt, times_of, skip=k, extra=extra, at=at)                                 or not _halves_ok(P, k, mouth, times_of, extra=extra):
+                            continue
+                        found = (path, R, wet, dry, far)
+                        break
+                    if found:
+                        break
+                if found:
+                    break
+            if found:
+                break
+        if not found:
+            continue
+        path, R, wet, dry, far = found
+        V = Space(len(P.spaces), "nook", Rect(min(x[0] for x in R), min(x[1] for x in R),
+                                              max(x[0] for x in R) + 1, max(x[1] for x in R) + 1), base=zv)
+        V.floor = {r: ((zt, "flat", 0, 0) if r in wet else (zv, "flat", 0, 0)) for r in R}
+        V.ceil = zv + VAULT_CEIL
+        V.pattern = "flat"
+        P.spaces.append(V)
+        for r in R:
+            P.owner[r] = V.id
+        if s.id in P.half:
+            P.half[V.id] = P.half[s.id]
+        _lay_tube(P, occ, path, zt, s.id, V.id)
+        P.asked.add(V.id)
+        P.liquids.append((list(wet), "water", zt, zv - POOL_SURFACE))
+        P.no_items.update(wet)
+        held.update(list(R) + [wl(x) for x in path])
+        P.items[k] = (cls, far, zv, (f"{note}; " if note else "") + f"under water: a tube {len(path) * CELL} u from a pool to its room (q2dm1)")
+        P.pedestals = list(getattr(P, "pedestals", None) or []) + [(far, zv, cls)]
+        P.metrics.setdefault("prize_tubes", []).append([cls, len(path)])
+        _serve(P, pool)
+        P.reasons.append((cls, say(f"приз в комнате за подводной трубой {len(path) * CELL} ед. из бассейна зала {s.id} - туда только плыть",
+                                   f"the prize in a room past a tube {len(path) * CELL} u under water from hall {s.id}'s pool - one swims there")))
+        return True
+    return False
+
+
+def _dive_pool(P: Plan, k: int, held: set, times_of, pools=None) -> bool:
+    """At a deep pool's bottom, off its sides (q2dm2's quad in a pool 216 deep): one dives for it."""
+    cls, c, z, note = P.items[k]
+    for pool in (pools if pools is not None else _pools_near(P, c)[:4]):
+        cells = set(pool["cells"])
+        sp = P.spaces[pool["space"]]
+        inner = [x for x in cells if x not in held and sp.floor.get(x, (None,))[0] == pool["bottom"]]
+        inner.sort(key=lambda x: (-sum(1 for dx in (-1, 0, 1) for dy in (-1, 0, 1) if (x[0] + dx, x[1] + dy) in cells),
+                                  abs(x[0] - c[0]) + abs(x[1] - c[1])))
+        for x in inner[:6]:
+            if majors_apart(P, cls, x, pool["bottom"], times_of, skip=k) and _halves_ok(P, k, x, times_of):
+                held.add(x)
+                P.items[k] = (cls, x, pool["bottom"], (f"{note}; " if note else "") + f"under water: at a pool's bottom {pool['surface'] - pool['bottom']} deep (q2dm2)")
+                P.reasons.append((cls, say("приз на дне глубокого бассейна - за ним нырять",
+                                           "the prize at a deep pool's bottom - one dives for it")))
+                _serve(P, pool)
+                return True
+    return False
+
+
+def _mover_ledges(P: Plan, kind: str) -> list:
+    """The places only a lift (a ladder) leads into: (space id, the mover's cells, the ledge's floor or None)."""
+    deg = {}
+    for d in P.doors:
+        if d.kind == "overlook":
+            continue
+        deg[d.a] = deg.get(d.a, 0) + 1
+        deg[d.b] = deg.get(d.b, 0) + 1
+    found = []
+    if kind == "lift":
+        for (plat, zl, zh, bottom, top) in P.lifts:
+            d = next((d for d in P.doors if d.kind == "lift" and list(d.cells) == list(top)), None)
+            if d is None:
+                continue
+            hi = d.b if d.a == P.owner.get(plat[0]) else d.a
+            if deg.get(hi, 0) == 1:
+                found.append((hi, list(d.cells), None))
+    else:
+        for (cells, into, zl, zh, front) in P.ladders:
+            d = next((d for d in P.doors if d.kind == "ladder" and list(d.cells) == list(cells)), None)
+            if d is None:
+                continue
+            hi = d.a if P.owner.get(front[0]) == d.b else d.b
+            if deg.get(hi, 0) == 1:
+                found.append((hi, list(cells), zh))
+    return found
+
+
+def _mover_ledge(P: Plan, k: int, kind: str, held: set, times_of) -> bool:
+    """A ledge only a lift (a ladder) reaches - its place has that one way in - the cell nearest its middle."""
+    cls, c, z, note = P.items[k]
+    if note.startswith("lift as exposure") or note.startswith("ladder under"):
+        return True
+    for sid, away, zz in _mover_ledges(P, kind):
+        s = P.spaces[sid]
+        cx, cy = (s.rect.x0 + s.rect.x1) / 2, (s.rect.y0 + s.rect.y1) / 2
+        cand = sorted((x for x, f in s.floor.items() if f[1] == "flat" and x not in held and (zz is None or f[0] == zz)
+                       and min(max(abs(x[0] - t[0]), abs(x[1] - t[1])) for t in away) >= 2),
+                      key=lambda x: abs(x[0] + 0.5 - cx) + abs(x[1] + 0.5 - cy))
+        for x in cand:
+            if majors_apart(P, cls, x, s.floor[x][0], times_of, skip=k) and _halves_ok(P, k, x, times_of):
+                held.add(x)
+                P.items[k] = (cls, x, s.floor[x][0], (f"{note}; " if note else "") + f"only a {kind} reaches it")
+                return True
+    return False
+
+
+def _open_spot(P: Plan, k: int, held: set, times_of) -> bool:
+    """The open middle of a place three ways or more lead into (q2duel5's railgun under fire from three sides)."""
+    cls, c, z, note = P.items[k]
+    deg = {}
+    for d in P.doors:
+        deg[d.a] = deg.get(d.a, 0) + 1
+        deg[d.b] = deg.get(d.b, 0) + 1
+    for s in sorted((s for s in P.spaces if not s.solid and deg.get(s.id, 0) >= 3 and s.kind in ("hall", "room")
+                     and s.floor and layer_of(next(iter(s.floor))) == 0),
+                    key=lambda s: (-deg.get(s.id, 0), -len(s.floor))):
+        cx, cy = (s.rect.x0 + s.rect.x1) / 2, (s.rect.y0 + s.rect.y1) / 2
+        cand = sorted((x for x, f in s.floor.items() if f[1] == "flat" and x not in held
+                       and all((x[0] + dx, x[1] + dy) in s.floor for dx in (-1, 0, 1) for dy in (-1, 0, 1))),
+                      key=lambda x: abs(x[0] + 0.5 - cx) + abs(x[1] + 0.5 - cy))
+        for x in cand[:40]:
+            if majors_apart(P, cls, x, s.floor[x][0], times_of, skip=k) and _halves_ok(P, k, x, times_of):
+                held.add(x)
+                P.items[k] = (cls, x, s.floor[x][0], (f"{note}; " if note else "") + "in the open where three ways meet")
+                return True
+    return False
+
+
+def majors_repair(P: Plan) -> None:
+    """The PO 12.11 («никогда арморы не лежат рядом»): a nook takes its prize two cells back and sometimes into the next
+    room - and a weapon or an armour placed before is then near it. Each pair still near: the one that is neither a
+    prize nor held by a mechanic (a nook, a dive, a mover's ledge, the open spot, the key gun, the asymmetry's gun, the
+    mechanics' pinned places, the stack's own) moves to the free floor farthest on foot from every major that keeps the
+    rule. A few rounds; what cannot move is left for the score and the map's check to say."""
+    if OLD_MAJORS or P.prize_kind is None:
+        return
+    nodes, edges = plan_graph(P)
+    cache: dict = {}
+
+    def times_of(c):
+        if c not in cache:
+            cache[c] = dijkstra(edges, c)
+        return cache[c]
+    fixed_notes = ("stack of", "key gun", "asymmetry", "lift as", "ladder", "dead-end", "teleport to", "armour by",
+                   "adrenaline tucked", "in a nook", "under water", "only a", "in the open", "cycle")
+
+    def movable(k):
+        cls, c, z, note = P.items[k]
+        return (major_kind(cls) is not None and k not in P.prize_kind
+                and not any(note.startswith(f) or f"; {f}" in note for f in fixed_notes) and cls not in POWERUPS)
+
+    def near_pairs():
+        out = []
+        its = [k for k, it in enumerate(P.items) if major_kind(it[0])]
+        for i, a in enumerate(its):
+            ca, za = P.items[a][1], P.items[a][2]
+            for b in its[i + 1:]:
+                cb, zb = P.items[b][1], P.items[b][2]
+                if ca == cb:
+                    continue
+                t_need, d_need = majors_need(P.items[a][0], P.items[b][0], P.params)
+                t = min(times_of(ca).get(cb, 99.0), times_of(cb).get(ca, 99.0))
+                if majors_close(math.dist(_item_at(ca, za), _item_at(cb, zb)), t, t_need, d_need):
+                    out.append((a, b))
+        return out
+    moved = 0
+    for _round in range(4):
+        pairs = near_pairs()
+        if not pairs:
+            break
+        held = _prize_held(P)
+        floor = [c for c, f in nodes.items() if f[1] == "flat" and c in edges and c not in held and P.owner.get(c) is not None
+                 and P.spaces[P.owner[c]].kind != "nook" and len(edges.get(c, [])) >= 3]
+        done = set()
+        for a, b in pairs:
+            k = b if movable(b) else a if movable(a) else None
+            if k is None or k in done:
+                continue
+            cls = P.items[k][0]
+
+            def spread(c):
+                # on foot from every other major to it (their walks are kept; a walk from each candidate is not)
+                return min((times_of(it[1]).get(c, 99.0) for j, it in enumerate(P.items) if j != k and major_kind(it[0])),
+                           default=99.0)
+            best, loose = None, None
+            for c in floor:
+                if c in held:
+                    continue
+                score_ = spread(c)
+                if loose is None or score_ > loose[0]:
+                    loose = (score_, c)
+                if (best is None or score_ > best[0]) and majors_apart(P, cls, c, nodes[c][0], times_of, skip=k):
+                    best = (score_, c)
+            if best is None and loose is not None and loose[0] > spread(P.items[k][1]) + 0.3:
+                best = loose            # nothing keeps the rule on this skeleton: at least farther than it stands
+            if best is None:
+                continue
+            c = best[1]
+            cls_, _c0, _z0, note = P.items[k]
+            P.items[k] = (cls_, c, nodes[c][0], (f"{note}; " if note else "") + "moved apart from the majors")
+            held.add(c)
+            done.add(k)
+            moved += 1
+    P.metrics["majors_moved"] = moved
 
 
 ROUND_KINDS = ("corners", "apses", "podiums")
@@ -4252,9 +5509,23 @@ def score(P: Plan) -> float:
         fails.append("plain rooms")
     if any("no nook" in k_ for _c, k_ in (m.get("powerup_sites") or [])):
         fails.append("powerups")
+    # the PO 12.11: the majors' pick-up worth - none near another (majors_apart)
+    m["majors_near"] = [] if OLD_MAJORS else majors_near(P, edges)
+    if m["majors_near"]:
+        fails.append("majors near")
+        pen += 4 * len(m["majors_near"])
     m["dead_end_groups"] = len(door_bridges(P))
     if m["dead_end_groups"]:
         fails.append("dead ends")
+    # the PO 12.11 («вот приплыл сюда, а там пусто»): a deep water with no valuable item - a skeleton that has room for
+    # one in every water is taken first
+    if m.get("pools_empty"):
+        fails.append("empty water")
+    # and water asked (or a prize under it) with no deep pool at all, or a prize under water fallen back to a nook
+    if water_deep(q) and (float(q.get("water") or 0) > 0 or int(q.get("underwater") or 0) > 0) and not P.pools:
+        fails.append("no pool")
+    if any(k_ == "water" for _c, k_ in (m.get("prize_fell_back") or [])):
+        fails.append("prize not under water")
     m["plan_fails"] = fails
     pen += 8 * len(fails)
     m["score"] = round(pen, 2)
@@ -4273,7 +5544,7 @@ def plan_widths(P: Plan) -> list:
             air[c] = (floor_top(f), s.ceil)
     for d in P.doors:
         for c in d.cells:
-            air[c] = (d.z + (RISE_PER_CELL if d.stair else 0), d.top or d.z + DOOR_H)
+            air[c] = (d.z + (RISE_PER_CELL if d.stair else 0), d.z + TUBE_H if d.kind == "swim" else (d.top or d.z + DOOR_H))
     for (c, _z0, _z1) in P.pillars:
         air.pop(c, None)
     # nobody stands in lava, slime or a chasm: the map's measure takes no width there (05.11: with 10 % lava the
@@ -4324,7 +5595,8 @@ def long_lines(P: Plan, pairs: int | None = None, lines: bool = False):
             air.setdefault(phys(c), []).append((floor_top(f), s.ceil))
     for d in P.doors:
         for c in d.cells:
-            air.setdefault(phys(c), []).append((d.z + (RISE_PER_CELL if d.stair else 0), d.top or d.z + DOOR_H))
+            air.setdefault(phys(c), []).append((d.z + (RISE_PER_CELL if d.stair else 0),
+                                                d.z + TUBE_H if d.kind == "swim" else (d.top or d.z + DOOR_H)))
     for (cells, z0, z1, *_w) in P.windows:
         for c in cells:
             air.pop(c, None)            # glass: not seen through by the measure (WINDOW blocks sight)
@@ -4579,6 +5851,56 @@ def close_lines(P: Plan) -> None:
 
 
 # --------------------------------------------------------------------------------------------- the whole skeleton
+# The PO 11.11 (the skeleton's stage of a run): «было бы неплохо визуализировать построение каркаса - там же наверное
+# тоже есть что показать как он строится в реальном времени». A plan made again with RECORD set (mapgen_scratch.make,
+# for the chosen skeleton only) hands each step's state to it: rec(step, P). None - nothing kept (every plan of the
+# 60 a run tries).
+RECORD = None
+
+
+def rec(step: str, P: Plan) -> None:
+    if RECORD is not None and not P.failed:
+        RECORD(step, P)
+
+
+def show_state(P: Plan) -> dict:
+    """The plan as the Studio draws a step of it: every place's cells at their floor (x, y physical; z; the place's
+    kind; its id), the doorways, liquids and pits, lifts, pads, teleporters, items and spawn points so far."""
+    kinds = {}
+
+    def kind_of(k: str) -> int:
+        return kinds.setdefault(k, len(kinds))
+    cells = []
+    for s in P.spaces:
+        if s.solid:
+            continue
+        k = kind_of(s.kind)
+        if s.floor:
+            for c, f in s.floor.items():
+                x, y = phys(c)
+                cells.append([x, y, int(f[0]), kind_of("stair") if f[1] == "stair" else k, s.id])
+        else:
+            for c in s.cells():
+                x, y = phys(c)
+                cells.append([x, y, int(s.base), k, s.id])
+    P2 = lambda c: list(phys(c))
+    return {
+        "kinds": [k for k, _ in sorted(kinds.items(), key=lambda kv: kv[1])],
+        "cells": cells,
+        "doors": [[*P2(c), int(d.z), 1 if d.mover else 0] for d in P.doors if d.kind != "swim" for c in d.cells],
+        "liquids": [[*P2(c), int(level), kind] for (cs, kind, _zf, level) in P.liquids for c in cs
+                    if layer_of(c) != WATER_LAYER],
+        # the PO 12.11: the tubes under water (under the floors): each cell and the tube's roof
+        "tubes": [[*P2(c), int(d.top)] for d in P.doors if d.kind == "swim" for c in d.cells],
+        "pits": [[*P2(c), int(bottom)] for (cs, bottom, _sid) in P.pits for c in cs],
+        "lifts": [[*P2(plat[0]), int(zl), int(zh)] for (plat, zl, zh, _b, _t) in P.lifts],
+        "pads": [[*P2(a), *P2(t)] for (a, t, *_r) in P.pads],
+        "teleports": [[*P2(a), *P2(b)] for (a, b, _da, _db) in P.teleports],
+        "items": [[cls, *P2(c), int(z)] for (cls, c, z, _n) in P.items],
+        "spawns": [[*P2(c), int(z)] for (c, z, _a) in P.spawns],
+    }
+
+
 def make_plan(params: dict, seed: int) -> Plan:
     q = defaults(params)
     rnd = random.Random(seed)
@@ -4592,25 +5914,40 @@ def make_plan(params: dict, seed: int) -> Plan:
         tower_mod.plan(P, rnd)
         return P
     split_plan(P, rnd)
+    rec("rooms", P)
     merge_pieces(P, rnd)
+    rec("merge", P)
     corridor_pieces(P, rnd)
+    rec("corridors", P)
     connect(P, rnd)
     if P.failed:
         return P
+    rec("doors", P)
     heights(P, rnd)
     realise(P, rnd)
+    rec("heights", P)
     deadly_pits(P, rnd)
     liquids(P, rnd)
+    rec("liquids", P)
     openings(P, rnd)
     flights_and_ramps(P, rnd)
+    rec("stairs", P)
     moving_doors(P, rnd)
     movers(P, rnd)
+    rec("movers", P)
     stack_rooms(P, rnd)
     show_more(P, rnd)
+    water_network(P, rnd)       # the PO 12.11: the deep pools joined under water (q2dm2, q2dm4, q2dm5)
+    rec("stacked", P)
     places(P, rnd)
     if P.failed:
         return P
+    prize_plan(P, rnd)          # the PO 12.11: how each prize is earned
+    prize_sites(P, rnd)         # the dives, the movers' ledges, the open spots (the nooks next)
     powerup_sites(P, rnd)
+    majors_repair(P)            # the PO 12.11: what the nooks brought near moved apart
+    pool_purpose(P)             # the PO 12.11: no deep water without a valuable item in it
+    rec("items", P)
     # brief 22 D3: the clock's pair measured again where the powerups' places left them
     if P.metrics.get("stack_apart_s") is not None:
         P.metrics["stack_apart_placed_s"] = P.metrics["stack_apart_s"]
@@ -4635,18 +5972,25 @@ def _plan_of(args: tuple) -> tuple | None:
     return None if P.failed else (score(P), P)
 
 
-def best_plan(params: dict, seed: int, tries: int = 60, workers: int = 1, progress=None) -> list:
+def best_plan(params: dict, seed: int, tries: int = 60, workers: int = 1, progress=None, seen=None) -> list:
     """Plans of `tries` seeds derived from the one asked, best first.
 
     Brief 24 D3.1 (Fable 06.11, the PO: «ограничение процессора 80 %, а реально студия юзает гораздо меньше»): the seeds
     over a pool of `workers` processes. Each seed's plan is made exactly as the loop makes it (its own `random.Random`,
     no shared state - checked 06.11), the results come back in the seeds' order (`imap`), and the same stable sort
     gives the same list: tools/check_mapgen_scratch_parallel.py proves pool 1 = pool N. `progress(done, tries)` is
-    called every ten seeds (the Studio's run page reads it from the tool's log)."""
+    called every ten seeds (the Studio's run page reads it from the tool's log). `seen(done, tries, result)` (the PO
+    12.11: the skeleton's stage shown from its first second) gets every seed's result as it comes back - (score, plan)
+    or None - and changes nothing of the list."""
     seeds = [seed * 1000 + k for k in range(tries)]
     out = []
 
-    def step(k: int) -> None:
+    def step(k: int, r=None) -> None:
+        if seen:
+            try:
+                seen(k + 1, tries, r)
+            except Exception:  # noqa: BLE001 - a picture is a help, never a reason to stop
+                pass
         if progress and ((k + 1) % 10 == 0 or k + 1 == tries):
             progress(k + 1, tries)
 
@@ -4656,13 +6000,13 @@ def best_plan(params: dict, seed: int, tries: int = 60, workers: int = 1, progre
             for k, r in enumerate(pool.imap(_plan_of, [(params, s) for s in seeds], chunksize=1)):
                 if r is not None:
                     out.append(r)
-                step(k)
+                step(k, r)
     else:
         for k, s in enumerate(seeds):
             r = _plan_of((params, s))
             if r is not None:
                 out.append(r)
-            step(k)
+            step(k, r)
     out.sort(key=lambda t: t[0])
     return [p for _, p in out]
 
@@ -4822,6 +6166,15 @@ def draw(P: Plan, path: Path, scale: int = 22) -> None:
             dr.line([b[0], b[1], b[2], b[3]], fill=(255, 255, 255), width=1)
     # doorways and what is in them
     for d in P.doors:
+        if d.kind == "swim":
+            # the PO 12.11: a tube under water under the floors - a blue band along it, the floors over it seen
+            pts = [centre(c) for c in d.cells]
+            if len(pts) > 1:
+                dr.line(pts, fill=(40, 110, 230), width=max(3, scale // 3))
+            for c in d.cells:
+                b = box(c, scale // 3)
+                dr.rectangle(b, outline=(40, 110, 230), width=2)
+            continue
         for c in d.cells:
             z = d.z + (RISE_PER_CELL // 2 if d.stair else 0)
             dr.rectangle(box(c), fill=ramp(z))
@@ -4909,6 +6262,7 @@ def draw(P: Plan, path: Path, scale: int = 22) -> None:
           "drop down / ledge": "спуск вниз / уступ", "ladder": "лестница-стремянка", "lift": "лифт", "door": "дверь",
           "window": "окно", "jump pad -> landing": "джампад -> приземление", "teleporter -> exit": "телепорт -> выход",
           "water / lava / slime": "вода / лава / кислота", "deadly chasm": "смертельная яма",
+          "tube under water (under the floors)": "подводная труба (под полом)",
           "open to the sky (blue frame)": "под открытым небом (голубая рамка)", "spawn (facing)": "точка появления (взгляд)",
           "room over a room (white frame)": "комната над комнатой (белая рамка)",
           "small health / shard / ammo": "аптечка / осколок брони / патроны",
@@ -4945,6 +6299,7 @@ def draw(P: Plan, path: Path, scale: int = 22) -> None:
         ("water / lava / slime", lambda b: [dr.rectangle([b[0], b[1], b[0] + 7, b[3]], fill=(40, 110, 230)),
                                             dr.rectangle([b[0] + 8, b[1], b[0] + 15, b[3]], fill=(235, 95, 20)),
                                             dr.rectangle([b[0] + 16, b[1], b[2], b[3]], fill=(100, 200, 40))]),
+        ("tube under water (under the floors)", lambda b: [dr.line([b[0], (b[1] + b[3]) / 2, b[2], (b[1] + b[3]) / 2], fill=(40, 110, 230), width=6)]),
         ("deadly chasm", lambda b: [dr.rectangle(b, fill=(8, 8, 8)), dr.line([b[0], b[1], b[2], b[3]], fill=(200, 40, 40), width=2)]),
         ("open to the sky (blue frame)", lambda b: [dr.rectangle(b, outline=(120, 210, 255), width=2)]),
         ("room over a room (white frame)", lambda b: [dr.rectangle(b, outline=(255, 255, 255), width=3),

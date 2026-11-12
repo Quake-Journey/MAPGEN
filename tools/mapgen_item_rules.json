@@ -1,0 +1,1033 @@
+{
+ "_about": "from tools/mapgen_item_practice.json (--rules); the PO 12.11: pick-up worth - nothing near, prizes earned",
+ "maps": 40,
+ "apart": {
+  "armour-armour": {
+   "units": 606,
+   "s": 3.42,
+   "p10_units": 366,
+   "p10_s": 1.81,
+   "median_units": 817,
+   "median_s": 4.7,
+   "n": 107
+  },
+  "weapon-weapon": {
+   "units": 295,
+   "s": 1.51,
+   "p10_units": 217,
+   "p10_s": 1.16,
+   "median_units": 413,
+   "median_s": 2.35,
+   "n": 304
+  },
+  "weapon-armour": {
+   "units": 354,
+   "s": 1.69,
+   "p10_units": 264,
+   "p10_s": 1.09,
+   "median_units": 510,
+   "median_s": 2.7,
+   "n": 306
+  },
+  "power-power": {
+   "units": 689,
+   "s": 3.46,
+   "p10_units": 493,
+   "p10_s": 2.35,
+   "median_units": 979,
+   "median_s": 4.62,
+   "n": 57
+  },
+  "power-armour": {
+   "units": 403,
+   "s": 2.2,
+   "p10_units": 238,
+   "p10_s": 1.56,
+   "median_units": 521,
+   "median_s": 3.45,
+   "n": 65
+  },
+  "power-weapon": {
+   "units": 227,
+   "s": 1.38,
+   "p10_units": 198,
+   "p10_s": 0.84,
+   "median_units": 338,
+   "median_s": 2.23,
+   "n": 69
+  }
+ },
+ "prizes": {
+  "weapon_railgun": {
+   "n": 41,
+   "earned": 0.66,
+   "exposed": 0.15,
+   "height_median": 272,
+   "pocket_median": 41,
+   "dead_end": 0.22,
+   "moves": {
+    "gap": 14,
+    "jump": 5,
+    "teleport": 3,
+    "plat": 2,
+    "swim": 1,
+    "push": 1
+   }
+  },
+  "item_health_mega": {
+   "n": 30,
+   "earned": 0.87,
+   "exposed": 0.0,
+   "height_median": 196,
+   "pocket_median": 17,
+   "dead_end": 0.6,
+   "moves": {
+    "gap": 15,
+    "jump": 4,
+    "plat": 4,
+    "swim": 4,
+    "ladder": 1,
+    "push": 1,
+    "teleport": 1
+   }
+  },
+  "item_quad": {
+   "n": 15,
+   "earned": 0.87,
+   "exposed": 0.13,
+   "height_median": 312,
+   "pocket_median": 22,
+   "dead_end": 0.6,
+   "moves": {
+    "gap": 6,
+    "plat": 2,
+    "push": 2,
+    "teleport": 1,
+    "swim": 1
+   }
+  },
+  "item_invulnerability": {
+   "n": 2,
+   "earned": 1.0,
+   "exposed": 0.0,
+   "height_median": 440,
+   "pocket_median": 51,
+   "dead_end": 1.0,
+   "moves": {}
+  },
+  "item_armor_body": {
+   "n": 25,
+   "earned": 0.64,
+   "exposed": 0.04,
+   "height_median": 160,
+   "pocket_median": 22,
+   "dead_end": 0.52,
+   "moves": {
+    "gap": 12,
+    "plat": 4,
+    "jump": 2,
+    "teleport": 1,
+    "swim": 1,
+    "push": 1
+   }
+  },
+  "item_power_shield": {
+   "n": 2,
+   "earned": 0.5,
+   "exposed": 0.0,
+   "height_median": 256,
+   "pocket_median": 42,
+   "dead_end": 0.5,
+   "moves": {
+    "gap": 1
+   }
+  }
+ },
+ "families": {
+  "koldduel1": {
+   "maps": [
+    "koldduel1"
+   ],
+   "apart": {
+    "armour-armour": {
+     "units": 365,
+     "s": 1.81,
+     "p10_units": 365,
+     "p10_s": 1.81,
+     "median_units": 365,
+     "median_s": 1.81,
+     "n": 3
+    },
+    "weapon-weapon": {
+     "units": 318,
+     "s": 1.27,
+     "p10_units": 318,
+     "p10_s": 1.27,
+     "median_units": 359,
+     "median_s": 1.91,
+     "n": 6
+    },
+    "weapon-armour": {
+     "units": 229,
+     "s": 1.15,
+     "p10_units": 197,
+     "p10_s": 0.77,
+     "median_units": 337,
+     "median_s": 1.65,
+     "n": 6
+    },
+    "power-power": {
+     "units": 1024,
+     "s": 4.62,
+     "p10_units": 1024,
+     "p10_s": 4.62,
+     "median_units": 1024,
+     "median_s": 4.62,
+     "n": 2
+    },
+    "power-armour": {
+     "units": 327,
+     "s": 2.82,
+     "p10_units": 327,
+     "p10_s": 2.82,
+     "median_units": 932,
+     "median_s": 3.7,
+     "n": 2
+    },
+    "power-weapon": {
+     "units": 193,
+     "s": 1.25,
+     "p10_units": 193,
+     "p10_s": 1.25,
+     "median_units": 410,
+     "median_s": 1.38,
+     "n": 2
+    }
+   },
+   "prizes": {
+    "weapon_railgun": {
+     "n": 1,
+     "earned": 1.0,
+     "exposed": 0.0,
+     "height_median": 288,
+     "pocket_median": 23,
+     "dead_end": 0.0,
+     "moves": {
+      "gap": 1,
+      "jump": 1,
+      "plat": 1
+     }
+    },
+    "item_health_mega": {
+     "n": 1,
+     "earned": 1.0,
+     "exposed": 0.0,
+     "height_median": 56,
+     "pocket_median": 16,
+     "dead_end": 1.0,
+     "moves": {
+      "gap": 1,
+      "jump": 1,
+      "plat": 1
+     }
+    }
+   }
+  },
+  "match1": {
+   "maps": [
+    "match1"
+   ],
+   "apart": {
+    "armour-armour": {
+     "units": 482,
+     "s": 2.19,
+     "p10_units": 482,
+     "p10_s": 2.19,
+     "median_units": 482,
+     "median_s": 2.19,
+     "n": 3
+    },
+    "weapon-weapon": {
+     "units": 283,
+     "s": 0.96,
+     "p10_units": 174,
+     "p10_s": 0.96,
+     "median_units": 320,
+     "median_s": 1.41,
+     "n": 8
+    },
+    "weapon-armour": {
+     "units": 465,
+     "s": 0.77,
+     "p10_units": 105,
+     "p10_s": 0.32,
+     "median_units": 603,
+     "median_s": 2.0,
+     "n": 8
+    },
+    "power-power": {
+     "units": 655,
+     "s": 4.41,
+     "p10_units": 655,
+     "p10_s": 4.41,
+     "median_units": 655,
+     "median_s": 4.41,
+     "n": 3
+    },
+    "power-armour": {
+     "units": 238,
+     "s": 2.88,
+     "p10_units": 238,
+     "p10_s": 2.88,
+     "median_units": 521,
+     "median_s": 3.74,
+     "n": 3
+    },
+    "power-weapon": {
+     "units": 64,
+     "s": 0.21,
+     "p10_units": 64,
+     "p10_s": 0.21,
+     "median_units": 323,
+     "median_s": 1.18,
+     "n": 3
+    }
+   },
+   "prizes": {
+    "weapon_railgun": {
+     "n": 1,
+     "earned": 0.0,
+     "exposed": 1.0,
+     "height_median": 128,
+     "pocket_median": 55,
+     "dead_end": 0.0,
+     "moves": {
+      "gap": 1,
+      "teleport": 1
+     }
+    },
+    "item_health_mega": {
+     "n": 1,
+     "earned": 1.0,
+     "exposed": 0.0,
+     "height_median": 40,
+     "pocket_median": 33,
+     "dead_end": 1.0,
+     "moves": {}
+    },
+    "item_quad": {
+     "n": 1,
+     "earned": 1.0,
+     "exposed": 0.0,
+     "height_median": 168,
+     "pocket_median": 22,
+     "dead_end": 0.0,
+     "moves": {
+      "gap": 1,
+      "teleport": 1
+     }
+    },
+    "item_armor_body": {
+     "n": 1,
+     "earned": 1.0,
+     "exposed": 0.0,
+     "height_median": 288,
+     "pocket_median": 58,
+     "dead_end": 0.0,
+     "moves": {
+      "plat": 1,
+      "teleport": 1
+     }
+    }
+   }
+  },
+  "omf": {
+   "maps": [
+    "omf"
+   ],
+   "apart": {
+    "armour-armour": {
+     "units": 1066,
+     "s": 4.55,
+     "p10_units": 1066,
+     "p10_s": 4.55,
+     "median_units": 1066,
+     "median_s": 4.55,
+     "n": 3
+    },
+    "weapon-weapon": {
+     "units": 278,
+     "s": 1.76,
+     "p10_units": 201,
+     "p10_s": 1.44,
+     "median_units": 487,
+     "median_s": 2.72,
+     "n": 8
+    },
+    "weapon-armour": {
+     "units": 311,
+     "s": 1.53,
+     "p10_units": 244,
+     "p10_s": 1.12,
+     "median_units": 436,
+     "median_s": 2.29,
+     "n": 8
+    },
+    "power-power": {
+     "units": 927,
+     "s": 6.05,
+     "p10_units": 927,
+     "p10_s": 6.05,
+     "median_units": 927,
+     "median_s": 6.05,
+     "n": 2
+    },
+    "power-armour": {
+     "units": 570,
+     "s": 2.19,
+     "p10_units": 570,
+     "p10_s": 2.19,
+     "median_units": 606,
+     "median_s": 3.3,
+     "n": 2
+    },
+    "power-weapon": {
+     "units": 203,
+     "s": 0.7,
+     "p10_units": 203,
+     "p10_s": 0.7,
+     "median_units": 310,
+     "median_s": 1.54,
+     "n": 2
+    }
+   },
+   "prizes": {
+    "weapon_railgun": {
+     "n": 1,
+     "earned": 0.0,
+     "exposed": 0.0,
+     "height_median": 128,
+     "pocket_median": 66,
+     "dead_end": 0.0,
+     "moves": {}
+    },
+    "item_health_mega": {
+     "n": 1,
+     "earned": 0.0,
+     "exposed": 0.0,
+     "height_median": 196,
+     "pocket_median": 52,
+     "dead_end": 0.0,
+     "moves": {
+      "plat": 1
+     }
+    }
+   }
+  },
+  "ptrip": {
+   "maps": [
+    "ptrip"
+   ],
+   "apart": {
+    "armour-armour": {
+     "units": 174,
+     "s": null,
+     "p10_units": 174,
+     "p10_s": null,
+     "median_units": 174,
+     "median_s": null,
+     "n": 3
+    },
+    "weapon-weapon": {
+     "units": 173,
+     "s": 2.26,
+     "p10_units": 173,
+     "p10_s": 2.09,
+     "median_units": 527,
+     "median_s": 3.69,
+     "n": 6
+    },
+    "weapon-armour": {
+     "units": 288,
+     "s": 0.96,
+     "p10_units": 215,
+     "p10_s": 0.96,
+     "median_units": 456,
+     "median_s": 1.61,
+     "n": 6
+    },
+    "power-power": {
+     "units": null,
+     "s": null,
+     "p10_units": null,
+     "p10_s": null,
+     "median_units": null,
+     "median_s": null,
+     "n": 0
+    },
+    "power-armour": {
+     "units": 478,
+     "s": 1.93,
+     "p10_units": 478,
+     "p10_s": 1.93,
+     "median_units": 478,
+     "median_s": 1.93,
+     "n": 1
+    },
+    "power-weapon": {
+     "units": 330,
+     "s": 1.18,
+     "p10_units": 330,
+     "p10_s": 1.18,
+     "median_units": 330,
+     "median_s": 1.18,
+     "n": 1
+    }
+   },
+   "prizes": {
+    "weapon_railgun": {
+     "n": 1,
+     "earned": 0.0,
+     "exposed": 0.0,
+     "height_median": 272,
+     "pocket_median": 37,
+     "dead_end": 0.0,
+     "moves": {}
+    },
+    "item_armor_body": {
+     "n": 1,
+     "earned": 1.0,
+     "exposed": 0.0,
+     "height_median": 224,
+     "pocket_median": 4,
+     "dead_end": 1.0,
+     "moves": {}
+    }
+   }
+  },
+  "q2dm": {
+   "maps": [
+    "q2dm1",
+    "q2dm2",
+    "q2dm3",
+    "q2dm4",
+    "q2dm5",
+    "q2dm6",
+    "q2dm7",
+    "q2dm8"
+   ],
+   "apart": {
+    "armour-armour": {
+     "units": 613,
+     "s": 3.7,
+     "p10_units": 533,
+     "p10_s": 1.77,
+     "median_units": 861,
+     "median_s": 6.89,
+     "n": 15
+    },
+    "weapon-weapon": {
+     "units": 283,
+     "s": 1.62,
+     "p10_units": 217,
+     "p10_s": 1.26,
+     "median_units": 401,
+     "median_s": 2.54,
+     "n": 73
+    },
+    "weapon-armour": {
+     "units": 497,
+     "s": 2.84,
+     "p10_units": 314,
+     "p10_s": 1.33,
+     "median_units": 826,
+     "median_s": 4.74,
+     "n": 75
+    },
+    "power-power": {
+     "units": 562,
+     "s": 3.25,
+     "p10_units": 493,
+     "p10_s": 3.25,
+     "median_units": 1015,
+     "median_s": 5.53,
+     "n": 10
+    },
+    "power-armour": {
+     "units": 372,
+     "s": 2.51,
+     "p10_units": 362,
+     "p10_s": 0.83,
+     "median_units": 568,
+     "median_s": 4.03,
+     "n": 11
+    },
+    "power-weapon": {
+     "units": 237,
+     "s": 1.84,
+     "p10_units": 190,
+     "p10_s": 0.73,
+     "median_units": 534,
+     "median_s": 2.75,
+     "n": 14
+    }
+   },
+   "prizes": {
+    "weapon_railgun": {
+     "n": 7,
+     "earned": 0.86,
+     "exposed": 0.0,
+     "height_median": 376,
+     "pocket_median": 44,
+     "dead_end": 0.29,
+     "moves": {
+      "gap": 2,
+      "swim": 1,
+      "jump": 1
+     }
+    },
+    "item_health_mega": {
+     "n": 6,
+     "earned": 1.0,
+     "exposed": 0.0,
+     "height_median": 256,
+     "pocket_median": 30,
+     "dead_end": 0.5,
+     "moves": {
+      "gap": 4,
+      "swim": 3,
+      "plat": 2,
+      "ladder": 1
+     }
+    },
+    "item_quad": {
+     "n": 5,
+     "earned": 1.0,
+     "exposed": 0.0,
+     "height_median": 312,
+     "pocket_median": 24,
+     "dead_end": 0.8,
+     "moves": {
+      "gap": 2,
+      "plat": 1,
+      "swim": 1
+     }
+    },
+    "item_invulnerability": {
+     "n": 1,
+     "earned": 1.0,
+     "exposed": 0.0,
+     "height_median": 440,
+     "pocket_median": 51,
+     "dead_end": 1.0,
+     "moves": {}
+    },
+    "item_armor_body": {
+     "n": 6,
+     "earned": 1.0,
+     "exposed": 0.0,
+     "height_median": 176,
+     "pocket_median": 18,
+     "dead_end": 0.83,
+     "moves": {
+      "gap": 3,
+      "plat": 1,
+      "swim": 1,
+      "jump": 1
+     }
+    },
+    "item_power_shield": {
+     "n": 1,
+     "earned": 1.0,
+     "exposed": 0.0,
+     "height_median": 256,
+     "pocket_median": 16,
+     "dead_end": 1.0,
+     "moves": {}
+    }
+   }
+  },
+  "q2duel": {
+   "maps": [
+    "q2duel1",
+    "q2duel2",
+    "q2duel3",
+    "q2duel4",
+    "q2duel5",
+    "q2duel6",
+    "q2duel7",
+    "q2duel8"
+   ],
+   "apart": {
+    "armour-armour": {
+     "units": 366,
+     "s": 1.87,
+     "p10_units": 364,
+     "p10_s": 1.65,
+     "median_units": 971,
+     "median_s": 4.19,
+     "n": 20
+    },
+    "weapon-weapon": {
+     "units": 233,
+     "s": 1.16,
+     "p10_units": 198,
+     "p10_s": 0.74,
+     "median_units": 329,
+     "median_s": 2.11,
+     "n": 54
+    },
+    "weapon-armour": {
+     "units": 357,
+     "s": 1.47,
+     "p10_units": 261,
+     "p10_s": 1.26,
+     "median_units": 502,
+     "median_s": 2.26,
+     "n": 54
+    },
+    "power-power": {
+     "units": 700,
+     "s": 1.78,
+     "p10_units": 330,
+     "p10_s": 1.78,
+     "median_units": 1010,
+     "median_s": 2.52,
+     "n": 8
+    },
+    "power-armour": {
+     "units": 403,
+     "s": 2.2,
+     "p10_units": 187,
+     "p10_s": 0.78,
+     "median_units": 456,
+     "median_s": 4.04,
+     "n": 12
+    },
+    "power-weapon": {
+     "units": 204,
+     "s": 0.94,
+     "p10_units": 194,
+     "p10_s": 0.84,
+     "median_units": 262,
+     "median_s": 1.45,
+     "n": 12
+    }
+   },
+   "prizes": {
+    "weapon_railgun": {
+     "n": 9,
+     "earned": 0.67,
+     "exposed": 0.22,
+     "height_median": 160,
+     "pocket_median": 44,
+     "dead_end": 0.11,
+     "moves": {
+      "gap": 4,
+      "jump": 2,
+      "teleport": 1
+     }
+    },
+    "item_health_mega": {
+     "n": 6,
+     "earned": 0.67,
+     "exposed": 0.0,
+     "height_median": 80,
+     "pocket_median": 26,
+     "dead_end": 0.67,
+     "moves": {
+      "gap": 4,
+      "jump": 2
+     }
+    },
+    "item_quad": {
+     "n": 2,
+     "earned": 1.0,
+     "exposed": 0.0,
+     "height_median": 320,
+     "pocket_median": 31,
+     "dead_end": 0.5,
+     "moves": {
+      "gap": 1
+     }
+    },
+    "item_armor_body": {
+     "n": 5,
+     "earned": 0.4,
+     "exposed": 0.2,
+     "height_median": 152,
+     "pocket_median": 16,
+     "dead_end": 0.4,
+     "moves": {
+      "jump": 1,
+      "gap": 1
+     }
+    }
+   }
+  },
+  "q2rdm": {
+   "maps": [
+    "q2rdm1",
+    "q2rdm10",
+    "q2rdm11",
+    "q2rdm12",
+    "q2rdm13",
+    "q2rdm14",
+    "q2rdm15",
+    "q2rdm2",
+    "q2rdm3",
+    "q2rdm4",
+    "q2rdm5",
+    "q2rdm6",
+    "q2rdm7",
+    "q2rdm8",
+    "q2rdm9"
+   ],
+   "apart": {
+    "armour-armour": {
+     "units": 657,
+     "s": 4.03,
+     "p10_units": 502,
+     "p10_s": 2.47,
+     "median_units": 978,
+     "median_s": 5.64,
+     "n": 44
+    },
+    "weapon-weapon": {
+     "units": 334,
+     "s": 1.58,
+     "p10_units": 258,
+     "p10_s": 1.3,
+     "median_units": 449,
+     "median_s": 2.33,
+     "n": 114
+    },
+    "weapon-armour": {
+     "units": 378,
+     "s": 1.96,
+     "p10_units": 292,
+     "p10_s": 1.4,
+     "median_units": 501,
+     "median_s": 2.84,
+     "n": 114
+    },
+    "power-power": {
+     "units": 689,
+     "s": 4.51,
+     "p10_units": 653,
+     "p10_s": 2.35,
+     "median_units": 1010,
+     "median_s": 5.73,
+     "n": 22
+    },
+    "power-armour": {
+     "units": 494,
+     "s": 2.86,
+     "p10_units": 393,
+     "p10_s": 2.37,
+     "median_units": 559,
+     "median_s": 3.9,
+     "n": 24
+    },
+    "power-weapon": {
+     "units": 295,
+     "s": 1.41,
+     "p10_units": 214,
+     "p10_s": 1.05,
+     "median_units": 396,
+     "median_s": 2.81,
+     "n": 25
+    }
+   },
+   "prizes": {
+    "weapon_railgun": {
+     "n": 16,
+     "earned": 0.62,
+     "exposed": 0.12,
+     "height_median": 304,
+     "pocket_median": 41,
+     "dead_end": 0.25,
+     "moves": {
+      "gap": 5,
+      "push": 1,
+      "plat": 1,
+      "jump": 1,
+      "teleport": 1
+     }
+    },
+    "item_health_mega": {
+     "n": 11,
+     "earned": 0.91,
+     "exposed": 0.0,
+     "height_median": 256,
+     "pocket_median": 15,
+     "dead_end": 0.64,
+     "moves": {
+      "gap": 4,
+      "swim": 1,
+      "push": 1,
+      "jump": 1,
+      "teleport": 1
+     }
+    },
+    "item_quad": {
+     "n": 5,
+     "earned": 0.6,
+     "exposed": 0.4,
+     "height_median": 77,
+     "pocket_median": 7,
+     "dead_end": 0.6,
+     "moves": {
+      "push": 2,
+      "gap": 1
+     }
+    },
+    "item_invulnerability": {
+     "n": 1,
+     "earned": 1.0,
+     "exposed": 0.0,
+     "height_median": 384,
+     "pocket_median": 15,
+     "dead_end": 1.0,
+     "moves": {}
+    },
+    "item_armor_body": {
+     "n": 7,
+     "earned": 0.43,
+     "exposed": 0.0,
+     "height_median": 164,
+     "pocket_median": 34,
+     "dead_end": 0.57,
+     "moves": {
+      "gap": 4,
+      "push": 1
+     }
+    },
+    "item_power_shield": {
+     "n": 1,
+     "earned": 0.0,
+     "exposed": 0.0,
+     "height_median": 36,
+     "pocket_median": 42,
+     "dead_end": 0.0,
+     "moves": {
+      "gap": 1
+     }
+    }
+   }
+  },
+  "ztn2dm": {
+   "maps": [
+    "ztn2dm1",
+    "ztn2dm2",
+    "ztn2dm3",
+    "ztn2dm4",
+    "ztn2dm5"
+   ],
+   "apart": {
+    "armour-armour": {
+     "units": 660,
+     "s": 3.82,
+     "p10_units": 502,
+     "p10_s": 1.87,
+     "median_units": 744,
+     "median_s": 4.25,
+     "n": 16
+    },
+    "weapon-weapon": {
+     "units": 313,
+     "s": 1.49,
+     "p10_units": 236,
+     "p10_s": 1.16,
+     "median_units": 392,
+     "median_s": 2.73,
+     "n": 35
+    },
+    "weapon-armour": {
+     "units": 264,
+     "s": 1.21,
+     "p10_units": 187,
+     "p10_s": 0.64,
+     "median_units": 384,
+     "median_s": 1.72,
+     "n": 35
+    },
+    "power-power": {
+     "units": 732,
+     "s": 3.88,
+     "p10_units": 457,
+     "p10_s": 3.46,
+     "median_units": 763,
+     "median_s": 5.24,
+     "n": 10
+    },
+    "power-armour": {
+     "units": 355,
+     "s": 1.56,
+     "p10_units": 333,
+     "p10_s": 1.31,
+     "median_units": 460,
+     "median_s": 2.2,
+     "n": 10
+    },
+    "power-weapon": {
+     "units": 223,
+     "s": 1.46,
+     "p10_units": 216,
+     "p10_s": 1.39,
+     "median_units": 355,
+     "median_s": 2.63,
+     "n": 10
+    }
+   },
+   "prizes": {
+    "weapon_railgun": {
+     "n": 5,
+     "earned": 0.8,
+     "exposed": 0.2,
+     "height_median": 256,
+     "pocket_median": 36,
+     "dead_end": 0.4,
+     "moves": {
+      "gap": 1
+     }
+    },
+    "item_health_mega": {
+     "n": 4,
+     "earned": 1.0,
+     "exposed": 0.0,
+     "height_median": 320,
+     "pocket_median": 14,
+     "dead_end": 0.5,
+     "moves": {
+      "gap": 2
+     }
+    },
+    "item_quad": {
+     "n": 2,
+     "earned": 1.0,
+     "exposed": 0.0,
+     "height_median": 352,
+     "pocket_median": 24,
+     "dead_end": 0.5,
+     "moves": {
+      "gap": 1,
+      "plat": 1
+     }
+    },
+    "item_armor_body": {
+     "n": 5,
+     "earned": 0.6,
+     "exposed": 0.0,
+     "height_median": 152,
+     "pocket_median": 35,
+     "dead_end": 0.2,
+     "moves": {
+      "gap": 4,
+      "plat": 2
+     }
+    }
+   }
+  }
+ }
+}

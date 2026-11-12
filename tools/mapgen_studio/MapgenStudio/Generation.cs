@@ -183,6 +183,32 @@ public sealed class Generation
     public string JobDir => Path.Combine(RunDir, "job");
     /// <summary>Brief 19: where a map from scratch is made - its skeleton, base, measure and bands.</summary>
     public string ScratchDir => Path.Combine(RunDir, "scratch");
+    /// <summary>The PO 11.11: the root of the sections this run's tools hand the scheme in memory (the skeleton's steps,
+    /// the walk of the map's check) - `Local\q2mem_&lt;root&gt;/…`, read with <see cref="MemFiles"/>.</summary>
+    public string ShowRoot => "mgs_" + Path.GetFileName(RunDir);
+
+    /// <summary>
+    /// The PO 12.11 («у нас в новых картах есть Свет и видимость, потом Проверки, а потом Свет на готовой карте. Тут же у
+    /// меня нет разрушений и каких то правок, зачем свет на готовой карте повторно делается?»): his mg_new_7775's step
+    /// found the light set - the fit KNOWN, 0 rooms, IN BAND, the map's light against itself 1.00 - and spent its time
+    /// on the checks of a map from scratch alone. A map from scratch with no ruin is lit once, by its generation: no
+    /// «Свет на готовой карте»; its checks go with the map's checks, side by side. A ruin changes the map - relit then.
+    /// </summary>
+    public bool Relights => OldScratchRelight || !Request.FromScratch || (Request.Options?.Destruction ?? 0) > 0;
+
+    /// <summary>3.66's run (a map from scratch relit after its checks whatever it had), for the self-test's RED.</summary>
+    internal static bool OldScratchRelight;
+
+    /// <summary>
+    /// The PO 11.11 («карта ходьбы … как ходьба, ножками»): the checks' step's Python (after it starts the checks, before
+    /// it waits for them) makes the map's walk - footprints from the spawn points to the major items - and holds it in
+    /// its own memory for the scheme while the checks run (no file: «SSD не очень любит много записей»). One line - a
+    /// newline in this code once stopped the step without a word - the paths in names, and never a reason to stop: the
+    /// exec's try. `--walk-code-test` runs it as the step does.
+    /// </summary>
+    internal static string WalkCode(string tools, string candidate, string root) =>
+        $"_tp=r'{tools}';_cp=r'{candidate}';" +
+        $"exec(\"try:\\n sys.path.insert(0,_tp);import mapgen_map_survey as _sv;_sv.publish_walk(_cp,'{root}')\\nexcept Exception:\\n pass\");";
     /// <summary>The base the engine works on: the donor's file - or, for a map from scratch, the one made first.</summary>
     public string BasePath => Request.FromScratch ? Path.Combine(ScratchDir, Request.Name + ".bsp") : Engine.DonorPath(Request.Donor);
     public DateTime Began { get; internal set; } = DateTime.Now;
@@ -1141,7 +1167,7 @@ public sealed class Generation
                    $"os.environ['MAPGEN_Q2TOOL']=r'{Path.Combine(Engine.Dir, "q2tool.exe")}';" +
                    $"sys.argv=[r'{tool}',r'{ScratchDir}','--params',r'{paramsPath}','--seed','{Request.Seed}'," +
                    $"'--name','{Request.Name}','--game',r'{game}','--threads','{threads}','--candidates','10','--tries','100'," +
-                   $"'--engine',r'{Path.Combine(Engine.Dir, "pipeline.exe")}'];" +
+                   $"'--engine',r'{Path.Combine(Engine.Dir, "pipeline.exe")}','--show-mem','{ShowRoot}'];" +
                    $"sys.stdout=open(r'{Path.Combine(ScratchDir, "scratch.txt")}','w',encoding='utf-8',buffering=1);" +
                    "sys.stderr=sys.stdout;" +
                    $"runpy.run_path(r'{tool}',run_name='__main__')";
@@ -1705,7 +1731,12 @@ public sealed class Generation
                         "P=lambda a:subprocess.Popen(a,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True);" +
                         $"r=P([sys.executable,r'{script}',r'{candidate}','--job',r'{JobDir}'," +
                         $"'--donor',r'{checkDonor}'{second},'--only','{checks}']);" +
+                        // the PO 11.11 («карта ходьбы … как ходьба, ножками»): while the checks run, the map's walk
+                        WalkCode(Path.Combine(repo, "tools"), candidate, ShowRoot) +
+                        // a map from scratch that is not relit: its own checks beside the map's (the map is final now)
+                        (Relights ? "" : scratchStart) +
                         "o,e=r.communicate();t=o+e;rc=r.returncode;" +
+                        (Relights ? "" : scratchEnd) +
                         $"open(r'{_gatesOut}','w',encoding='utf-8').write(t);" +
                         "sys.exit(rc)";
         var ruinOut = Path.Combine(RunDir, "destruction.txt");
@@ -1753,7 +1784,8 @@ public sealed class Generation
         _steps.Enqueue(("gates", gatesCode, _gatesOut));
         if (pct > 0)
             _steps.Enqueue(("destruction", destroyCode, ruinOut));
-        _steps.Enqueue(("relight", lightCode, lightOut));
+        if (Relights)
+            _steps.Enqueue(("relight", lightCode, lightOut));
         _stepOut = null;
         StartStep();
     }

@@ -226,6 +226,11 @@ public sealed partial class MainWindow
         all.Stack = "custom";
         all.Round = "some";
         all.PowerupAccess = "hard";
+        // the PO 12.11: the items' rows at their longest words
+        all.PrizeAccess = "exposed";
+        all.Underwater = 3;
+        all.ItemSpacing = "wide";
+        all.ItemPractice = "q2duel+koldduel1";
         return all;
     }
 
