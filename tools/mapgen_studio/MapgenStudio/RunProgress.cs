@@ -33,6 +33,11 @@ public static class RunProgress
         _ => stage,
     };
 
+    /// <summary>The PO 13.11: a run whose edits are hidden (<see cref="Generation.EditsHidden"/>) - its plan of edits,
+    /// a new deal and the edits are its base's build.</summary>
+    public static string Canonical(Generation g, string stage) =>
+        g.EditsHidden && stage is "plan" or "attempt" or "resume" or "redeal" ? "baseline" : Canonical(stage);
+
     /// <summary>
     /// Brief 35 (the PO 11.11, mg_new_91126: «Правки — идёт 0 с» beside «Новый круг правок — идёт 33 с»): when a stage
     /// began - the earliest of the keys it is made of (a new deal, a resume are the edits'); null when it has not.
@@ -41,7 +46,7 @@ public static class RunProgress
     {
         DateTime? best = null;
         foreach (var kv in g.StageBegan)
-            if (Canonical(kv.Key) == stage && (best == null || kv.Value < best))
+            if (Canonical(g, kv.Key) == stage && (best == null || kv.Value < best))
                 best = kv.Value;
         return best;
     }
@@ -66,7 +71,7 @@ public static class RunProgress
     /// </summary>
     public static int AtOf(Generation g, string[] stages)
     {
-        var at = Array.IndexOf(stages, Canonical(g.Stage));
+        var at = Array.IndexOf(stages, Canonical(g, g.Stage));
         if (at >= 0)
             return at;
         var reached = 0;
@@ -123,7 +128,7 @@ public static class RunProgress
                 return new ProgressNow(100, TimeSpan.Zero, false, n, n, "done", "", TimeSpan.Zero);
             return new ProgressNow(g.ShownPercent, null, false, reached + 1, n, stages[reached], "", TimeSpan.Zero);
         }
-        var cur = Canonical(g.Stage);
+        var cur = Canonical(g, g.Stage);
         var at = Array.IndexOf(stages, cur);
         if (at < 0)
         {

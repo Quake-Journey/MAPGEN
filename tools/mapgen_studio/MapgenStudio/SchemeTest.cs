@@ -476,7 +476,15 @@ public static class SchemeTest
         void Check(string what, bool ok, string detail = "") =>
             b.AppendLine($"{(ok ? "PASS" : "FAIL")} {what}" + (detail.Length > 0 ? $" -- {detail}" : ""));
         var model = new SchemeModel();
-        model.RefreshNow(job);
+        // the PO 13.11: `--at SECONDS` - the moving pieces drawn as at that second of their motion
+        if (Array.IndexOf(args, "--at") is var atK and >= 0 && atK + 1 < args.Length
+            && double.TryParse(args[atK + 1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var sec))
+            Mover.At = sec - Mover.Clock.Elapsed.TotalSeconds;
+        // `--map MAP.bsp`: a finished map (as the GL test takes it)
+        if (Array.IndexOf(args, "--map") is var mk and >= 0 && mk + 1 < args.Length)
+            model.RefreshForTest(job, args[mk + 1]);
+        else
+            model.RefreshNow(job);
         var s = model.Current;
         Check("the map is read", s != null && s.Floors > 0,
               s == null ? "none" : $"{s.Faces.Count} faces ({s.Floors} floors), {s.Marks.Count} marks, "

@@ -692,8 +692,8 @@ public sealed partial class MainWindow
                 var subHigh = sub.DesiredSize.Height;
                 var factoryHeads = fresh.Count(h => Presets.FactoryCategories(Presets.Scratch).Any(c => Presets.CategoryName(Presets.FactoryPrefix + c) == h.Header as string));
                 // the PO 12.11: four more categories, a hundred presets of the items' pick-up worth (each at most 26 lines)
-                Row(factoryHeads == 19 && Presets.Factory(Presets.Scratch).Count == 287 && subShown == rows.Count && subHigh > 0 && subHigh < 900,
-                    $"«Загрузить» of a new map: 19 factory categories, 287 presets (13 of open space, 14 of a tower, 100 of the items); the longest, «{longest.Header}», {rows.Count} lines {subHigh:0} px high",
+                Row(factoryHeads == 24 && Presets.Factory(Presets.Scratch).Count == 412 && subShown == rows.Count && subHigh > 0 && subHigh < 900,
+                    $"«Загрузить» of a new map: 24 factory categories, 412 presets (13 of open space, 14 of a tower, 100 of the items, 125 of the scripted pieces and machines); the longest, «{longest.Header}», {rows.Count} lines {subHigh:0} px high",
                     $"«Загрузить» of a new map: {factoryHeads} factory categories, {Presets.Factory(Presets.Scratch).Count} presets; «{longest.Header}» {subShown} of {rows.Count} lines shown, {subHigh:0} px high");
                 // the PO 12.11 (Bugs\1\2026-11-12 11_18_36): «У тебя в меню скроллбар - так недопустимо» - a category's name
                 // wider than the menu gave it a scroll bar across, which hid the last category. Every menu of «Загрузить» - the

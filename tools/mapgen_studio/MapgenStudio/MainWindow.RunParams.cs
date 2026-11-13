@@ -52,8 +52,8 @@ public sealed partial class MainWindow
         if (r.FromScratch)
         {
             var sc = ScratchCards(ScratchParams.FromPython(r.Scratch, r.Fidelity));
-            page.Children.Add(Look.Balanced(FormColumn, sc.people, sc.shape, sc.own, sc.liquids, sc.moves, sc.items, sc.mechanics,
-                                            sc.style, creative.ruin));
+            page.Children.Add(Look.Balanced(FormColumn, sc.people, sc.shape, sc.own, sc.liquids, sc.pieces, sc.moves, sc.items,
+                                            sc.mechanics, sc.style, creative.ruin));
         }
         else
             page.Children.Add(Look.Balanced(FormColumn, FramePicker(r.Options ?? new GenerationOptions()), creative.rooms,

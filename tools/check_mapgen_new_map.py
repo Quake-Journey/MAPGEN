@@ -429,6 +429,11 @@ def asked_got(r: dict, asked: dict, plan: dict | None = None) -> list:
                     "; ".join(r["lifts_through_rock"]) or "all clear"))
     if r.get("movers_overlap") is not None:
         # brief 21 D1: RED = the 3.43 mg_new_style (two lifts sharing a cell of room 0, the PO's video of 05.11)
+        if r.get("turning_through") is not None:
+            # the PO 13.11 (Bugs/4: a saw swinging through a glass trap room and a pillar)
+            tt = r["turning_through"]
+            out.append(("turning pieces: none turns through a wall or another piece", not tt,
+                        "; ".join(f"{c} at {x} {y} {z}: {n} of {m} corners" for c, x, y, z, n, m in tt[:4]) or "none"))
         out.append(("movers apart: no lift or door overlaps another", not r["movers_overlap"],
                     "; ".join(r["movers_overlap"][:4]) or "none"))
     if r.get("mover_marks") is not None and not OLD_SPAWN_ROW:
@@ -691,7 +696,7 @@ PRIZES = ("weapon_railgun", "item_health_mega", "item_quad", "item_invulnerabili
 POWERUP_PRIZES = ("item_health_mega", "item_quad", "item_invulnerability", "item_armor_body", "item_power_shield")
 
 
-def item_rows_of(st: dict, asked: dict | None) -> list:
+def item_rows_of(st: dict, asked: dict | None, plan: dict | None = None) -> list:
     """The PO 12.11 (mg_new_84719: a yellow and a green armour 231 u apart, the railgun 270 u off, on a floor one walks
     to): «нельзя класть рядом предметы одного класса», «рельса должна быть заслуженной», «плыть под водой … за важными
     целями». From mapgen_item_practice.study of the map:
@@ -705,9 +710,20 @@ def item_rows_of(st: dict, asked: dict | None) -> list:
     import mapgen_scratch_plan as pm
     q = pm.defaults(dict(asked or {}))
     near = []
+    # the PO 13.11: the dead-end stack's prize and its rocket launcher lie in one room on purpose (the way out is a
+    # rocket jump) - not a pair kept apart
+    box = (plan or {}).get("dead_end_box") if "dead_end_stack" in set(q.get("mechanics") or []) else None
+    in_box = set()
+    if box:
+        for it in st.get("items") or []:
+            x, y, z = it["at"]
+            if box[0] - 32 <= x <= box[2] + 32 and box[1] - 32 <= y <= box[3] + 32 and box[4] - 96 <= z <= box[5] + 96:
+                in_box.add(it["cls"])
     for a, b, units, secs in st.get("pairs") or []:
         if units <= 32:
             continue                    # an item team on one spot (the powerups' cycle)
+        if a in in_box and b in in_box and "weapon_rocketlauncher" in (a, b):
+            continue
         t_need, d_need = pm.majors_need(a, b, q)
         if pm.majors_close(units, secs if secs is not None else 99.0, t_need, d_need):
             near.append(f"{a.split('_', 1)[1]}/{b.split('_', 1)[1]} {units} u {secs} s (rule {d_need:.0f} u {t_need:.1f} s)")
@@ -743,10 +759,10 @@ def item_rows_of(st: dict, asked: dict | None) -> list:
 ITEM_STUDY: dict = {}
 
 
-def item_rows(path: Path, asked: dict | None) -> list:
+def item_rows(path: Path, asked: dict | None, plan: dict | None = None) -> list:
     import mapgen_item_practice as practice
     ITEM_STUDY[str(path)] = practice.study(str(path))
-    return item_rows_of(ITEM_STUDY[str(path)], asked)
+    return item_rows_of(ITEM_STUDY[str(path)], asked, plan)
 
 
 WATER_DEEP = 160        # people's deep bodies 120..432 (mapgen_water_practice): one swims under, 224 the median
@@ -806,6 +822,32 @@ def water_rows_of(st: dict, asked: dict | None, plan: dict | None = None, items:
     return rows
 
 
+def piece_rows(path: Path, asked: dict | None, plan: dict | None = None) -> list:
+    """The PO 13.11 (the scripted pieces, tools/mapgen_scratch_pieces*.py): each piece asked is built (the skeleton's
+    record), and on the finished map every trigger, button, timer, relay and item that names a target names something
+    that is there (a chain with a broken link moves nothing)."""
+    import mapgen_scratch_pieces as pieces_mod
+    import mapgen_bsp_oracle as oracle
+    q = pieces_mod.defaults(dict(asked or {}))
+    if not pieces_mod.any_asked(q):
+        return []
+    built = (plan or {}).get("pieces_count") or {}
+    short = []
+    for k in pieces_mod.KINDS:
+        want = (1 if q.get(k) else 0) if k == "pool_ladders" else int(q.get(k) or 0)
+        if want and int(built.get(k, 0)) < want and not (k == "pool_ladders" and not (plan or {}).get("pools")):
+            short.append(f"{k} {int(built.get(k, 0))} of {want}")
+    rows = [("scripted pieces: every one asked is built", not short,
+             ("not built: " + ", ".join(short)) if short else ", ".join(f"{k} {v}" for k, v in sorted(built.items())))]
+    ents = oracle.load(Path(path)).entities()
+    names = {e.get("targetname") for e in ents if e.get("targetname")}
+    dangling = sorted({e.get("target") for e in ents if e.get("target") and e.get("target") not in names})
+    firing = sum(1 for e in ents if e.get("target") and e.get("classname", "").startswith(("func_button", "trigger_", "func_timer", "item_", "weapon_")))
+    rows.append(("scripted pieces: every trigger fires something", not dangling,
+                 (f"{len(dangling)} names nothing answers: " + ", ".join(dangling[:5])) if dangling else f"{firing} triggers, all answered"))
+    return rows
+
+
 def water_rows(path: Path, asked: dict | None, plan: dict | None = None, items: dict | None = None) -> list:
     import mapgen_water_practice as wp
     return water_rows_of(wp.study(str(path)), asked, plan, items)
@@ -828,9 +870,14 @@ def report(path: Path, players: int, asked: dict | None, plan: dict | None = Non
     res = judge(r, players, asked, plan)
     # the PO 12.11: the items' pick-up worth (a map from scratch only - the PO's rule, not a donor's measure)
     try:
-        res = list(res) + item_rows(path, asked)
+        res = list(res) + item_rows(path, asked, plan)
     except Exception as e:  # noqa: BLE001 - a measure that cannot be taken is said, the other rows stand
         res = list(res) + [("majors apart and prizes earned", False, f"not measured: {type(e).__name__}: {e}")]
+    # the PO 13.11: the scripted pieces asked, built and wired
+    try:
+        res = list(res) + piece_rows(path, asked, plan)
+    except Exception as e:  # noqa: BLE001
+        res = list(res) + [("scripted pieces: every one asked is built", False, f"not measured: {type(e).__name__}: {e}")]
     # the PO 12.11: the water as well-known maps build it (deep pools, tubes under water, levels)
     try:
         res = list(res) + water_rows(path, asked, plan, ITEM_STUDY.get(str(path)))

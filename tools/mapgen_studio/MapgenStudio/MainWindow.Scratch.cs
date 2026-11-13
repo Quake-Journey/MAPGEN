@@ -52,7 +52,7 @@ public sealed partial class MainWindow
 
     /// <summary>The cards of a map from scratch.</summary>
     private (Control people, Control shape, Control moves, Control? liquids, Control items, Control mechanics, Control style,
-             Control? own) ScratchCards(ScratchParams? shown = null)
+             Control? own, Control? pieces) ScratchCards(ScratchParams? shown = null)
     {
         // `shown`: a run's parameters on its page, to look at only - nothing of it goes into the settings
         var p = shown ?? S.Scratch;
@@ -68,6 +68,9 @@ public sealed partial class MainWindow
         var liquids = new OptionGroup("scr.liquids", "scr.liquids.desc", FASymbol.Globe, Look.BlueC);
         var items = new OptionGroup("scr.items", "scr.items.desc", FASymbol.Target, Look.RedC);
         var mech = new OptionGroup("scr.mech", "scr.mech.desc", FASymbol.Flag, Look.AmberC);
+        // the PO 13.11: «архитектурного уникального для карт лоска ... постройками, которые имеют движение и/или
+        // интерактивность с игроком и вносят доп опасность, но и доп интерес к их посещению»
+        var pieces = new OptionGroup("scr.pieces", "scr.pieces.desc", FASymbol.Flag, Look.TealC);
         var style = new OptionGroup("scr.style", "scr.style.desc", FASymbol.Edit, Look.PinkC);
         // a choice that shows or hides rows builds the page again - never on a run's page (nothing changes there)
         void Again()
@@ -247,6 +250,68 @@ public sealed partial class MainWindow
             Keep();
         };
         liquids.Add(Loc.T("scr.water.above"), Loc.T("scr.water.above.tip"), above, "scr.water.above.tip");
+        // the PO 13.11: the scripted pieces - movers, triggers, traps (rooms and halls only)
+        if (p.Shape is not ("space" or "tower"))
+        {
+            int[] Upto(int hi) => Enumerable.Range(1, hi).ToArray();
+            Count(pieces, "scr.pc.trains", Upto(3), p.Trains > 0 ? p.Trains : -1, "0", v => p.Trains = Math.Max(0, v));
+            Combo(pieces, "scr.pc.train_path", ScratchParams.TrainPaths.Select(v => v.Length == 0 ? Def(Loc.T("scr.pc.mix").ToLowerInvariant())
+                                                                 : Loc.T($"scr.pc.train_path.{v}")).ToArray(),
+                  Array.IndexOf(ScratchParams.TrainPaths, p.TrainPath), i => p.TrainPath = ScratchParams.TrainPaths[i]);
+            Count(pieces, "scr.pc.stones", Upto(3), p.Stones > 0 ? p.Stones : -1, "0", v => p.Stones = Math.Max(0, v));
+            Combo(pieces, "scr.pc.stone_shape", ScratchParams.StoneShapes.Select(v => v.Length == 0 ? Def(Loc.T("scr.pc.mix").ToLowerInvariant())
+                                                                 : Loc.T($"scr.pc.stone_shape.{v}")).ToArray(),
+                  Array.IndexOf(ScratchParams.StoneShapes, p.StoneShape), i => p.StoneShape = ScratchParams.StoneShapes[i]);
+            Count(pieces, "scr.pc.traps", Upto(2), p.Traps > 0 ? p.Traps : -1, "0", v => p.Traps = Math.Max(0, v));
+            Combo(pieces, "scr.pc.trap_trigger", ScratchParams.TrapTriggers.Select(v => v.Length == 0 ? Def(Loc.T("scr.pc.mix").ToLowerInvariant())
+                                                                 : Loc.T($"scr.pc.trap_trigger.{v}")).ToArray(),
+                  Array.IndexOf(ScratchParams.TrapTriggers, p.TrapTrigger), i => p.TrapTrigger = ScratchParams.TrapTriggers[i]);
+            Combo(pieces, "scr.pc.trap_hazard", ScratchParams.TrapHazards.Select(v => v.Length == 0 ? Def(Loc.T("scr.pc.mix").ToLowerInvariant())
+                                                                 : Loc.T($"scr.pc.trap_hazard.{v}")).ToArray(),
+                  Array.IndexOf(ScratchParams.TrapHazards, p.TrapHazard), i => p.TrapHazard = ScratchParams.TrapHazards[i]);
+            Count(pieces, "scr.pc.rotators", Upto(3), p.Rotators > 0 ? p.Rotators : -1, "0", v => p.Rotators = Math.Max(0, v));
+            Combo(pieces, "scr.pc.rotator_kind", ScratchParams.RotatorKinds.Select(v => v.Length == 0 ? Def(Loc.T("scr.pc.mix").ToLowerInvariant())
+                                                                 : Loc.T($"scr.pc.rotator_kind.{v}")).ToArray(),
+                  Array.IndexOf(ScratchParams.RotatorKinds, p.RotatorKind), i => p.RotatorKind = ScratchParams.RotatorKinds[i]);
+            Count(pieces, "scr.pc.waves", Upto(2), p.Waves > 0 ? p.Waves : -1, "0", v => p.Waves = Math.Max(0, v));
+            Count(pieces, "scr.pc.currents", Upto(2), p.Currents > 0 ? p.Currents : -1, "0", v => p.Currents = Math.Max(0, v));
+            Count(pieces, "scr.pc.turn_bridges", Upto(2), p.TurnBridges > 0 ? p.TurnBridges : -1, "0", v => p.TurnBridges = Math.Max(0, v));
+            Count(pieces, "scr.pc.trapdoors", Upto(2), p.Trapdoors > 0 ? p.Trapdoors : -1, "0", v => p.Trapdoors = Math.Max(0, v));
+            Count(pieces, "scr.pc.geysers", Upto(3), p.Geysers > 0 ? p.Geysers : -1, "0", v => p.Geysers = Math.Max(0, v));
+            Count(pieces, "scr.pc.lasers", Upto(2), p.Lasers > 0 ? p.Lasers : -1, "0", v => p.Lasers = Math.Max(0, v));
+            Count(pieces, "scr.pc.pistons", Upto(2), p.Pistons > 0 ? p.Pistons : -1, "0", v => p.Pistons = Math.Max(0, v));
+            Count(pieces, "scr.pc.pendulums", Upto(2), p.Pendulums > 0 ? p.Pendulums : -1, "0", v => p.Pendulums = Math.Max(0, v));
+            Combo(pieces, "scr.pc.pendulum_kind", ScratchParams.PendulumKinds.Select(v => v.Length == 0 ? Def(Loc.T("scr.pc.mix").ToLowerInvariant())
+                                                                 : Loc.T($"scr.pc.pendulum_kind.{v}")).ToArray(),
+                  Math.Max(0, Array.IndexOf(ScratchParams.PendulumKinds, p.PendulumKind)), i => p.PendulumKind = ScratchParams.PendulumKinds[i]);
+            var blast = new CheckBox { IsChecked = p.HammerBlast }.Tip("scr.pc.hammer_blast.tip");
+            blast.IsCheckedChanged += (_, _) =>
+            {
+                p.HammerBlast = blast.IsChecked == true;
+                Keep();
+            };
+            pieces.Add(Loc.T("scr.pc.hammer_blast"), Loc.T("scr.pc.hammer_blast.tip"), blast, "scr.pc.hammer_blast.tip");
+            Count(pieces, "scr.pc.drills", Upto(3), p.Drills > 0 ? p.Drills : -1, "0", v => p.Drills = Math.Max(0, v));
+            Count(pieces, "scr.pc.cogs", Upto(3), p.Cogs > 0 ? p.Cogs : -1, "0", v => p.Cogs = Math.Max(0, v));
+            Count(pieces, "scr.pc.turrets", Upto(2), p.Turrets > 0 ? p.Turrets : -1, "0", v => p.Turrets = Math.Max(0, v));
+            Count(pieces, "scr.pc.conveyors", Upto(2), p.Conveyors > 0 ? p.Conveyors : -1, "0", v => p.Conveyors = Math.Max(0, v));
+            Count(pieces, "scr.pc.shutters", Upto(2), p.Shutters > 0 ? p.Shutters : -1, "0", v => p.Shutters = Math.Max(0, v));
+            Count(pieces, "scr.pc.pickup_walls", Upto(2), p.PickupWalls > 0 ? p.PickupWalls : -1, "0", v => p.PickupWalls = Math.Max(0, v));
+            Count(pieces, "scr.pc.bent_bridges", Upto(2), p.BentBridges > 0 ? p.BentBridges : -1, "0", v => p.BentBridges = Math.Max(0, v));
+            Count(pieces, "scr.pc.wall_steps", Upto(3), p.WallSteps > 0 ? p.WallSteps : -1, "0", v => p.WallSteps = Math.Max(0, v));
+            var ladders = new CheckBox { IsChecked = p.PoolLadders }.Tip("scr.pc.pool_ladders.tip");
+            ladders.IsCheckedChanged += (_, _) =>
+            {
+                p.PoolLadders = ladders.IsChecked == true;
+                Keep();
+            };
+            pieces.Add(Loc.T("scr.pc.pool_ladders"), Loc.T("scr.pc.pool_ladders.tip"), ladders, "scr.pc.pool_ladders.tip");
+            Count(pieces, "scr.pc.piece_speed", ScratchParams.PieceSpeeds, p.PieceSpeed > 0 ? p.PieceSpeed : -1, "100 %", v => p.PieceSpeed = Math.Max(0, v));
+            Count(pieces, "scr.pc.piece_wait", ScratchParams.PieceWaits, p.PieceWait > 0 ? p.PieceWait : -1, "100 %", v => p.PieceWait = Math.Max(0, v));
+            Combo(pieces, "scr.pc.piece_motion", ScratchParams.PieceMotions.Select(v => v.Length == 0 ? Def(Loc.T("scr.pc.piece_motion.smooth").ToLowerInvariant())
+                                                                 : Loc.T($"scr.pc.piece_motion.{v}")).ToArray(),
+                  Math.Max(0, Array.IndexOf(ScratchParams.PieceMotions, p.PieceMotion)), i => p.PieceMotion = ScratchParams.PieceMotions[i]);
+        }
         // weapons and items
         foreach (var w in ScratchParams.WeaponOrder)
         {
@@ -428,6 +493,7 @@ public sealed partial class MainWindow
         Count(style, "scr.ships", new[] { 1, 2, 3 }, p.Ships, Loc.T("scr.none").ToLowerInvariant(), v => p.Ships = v);
         Count(style, "scr.dress", new[] { 90, 80, 70, 60, 50, 40 }, p.Fidelity == 70 ? -1 : p.Fidelity, "70", v => p.Fidelity = v < 0 ? 70 : v);
         // an open space has no liquids and no pits of its own (its void is its fall): no liquids card for it
-        return (people.Card, shape.Card, moves.Card, p.Shape is "space" or "tower" ? null : liquids.Card, items.Card, mech.Card, style.Card, own?.Card);
+        return (people.Card, shape.Card, moves.Card, p.Shape is "space" or "tower" ? null : liquids.Card, items.Card, mech.Card, style.Card, own?.Card,
+                p.Shape is "space" or "tower" ? null : pieces.Card);
     }
 }

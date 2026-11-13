@@ -131,7 +131,15 @@ public static class SkeletonShow
         public readonly List<(string cls, int x, int y, int z)> Items = new();
         public readonly List<int[]> Spawns = new();         // x, y, z
         public readonly List<int[]> Tubes = new();          // x, y, the roof's z: a tube under water (the PO 12.11)
+        /// <summary>The PO 13.11: the scripted pieces built so far - fixed brushes and entities (keys, brushes).</summary>
+        public readonly List<Shape> PieceBrushes = new();
+        public readonly List<(Dictionary<string, string> keys, List<Shape> shapes)> PieceEnts = new();
     }
+
+    /// <summary>A piece's brush: «box» (x0 y0 z0 x1 y1 z1), «hull» (eight corners: four round one end, four the other),
+    /// «octagon» (centre x y z, radius, half length; its axis x or y) or «prism» (lo, hi, then the polygon's points
+    /// across its axis) - with its role (glass, lava, trigger …).</summary>
+    public sealed record Shape(string Kind, float[] Data, string Axis, string Role);
 
     public sealed record Frame(string Step, int K, int N, SchemeModel.Snapshot Snap, int Part = 0, int Parts = 0);
 
@@ -178,6 +186,44 @@ public static class SkeletonShow
         if (s.TryGetProperty("tubes", out var tubes))
             foreach (var c in tubes.EnumerateArray())
                 st.Tubes.Add(Ints(c));
+        if (s.TryGetProperty("pieces", out var pieces))
+        {
+            static Shape? ShapeOf(JsonElement b)
+            {
+                var role = b.TryGetProperty("role", out var r) ? r.GetString() ?? "" : "";
+                if (b.TryGetProperty("box", out var box))
+                    return new Shape("box", box.EnumerateArray().Select(x => x.GetSingle()).ToArray(), "", role);
+                if (b.TryGetProperty("hull", out var hull))
+                    return new Shape("hull", hull.EnumerateArray().SelectMany(p => p.EnumerateArray().Select(x => x.GetSingle())).ToArray(), "", role);
+                if (b.TryGetProperty("prism", out var pr))
+                {
+                    // the PO 13.11: any convex polygon across an axis (x, y or z), from lo to hi along it
+                    var axis = pr.GetProperty("axis").GetString() ?? "z";
+                    var data = new List<float> { pr.GetProperty("lo").GetSingle(), pr.GetProperty("hi").GetSingle() };
+                    foreach (var p in pr.GetProperty("poly").EnumerateArray())
+                        data.AddRange(p.EnumerateArray().Select(x => x.GetSingle()));
+                    return new Shape("prism", data.ToArray(), axis, role);
+                }
+                if (b.TryGetProperty("octagon", out var oc))
+                {
+                    var a = oc.EnumerateArray().ToArray();
+                    return new Shape("octagon", new[] { a[0].GetSingle(), a[1].GetSingle(), a[2].GetSingle(), a[3].GetSingle(), a[5].GetSingle() },
+                                     a[4].GetString() ?? "x", role);
+                }
+                return null;
+            }
+            foreach (var b in pieces.GetProperty("brushes").EnumerateArray())
+                if (ShapeOf(b) is { } sh)
+                    st.PieceBrushes.Add(sh);
+            foreach (var e in pieces.GetProperty("ents").EnumerateArray())
+            {
+                var keys = new Dictionary<string, string>();
+                foreach (var kv in e.GetProperty("keys").EnumerateObject())
+                    keys[kv.Name] = kv.Value.ValueKind == JsonValueKind.String ? kv.Value.GetString() ?? "" : kv.Value.ToString();
+                var shapes = e.GetProperty("brushes").EnumerateArray().Select(ShapeOf).Where(x => x != null).Select(x => x!).ToList();
+                st.PieceEnts.Add((keys, shapes));
+            }
+        }
         return st;
     }
 
@@ -386,7 +432,128 @@ public static class SkeletonShow
         }
         foreach (var sp in st.Spawns)
             s.Marks.Add(("spawn", Mid(sp[0], sp[1], sp[2] + 24)));
+        Pieces(st, s);
         return Bounded(s);
+    }
+
+    /// <summary>
+    /// The PO 13.11 («движущиеся конструкции ... видны в превью ... на всех этапах где они уже построены», «пусть они там
+    /// движутся тоже так как на карте»): the scripted pieces of a step - their fixed brushes in gold, their liquids as
+    /// liquids, the triggers unseen - and each entity that moves given its <see cref="Mover"/>, as on the finished map.
+    /// </summary>
+    private static void Pieces(Step st, SchemeModel.Snapshot s)
+    {
+        if (st.PieceBrushes.Count == 0 && st.PieceEnts.Count == 0)
+            return;
+        var gold = AsLight(new Vector3(0.86f, 0.70f, 0.30f));
+        var moving = AsLight(new Vector3(0.95f, 0.62f, 0.25f));
+        var all = st.PieceEnts.Select(e => (IReadOnlyDictionary<string, string>)e.keys).ToList();
+        static byte KindOf(string role) => role switch { "lava" => 4, "slime" => 5, "water" => 3, _ => 6 };
+        foreach (var b in st.PieceBrushes.Where(b => b.Role != "trigger"))
+            foreach (var f in Faces(b))
+            {
+                f.Kind = KindOf(b.Role);
+                f.Light = f.Kind == 6 ? gold : null;
+                s.Faces.Add(f);
+            }
+        foreach (var (keys, shapes) in st.PieceEnts)
+        {
+            var cls = keys.GetValueOrDefault("classname", "");
+            if (shapes.Count == 0 || cls.StartsWith("trigger_"))
+                continue;
+            var faces = new List<SchemeModel.Face>();
+            foreach (var b in shapes.Where(b => b.Role != "trigger"))
+                foreach (var f in Faces(b))
+                {
+                    f.Kind = KindOf(b.Role);
+                    f.Light = f.Kind == 6 ? moving : null;
+                    faces.Add(f);
+                }
+            if (faces.Count == 0)
+                continue;
+            var mins = faces.SelectMany(f => f.V).Aggregate(Vector3.Min);
+            var maxs = faces.SelectMany(f => f.V).Aggregate(Vector3.Max);
+            var mv = Mover.Of(keys, mins, maxs, all);
+            foreach (var f in faces)
+            {
+                f.Move = mv;
+                s.Faces.Add(f);
+            }
+        }
+    }
+
+    /// <summary>A shape's faces, outward (a box's six, a hull's two ends and four sides, an octagon's ten).</summary>
+    private static List<SchemeModel.Face> Faces(Shape b)
+    {
+        var polys = new List<Vector3[]>();
+        Vector3 centre;
+        if (b.Kind == "box" && b.Data.Length == 6)
+        {
+            float x0 = b.Data[0], y0 = b.Data[1], z0 = b.Data[2], x1 = b.Data[3], y1 = b.Data[4], z1 = b.Data[5];
+            static Vector3 P(float x, float y, float z) => new(x, y, z);
+            polys.Add(new[] { P(x0, y0, z1), P(x1, y0, z1), P(x1, y1, z1), P(x0, y1, z1) });
+            polys.Add(new[] { P(x0, y0, z0), P(x0, y1, z0), P(x1, y1, z0), P(x1, y0, z0) });
+            polys.Add(new[] { P(x0, y0, z0), P(x1, y0, z0), P(x1, y0, z1), P(x0, y0, z1) });
+            polys.Add(new[] { P(x0, y1, z0), P(x0, y1, z1), P(x1, y1, z1), P(x1, y1, z0) });
+            polys.Add(new[] { P(x0, y0, z0), P(x0, y0, z1), P(x0, y1, z1), P(x0, y1, z0) });
+            polys.Add(new[] { P(x1, y0, z0), P(x1, y1, z0), P(x1, y1, z1), P(x1, y0, z1) });
+            centre = new Vector3((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+        }
+        else if (b.Kind == "hull" && b.Data.Length == 24)
+        {
+            var c = Enumerable.Range(0, 8).Select(i => new Vector3(b.Data[i * 3], b.Data[i * 3 + 1], b.Data[i * 3 + 2])).ToArray();
+            polys.Add(new[] { c[0], c[1], c[2], c[3] });
+            polys.Add(new[] { c[4], c[5], c[6], c[7] });
+            for (var i = 0; i < 4; i++)
+                polys.Add(new[] { c[i], c[(i + 1) % 4], c[(i + 1) % 4 + 4], c[i + 4] });
+            centre = c.Aggregate(Vector3.Zero, (a, v) => a + v) / 8;
+        }
+        else if (b.Kind == "octagon" && b.Data.Length == 5)
+        {
+            float cx = b.Data[0], cy = b.Data[1], cz = b.Data[2], r = b.Data[3], half = b.Data[4];
+            var ring = Enumerable.Range(0, 8).Select(i => (u: r * MathF.Cos(i * MathF.PI / 4 + MathF.PI / 8),
+                                                           v: r * MathF.Sin(i * MathF.PI / 4 + MathF.PI / 8))).ToArray();
+            Vector3 At(float along, (float u, float v) q) =>
+                b.Axis == "x" ? new Vector3(cx + along, cy + q.u, cz + q.v) : new Vector3(cx + q.u, cy + along, cz + q.v);
+            polys.Add(ring.Select(q => At(-half, q)).ToArray());
+            polys.Add(ring.Select(q => At(half, q)).ToArray());
+            for (var i = 0; i < 8; i++)
+                polys.Add(new[] { At(-half, ring[i]), At(-half, ring[(i + 1) % 8]), At(half, ring[(i + 1) % 8]), At(half, ring[i]) });
+            centre = new Vector3(cx, cy, cz);
+        }
+        else if (b.Kind == "prism" && b.Data.Length >= 8)
+        {
+            float lo = b.Data[0], hi = b.Data[1];
+            var poly = Enumerable.Range(0, (b.Data.Length - 2) / 2).Select(i => (a: b.Data[2 + 2 * i], c: b.Data[3 + 2 * i])).ToArray();
+            Vector3 At((float a, float c) q, float w) =>
+                b.Axis == "x" ? new Vector3(w, q.a, q.c) : b.Axis == "y" ? new Vector3(q.a, w, q.c) : new Vector3(q.a, q.c, w);
+            polys.Add(poly.Select(q => At(q, lo)).ToArray());
+            polys.Add(poly.Select(q => At(q, hi)).ToArray());
+            for (var i = 0; i < poly.Length; i++)
+                polys.Add(new[] { At(poly[i], lo), At(poly[(i + 1) % poly.Length], lo), At(poly[(i + 1) % poly.Length], hi), At(poly[i], hi) });
+            var ca = poly.Average(q => q.a);
+            var cc = poly.Average(q => q.c);
+            centre = At((ca, cc), (lo + hi) / 2);
+        }
+        else
+            return new List<SchemeModel.Face>();
+        var faces = new List<SchemeModel.Face>();
+        foreach (var poly in polys)
+        {
+            var mid = poly.Aggregate(Vector3.Zero, (a, v) => a + v) / poly.Length;
+            var n = Vector3.Cross(poly[1] - poly[0], poly[2] - poly[0]);
+            if (n.LengthSquared() < 1e-6f)
+                continue;
+            n = Vector3.Normalize(n);
+            var v = poly;
+            if (Vector3.Dot(n, mid - centre) < 0)
+            {
+                n = -n;
+                v = poly.Reverse().ToArray();
+            }
+            faces.Add(new SchemeModel.Face { V = v, N = n, Kind = 6, ZLo = v.Min(p => p.Z), ZHi = v.Max(p => p.Z) });
+        }
+        return faces;
     }
 
     private static SchemeModel.Snapshot Bounded(SchemeModel.Snapshot s)

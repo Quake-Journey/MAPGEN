@@ -72,9 +72,12 @@ class World:
         self.nodes = [(n.planenum, n.children[0], n.children[1]) for n in b.nodes]
         self.leaf_contents = [lf.contents for lf in b.leafs]
         self.ents = b.entities()
+        # the PO 13.11: a scripted piece's floor at rest (a sinking stone, mapgen_scratch_pieces' `_mapgen_floor`) is
+        # stood on like a func_wall's
         self.heads = [b.models[0].headnode] + [b.models[int(e["model"][1:])].headnode
                                                for e in self.ents
-                                               if e.get("classname") == "func_wall" and e.get("model", "").startswith("*")]
+                                               if (e.get("classname") == "func_wall" or e.get("_mapgen_floor") == "1")
+                                               and e.get("model", "").startswith("*")]
         ws = next((e for e in self.ents if e.get("classname") == "worldspawn"), {})
         try:
             self.gravity = float(ws.get("gravity", "800") or 800)
@@ -190,11 +193,26 @@ class World:
 
 
 def model_bounds(w: World, e: dict):
+    """A brush entity's box in the world. A model with an «origin» key (a func_rotating, a func_door_rotating: the
+    compiler stores its brushes about that point, the game puts it there) is moved by it - the showcase of 13.11 read
+    a pendulum and a turning bridge both at 0 0, «overlapping», on 8 of 10 candidates."""
     m = e.get("model", "")
     if not m.startswith("*"):
         return None
     mo = w.bsp.models[int(m[1:])]
-    return mo.mins, mo.maxs
+    o = fvec(e.get("origin", "")) if e.get("origin") else (0.0, 0.0, 0.0)
+    if o == (0.0, 0.0, 0.0):
+        return mo.mins, mo.maxs
+    return tuple(mo.mins[k] + o[k] for k in range(3)), tuple(mo.maxs[k] + o[k] for k in range(3))
+
+
+def fvec_list(s: str) -> list:
+    """Points written as «x y z x y z ...»."""
+    try:
+        v = [float(t) for t in (s or "").split()]
+    except ValueError:
+        return []
+    return [tuple(v[i:i + 3]) for i in range(0, len(v) - 2, 3)]
 
 
 def fvec(s: str, default=(0.0, 0.0, 0.0)):
@@ -392,6 +410,26 @@ def movers(g: Graph, w: World):
         if e.get("targetname"):
             named.setdefault(e["targetname"], []).append(e)
     n_plat = n_tel = n_push = n_ladder = n_train = 0
+    # the PO 13.11: a piece's ways the generator wrote on it (`_mapgen_link`: points one rides or walks between - a
+    # platform riding over lava, a drum one walks across): the floor beside each point joined to the next
+    chains = [(e, fvec_list(part)) for e in ents for part in (e.get("_mapgen_link", "") or "").split(";")]
+    for e, pts in chains:
+        if len(pts) < 2:
+            continue
+        near = []
+        for (px, py, pz) in pts:
+            near.append([i for i, (x, y, z) in enumerate(g.nodes) if abs(x - px) <= 48 and abs(y - py) <= 48
+                         and abs(z - pz) <= 24])
+        loop = e.get("classname") == "func_train" and len(pts) > 2
+        pairs = [(k, k + 1) for k in range(len(pts) - 1)] + ([(len(pts) - 1, 0)] if loop else [])
+        for a, b in pairs:
+            t = 2.0 + math.dist(pts[a], pts[b]) / 100.0
+            for i in near[a]:
+                for j in near[b]:
+                    g.link(i, j, t, "train")
+                    if not loop:
+                        g.link(j, i, t, "train")
+        n_train += 1
     for e in ents:
         cls = e.get("classname", "")
         if cls == "func_train" and TRAINS_RIDDEN:
@@ -686,6 +724,9 @@ def publish_walk(path: Path, root: str) -> bool:
     hurt = []
     for e in w.ents:
         if e.get("classname") == "trigger_hurt":
+            # the PO 13.11: a hammer's blow - a field switched on as its head sweeps by (START_OFF) - is no pit
+            if (int(e.get("spawnflags") or 0) if str(e.get("spawnflags") or "0").isdigit() else 0) & 1:
+                continue
             mb = model_bounds(w, e)
             if mb:
                 hurt.append(mb)
@@ -850,6 +891,9 @@ def survey(path: Path, seed: int = 1, doors: list | None = None) -> dict:
     hurt = []
     for e in w.ents:
         if e.get("classname") == "trigger_hurt":
+            # the PO 13.11: a hammer's blow - a field switched on as its head sweeps by (START_OFF) - is no pit
+            if (int(e.get("spawnflags") or 0) if str(e.get("spawnflags") or "0").isdigit() else 0) & 1:
+                continue
             mb = model_bounds(w, e)
             if mb:
                 hurt.append(mb)
@@ -1117,19 +1161,27 @@ def survey(path: Path, seed: int = 1, doors: list | None = None) -> dict:
             except ValueError:
                 h = maxs[2] - mins[2]
             mins[2] -= h
-        swept.append((cls, mins, maxs))
+        # the bodies of one piece share its name and move as one (3.68: a pendulum's, a collar's bodies apart)
+        swept.append((cls, mins, maxs, e.get("targetname") or ""))
     overlap = []
     for i in range(len(swept)):
         for j in range(i + 1, len(swept)):
             a, b = swept[i], swept[j]
+            if a[3] and a[3] == b[3] and a[0] == b[0]:
+                continue
             if all(min(a[2][k], b[2][k]) - max(a[1][k], b[1][k]) > 1 for k in range(3)):
                 overlap.append(f"{a[0]} at {round((a[1][0] + a[2][0]) / 2)} {round((a[1][1] + a[2][1]) / 2)} and "
                                f"{b[0]} at {round((b[1][0] + b[2][0]) / 2)} {round((b[1][1] + b[2][1]) / 2)}")
     out["movers_overlap"] = overlap
+    out["turning_through"] = turning_through(w)
     # brief 21+ (the PO 05.11): each powerup's place - lit (a light within 128 u), housed (narrow: a span of 200 u or
     # less through it at 40 up), shut by a door a button opens (a func_door with a name within 192 u that a func_button
     # targets), on a pedestal (solid 4 under it, air 4 under the floor 40 u off it on some side)
-    named = {e.get("targetname") for e in w.ents if e.get("classname") == "func_door" and e.get("targetname")}
+    # a door a timer works (a piston, a scripted piece) is no powerup's door (the test map mg_new_368_mach13: a piston
+    # by the quad taken for its nook's door with no button)
+    timed = {e.get("target") for e in w.ents if e.get("classname") == "func_timer" and e.get("target")}
+    named = {e.get("targetname") for e in w.ents if e.get("classname") == "func_door" and e.get("targetname")
+             and e.get("targetname") not in timed}
     fired = {e.get("target") for e in w.ents if e.get("classname") == "func_button" and e.get("target")}
     lights_ = [fvec(e.get("origin", "")) for e in w.ents if e.get("classname") == "light"]
     pws = []
@@ -1372,7 +1424,11 @@ def vertical_liquid_faces(path: Path) -> tuple[int, int]:
     se = _s.unpack_from(f"<{sn // 4}i", d, so)
     fo, fn = lump(6)
     count = area = 0
-    for i in range(fn // 20):
+    # the world's own faces (model 0): a mover's liquid (a func_water - a trap room's lava, a geyser's column, the PO
+    # 13.11's pieces) stands as it is made to, and moves
+    mo, mn = lump(13)
+    first0, num0 = _s.unpack_from("<ii", d, mo + 40) if mn >= 48 else (0, fn // 20)
+    for i in range(first0, first0 + num0):
         pnum, side, fe, ne, ti = _s.unpack_from("<HhiHh", d, fo + i * 20)
         if not (0 <= ti < len(flags)) or not flags[ti] & 0x8 or flags[ti] & 0x4:
             continue
@@ -1543,6 +1599,135 @@ def mover_marks(w: "World") -> list:
             o = fvec(e.get("origin", ""))
             out.append(("spawn", o[0], o[1], o[2], None))
     _ = dests
+    return out
+
+
+def turn_point(p, flags: int, deg: float) -> tuple:
+    """A point of a turning model (about its origin) turned `deg` the game's way: X_AXIS (64) the roll, Y_AXIS (128)
+    the pitch, else the yaw - drawn on AngleVectors' forward, left and up (g_func.c, q_shared AngleVectors); the same
+    math as mapgen_scratch_pieces2.swing_end."""
+    pitch = deg if flags & 128 else 0.0
+    roll = deg if flags & 64 else 0.0
+    yaw = deg if not flags & (64 | 128) else 0.0
+    sy, cy = math.sin(math.radians(yaw)), math.cos(math.radians(yaw))
+    sp, cp = math.sin(math.radians(pitch)), math.cos(math.radians(pitch))
+    sr, cr = math.sin(math.radians(roll)), math.cos(math.radians(roll))
+    fwd = (cp * cy, cp * sy, -sp)
+    left = (sr * sp * cy - cr * sy, sr * sp * sy + cr * cy, sr * cp)
+    up = (cr * sp * cy + sr * sy, cr * sp * sy - sr * cy, cr * cp)
+    return tuple(p[0] * fwd[k] + p[1] * left[k] + p[2] * up[k] for k in range(3))
+
+
+def _model_brushes(b, mi: int) -> set:
+    out, todo = set(), [b.models[mi].headnode]
+    while todo:
+        n = todo.pop()
+        if n < 0:
+            lf = b.leafs[-1 - n]
+            out.update(b.leafbrushes[i] for i in range(lf.firstleafbrush, lf.firstleafbrush + lf.numleafbrushes))
+            continue
+        todo.extend(b.nodes[n].children)
+    return out
+
+
+def _brush_points(b, bi: int) -> list:
+    """A brush's corners (its planes three at a time), each pulled a unit in toward its middle - a corner on a wall's
+    face is not inside it."""
+    br = b.brushes[bi]
+    pls = [(b.planes[b.brushsides[s].planenum].normal, b.planes[b.brushsides[s].planenum].dist)
+           for s in range(br.firstside, br.firstside + br.numsides)]
+    pts = []
+    for i in range(len(pls)):
+        for j in range(i + 1, len(pls)):
+            for k in range(j + 1, len(pls)):
+                (a, da), (c, dc), (e, de) = pls[i], pls[j], pls[k]
+                det = (a[0] * (c[1] * e[2] - c[2] * e[1]) - a[1] * (c[0] * e[2] - c[2] * e[0])
+                       + a[2] * (c[0] * e[1] - c[1] * e[0]))
+                if abs(det) < 1e-6:
+                    continue
+                # Cramer: n_i . p = d_i
+                px = (da * (c[1] * e[2] - c[2] * e[1]) - a[1] * (dc * e[2] - c[2] * de) + a[2] * (dc * e[1] - c[1] * de)) / det
+                py = (a[0] * (dc * e[2] - c[2] * de) - da * (c[0] * e[2] - c[2] * e[0]) + a[2] * (c[0] * de - dc * e[0])) / det
+                pz = (a[0] * (c[1] * de - dc * e[1]) - a[1] * (c[0] * de - dc * e[0]) + da * (c[0] * e[1] - c[1] * e[0])) / det
+                p = (px, py, pz)
+                if all(n[0] * p[0] + n[1] * p[1] + n[2] * p[2] - d <= 0.05 for n, d in pls):
+                    if not any(abs(p[0] - q[0]) + abs(p[1] - q[1]) + abs(p[2] - q[2]) < 0.1 for q in pts):
+                        pts.append(p)
+    if not pts:
+        return []
+    m = [sum(p[k] for p in pts) / len(pts) for k in range(3)]
+    out = []
+    for p in pts:
+        v = [m[k] - p[k] for k in range(3)]
+        ln = math.sqrt(sum(x * x for x in v)) or 1.0
+        out.append(tuple(p[k] + v[k] / ln for k in range(3)))
+    return out + [tuple(m)]
+
+
+def turning_through(w: World) -> list:
+    """The PO 13.11 (Bugs/4, the test map mg_new_368_mach8: «конструкции сквозь стенки и пристройки крутятся» - a saw
+    swinging through a glass trap room and a pillar): every turning piece - a pendulum (func_door_rotating) over its
+    swing, a cog or an auger (func_rotating) all the way round - kept out of the world's solid and glass and out of the
+    other movers where they rest. A corner in solid where it is drawn (a rod's top in its ceiling plate, an auger's bit
+    in the floor it bores) is where it is made to be; one that goes INTO solid as it turns is not.
+    Returns [(classname, x, y, z, corners through, corners)]."""
+    b = w.bsp
+    others = []
+    for e in w.ents:
+        if e.get("classname") in ("func_door", "func_plat", "func_train", "func_wall", "func_water", "func_button") \
+                and e.get("model", "").startswith("*"):
+            others.append(b.models[int(e["model"][1:])].headnode)
+
+    def solid(p):
+        if w.contents(*p) & (SOLID | WINDOW):
+            return True
+        return any(w.contents(p[0], p[1], p[2], h) & (SOLID | WINDOW) for h in others)
+    out = []
+    for e in w.ents:
+        cls = e.get("classname", "")
+        if cls not in ("func_door_rotating", "func_rotating") or not e.get("model", "").startswith("*"):
+            continue
+        try:
+            o = tuple(float(v) for v in (e.get("origin") or "0 0 0").split())
+            fl = int(float(e.get("spawnflags") or 0))
+        except ValueError:
+            continue
+        if cls == "func_rotating":
+            flags = (64 if fl & 4 else 0) | (128 if fl & 8 else 0)
+            angles = [a for a in range(10, 360, 10)]
+        else:
+            flags = fl & (64 | 128)
+            try:
+                dist = float(e.get("distance") or 90)
+            except ValueError:
+                dist = 90.0
+            if fl & 2:
+                dist = -dist
+            steps = max(2, int(abs(dist) // 5))
+            angles = [dist * k / steps for k in range(1, steps + 1)]
+        pts = []
+        for bi in _model_brushes(b, int(e["model"][1:])):
+            cs = _brush_points(b, bi)
+            pts += cs
+            # the middles of every two corners: its edges, faces and inside (a wall's edge can cut into a face that no
+            # corner enters)
+            pts += [tuple((cs[i][k] + cs[j][k]) / 2 for k in range(3)) for i in range(len(cs)) for j in range(i + 1, len(cs))]
+        # a point by the axis turns in place (a rod's top in its ceiling plate, a hub) and is not followed
+        pts = [p for p in pts if (p[0] ** 2 + p[1] ** 2 + p[2] ** 2) ** 0.5 >= 24]
+        hit = 0
+        for p in pts:
+            # in solid at one angle and in the air at another: it passes through (the PO 13.11, Bugs/4 twice - a
+            # pendulum drawn into a wall at its rest, the end of its swing, came out of it and went into the other);
+            # in solid all the way round (an auger's bit in its floor) is where it is made to be
+            seen = {bool(solid((o[0] + p[0], o[1] + p[1], o[2] + p[2])))}
+            for a in angles:
+                q = turn_point(p, flags, a)
+                seen.add(bool(solid((o[0] + q[0], o[1] + q[1], o[2] + q[2]))))
+                if len(seen) > 1:
+                    hit += 1
+                    break
+        if hit:
+            out.append((cls, round(o[0]), round(o[1]), round(o[2]), hit, len(pts)))
     return out
 
 

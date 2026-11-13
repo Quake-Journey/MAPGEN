@@ -261,6 +261,57 @@ the player count; which one is said in brackets. A new map is built from what th
   96–192 up with stairs and a pickup on them, against a room's wall or standing free in a hall; these are not the
   flights of steps between levels. A map may offer fewer places than asked — the map's description says how many stand.
   An open space and a tower have none.
+- **Scripted pieces** — moving and interactive structures: a danger and a reason to go there. Each guards a valuable
+  item or gives a shortcut at a risk. Their speeds and pauses come from well-known maps; «Pieces' speed» and «Pieces'
+  pauses» make them faster or slower. Maps of rooms only.
+  - **As on well-known maps:**
+    - riding platforms over lava, slime or a chasm (q2dm3) — across a pit, round it, or to an island with a valuable
+      item;
+    - sinking stones (q2dm6) — side by side, every other one or in a zigzag;
+    - trap rooms (q2dm3) — a glass room with a valuable item: buttons outside, a plate in the floor or the item taken
+      shut it, and lava or slime rises inside or the ceiling comes down;
+    - rotating pieces — a drum over a pit one walks across (q2dm6), a flap in a passage (q2dm4), a fan by an item;
+    - timed shutters (q2dm6);
+    - walls opened by a taken item (q2dm6);
+    - bent bridges (q2dm4);
+    - wall steps (q2dm6);
+    - ladders out of deep pools (q2dm4).
+  - **Our own, on the same principles:**
+    - pillar waves in lava;
+    - current bridges whose floor pulls sideways or back;
+    - turning bridges joining one pair of sides, then the other;
+    - trapdoors under a valuable item;
+    - lava geysers;
+    - laser gates on a timer;
+    - pistons in a passage;
+    - pendulums over bridges.
+  - **Machines:**
+    - drilling rigs - an auger spins and bores into the floor, hurting on touch; a collar rides it, sparks fly at its
+      foot, the drill is heard; the rig four posts, an A-frame, a cross frame or a gantry;
+    - cogs on walls - two or three meshed, turning against each other;
+    - turrets in passages - blasters in a wall firing in turn;
+    - conveyors with crates - a belt along a wall, crates or barrels coming out of a housing at one wall and riding into
+      one at the other, as on q2dm8; one can ride them.
+  - **Each piece its own.** Its form and sizes are drawn anew on every map:
+    - a pendulum's head (a hammer, a two-headed sledge, a spiked hammer, an axe, a double axe, a sickle, a mace, a saw,
+      an anchor), its rod (a rod, a fork, a chain) and its swing; now and then two over one bridge, swinging as
+      scissors or in turn;
+    - a trap room's size (2×2 to 4×3 cells), straight or cut corners, height, roof (flat, stepped, a gable, a pyramid),
+      mullions in the glass;
+    - a piston's head: a plate, a ram or spikes.
+  - **A pendulum's blow** hurts at the bottom of its arc, the harder the bigger the head. «Pendulum's blow with a shock
+    wave» adds a flash and a wave that throws whom it hits: in the game itself only an explosion throws.
+  - **Nothing goes through anything solid.** Pendulums, cogs, augers and drums are checked over their whole motion.
+    Where a pendulum's swing reaches into the rock behind a wall, a slot is cut there along its path; in a tall hall a
+    pendulum can hang lower, from a beam along its bridge. Where it has no room, it looks for another bridge.
+  - **Pieces' motion**: «Smooth» - pistons, stones, walls, shutters and pillars start and stop gently; «Even» - at one
+    speed. Turning is always even in the game. All of it is the game's own: the map plays on any server, no mod.
+  - **The dead-end stack**: the room one only drops into holds a rocket launcher - the way out is a rocket jump; with no
+    room for it a ladder leads out of the dead end.
+  - When the skeleton has no room for a piece, the map's description says which did not come out. With no lava or
+    slime asked, lava is made for the pieces over a pit.
+  - The finished map's check looks that those asked are built and that every button, plate, timer and item fires
+    something.
 - **Mechanics** — ways of play from well-known maps: a stack on the clock, two halves, a gun on a ledge, route
   asymmetry, many small health spots, spawn pressure, a dead-end stack, three approaches, a teleporter to the mirror
   stack, a jump pad over a pit, a lift as a weak spot, a ladder under an item. The check looks for each one turned on.
@@ -303,8 +354,8 @@ the player count; which one is said in brackets. A new map is built from what th
 
 While the run goes, its first stage on its page is **The map's skeleton**: of many variants the best by the
 measures of well-known maps is chosen, and its picture — the places, the levels (the lighter, the higher), the ways, weapons and items —
-appears before the first wall. Over it all — **Progress**: the percent of the whole build, how long is left and when
-it will end, which stage is on («Stage 5 of 11: Edits»).
+appears before the first wall. The scripted pieces on it are outlined in gold, each with its code; the legend names the codes. Over it all — **Progress**: the percent of the whole build, how long is left and when
+it will end, which stage is on («Stage 5 of 6: Light and visibility»).
 
 A big map from scratch — an 8-player open space of a large area, say — stands in the middle of Quake II's world, not
 in one half of it, so it is built however much room its islands take.
@@ -358,8 +409,9 @@ the run has gone and when it began. The buttons are on the right.
 - **Stages** — Getting ready → Building the base map → Making the plan of edits → Edits → Checking it is playable
   → Light and visibility → The map's checks → (Destruction - when asked for) → Light on the finished map → Cover →
   Done. The stage under way shows its time; a finished one, how long it took and when it ended. The stage now is
-  named in the folded header too. A map from scratch mostly needs no «Edits» - the generator builds it itself - and
-  that stage says so.
+  named in the folded header too. The generator builds a map from scratch itself: it has no «Making the plan of
+  edits», no «Edits» stage and no «Edits» card. They appear only when the plan found edits - the stairway annexes
+  asked.
 - **Computer load** — CPU, memory, GPU, video memory: the whole machine's and the generator's own. The header says
   the share of the CPU the run has.
 
@@ -367,7 +419,10 @@ the run has gone and when it began. The buttons are on the right.
 
 - **Scheme** — the plan from above or at a slant, with the edits on it (stairway annexes too, and, at the
   destruction stage, every crater, breach, fallen ceiling and debris pile as it is built) and, at the light stage,
-  how the map is lit. The buttons over it: draw it or not, the view from above, the 3D view, the storeys up to which
+  how the map is lit. The moving pieces move on it as in the game from the stage they are built at: platforms ride
+  their way, doors, stones, pistons, geysers and pendulums go by their timers, drums turn. What a player sets off in
+  the game (a button, a plate in the floor, an item taken, a lift) is shown set off every 12 seconds. The buttons
+  over it: draw it or not, the view from above, the 3D view, the storeys up to which
   height, and «Full screen» — the scheme on the whole screen, the program's window hidden. **«What the scheme
   shows»** (folded) explains the signs in an even table: the edits (being tried, refused, accepted, base changed),
   what is still in the plan, the map's colours (floor, water, lava, slime, lifts and doors) and the items (weapons,

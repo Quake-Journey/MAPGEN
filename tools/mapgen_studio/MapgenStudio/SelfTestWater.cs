@@ -49,7 +49,8 @@ public sealed partial class MainWindow
                 "«Водоёмы» in the request: a map of rooms sends «levels», an open space nothing, «По умолчанию» nothing (the generator's deep pools)",
                 $"«Водоёмы» in the request: rooms {pr["water_body"]}, space {ps["water_body"]}, default {pd["water_body"]}");
             // (w3) the presets: four on several levels, every other at «По умолчанию»
-            var levels = new HashSet<string> { "water_canals", "water_ffa8", "pr_q2dm_water8", "pz_ffa8_lake_dive" };
+            var levels = new HashSet<string> { "water_canals", "water_ffa8", "pr_q2dm_water8", "pz_ffa8_lake_dive",
+                                               "pc_ffa6_ladders", "pc_ffa4_water_mix" };
             var bad = new List<string>();
             foreach (var x in Presets.Factory(Presets.Scratch))
             {
@@ -60,7 +61,7 @@ public sealed partial class MainWindow
                     bad.Add($"{k}: «{p.WaterBody}»");
             }
             Row(bad.Count == 0,
-                $"the presets: {levels.Count} on several levels (the canals, the water for 8, «Как q2dm, с водой…», «Озеро и призы на дне на 8»), the other {Presets.Factory(Presets.Scratch).Count - levels.Count} at «По умолчанию»",
+                $"the presets: {levels.Count} on several levels (the canals, the water for 8, «Как q2dm, с водой…», «Озеро и призы на дне на 8», two of the pieces'), the other {Presets.Factory(Presets.Scratch).Count - levels.Count} at «По умолчанию»",
                 $"the presets' «Водоёмы» not as asked: {string.Join(", ", bad.Take(6))}");
             // (w4) a preset saved by 3.66 (no «Водоёмы» in it) over a form with it set: back to «По умолчанию»
             var form = new Settings { Scratch = new ScratchParams { WaterBody = "shallow" } };

@@ -453,6 +453,29 @@ public sealed class Generation
     /// <summary>Brief 35: a map from scratch with no family to deal - its «Правки» have nothing to try (the PO's mg_new_91126).</summary>
     public bool NothingToDeal => Request.FromScratch && (Request.Options?.Stairways ?? 0) == 0;
 
+    /// <summary>
+    /// The PO 13.11 («зачем в окне генерации новой карты этап Правки и отдельная даже секция для него? там все время
+    /// пишется что правки не делаются потому что новая карта»): a map from scratch with nothing to deal shows no edits -
+    /// no «Составление плана правок», no «Правки», no card of them; the engine's empty plan of edits is its base's build
+    /// (<see cref="RunProgress.Canonical(Generation, string)"/>). And then («если нет правок то не нужно показывать ни
+    /// этап ни секцию над списком этапов, добавлять только если есть правки»): shown only once the plan holds an edit of
+    /// a family the run deals (the stairway annexes), never before nor without it.
+    /// </summary>
+    public bool EditsHidden => Request.FromScratch && !OldScratchEdits && !HasEdits;
+
+    /// <summary>The plan holds an edit of a family this run deals.</summary>
+    public bool HasEdits
+    {
+        get
+        {
+            var skipped = SkippedFamilies();
+            return Planned.Any(kv => kv.Value > 0 && !skipped.Contains(FamilyOfKind(kv.Key)));
+        }
+    }
+
+    /// <summary>3.67's run page (the edits' stages and card on every map from scratch), for the self-test's RED.</summary>
+    internal static bool OldScratchEdits;
+
     private static readonly string[] PlanKinds = { "digs", "annexes", "storeys", "spans", "floods", "windows", "reliquids", "stairways",
                                                    "remodels", "blocks", "floor_shifts", "stair_reshapes", "rooms_from", "rooms_copy",
                                                    "skins_from" };
@@ -554,6 +577,9 @@ public sealed class Generation
             Offered = 30, PlanCan = 330, PlanBuilds = 40, PlanFirstCan = 330, LastFamily = "reshape-room",
             LastVerdict = "ACCEPTED",
         };
+        // a map from scratch that deals: its plan holds stairway annexes (the PO 13.11: its edits shown only then)
+        if (fromScratch && deals)
+            g.Planned["stairways"] = 2;
         var order = new[] { "scratch", "start", "baseline", "plan", "attempt", "judge", "light", "gates", "cover", "done" };
         var at = Array.IndexOf(order, stage);
         for (var k = 0; k <= Math.Max(0, at); k++)
@@ -1457,7 +1483,8 @@ public sealed class Generation
         // as «[stage.baseline-faithful.now]» with every stage waiting
         if (Loc.Has($"stage.{stage}.now"))
         {
-            if (stage != Stage)
+            // the PO 13.11: the edits hidden - their plan's line is not said (it is the base's build)
+            if (stage != Stage && RunProgress.Canonical(this, stage) == RunProgress.Canonical(stage))
                 Event(Loc.T($"stage.{stage}.now"));
             if (stage != Stage && !StageBegan.ContainsKey(stage))
                 StageBegan[stage] = DateTime.Now;
@@ -1946,7 +1973,7 @@ public sealed class Generation
         for (var i = 0; i < order.Count; i++)
         {
             var to = i + 1 < order.Count ? order[i + 1].Value : end;
-            var key = RunProgress.Canonical(order[i].Key);
+            var key = RunProgress.Canonical(this, order[i].Key);
             d[key] = d.GetValueOrDefault(key) + (int)Math.Round(Worked(order[i].Value, to).TotalSeconds);
         }
         return d;

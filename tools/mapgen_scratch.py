@@ -36,6 +36,22 @@ import check_mapgen_new_map as bands_mod  # noqa: E402
 GAME = Path(r"O:\Claude2\q2pro-release\baseq2")
 
 
+
+# the PO 13.11: the scripted pieces' names in the description's rows (the form's words)
+PIECE_WORDS = {
+    "trains": ("ездящих платформ", "riding platforms"), "stones": ("рядов тонущих плит", "rows of sinking stones"),
+    "traps": ("комнат-ловушек", "trap rooms"), "rotators": ("вращающихся", "rotating pieces"),
+    "shutters": ("створок по таймеру", "timed shutters"), "pickup_walls": ("стен от предмета", "walls opened by an item"),
+    "bent_bridges": ("изогнутых мостов", "bent bridges"), "pool_ladders": ("лесенки из бассейнов", "ladders out of pools"),
+    "wall_steps": ("ступеней по стене", "wall steps"), "lasers": ("лазерных заслонов", "laser gates"),
+    "pistons": ("поршней в проходе", "pistons in a passage"), "pendulums": ("маятников", "pendulums"),
+    "trapdoors": ("проваливающихся полов", "trapdoors"), "geysers": ("лавовых гейзеров", "lava geysers"),
+    "turn_bridges": ("поворотных мостов", "turning bridges"), "currents": ("мостов-течений", "current bridges"),
+    "waves": ("волн столбов", "pillar waves"),
+    "drills": ("буровых установок", "drilling rigs"), "cogs": ("шестерён на стенах", "cogs on walls"),
+    "turrets": ("турелей в проходах", "turret passages"), "conveyors": ("конвейеров с грузами", "conveyors with crates"),
+}
+
 def engine_accepts(engine: Path, bsp: Path, game: Path, work: Path) -> tuple[bool, str]:
     """The engine's own first step on this base - its rebuild and the plan (`--plan-only`: nothing built): a base it
     refuses (an item standing otherwise in its rebuild, 04.11) would end the Studio's run at once."""
@@ -103,8 +119,9 @@ def build_candidate(job: tuple) -> tuple:
     # with a pool of 10 cells and a mega 1.8 s from an armour, rows only the finished map's check measured
     try:
         bsp_ = mp.with_suffix(".bsp")
-        res = list(res) + bands_mod.item_rows(bsp_, q)
+        res = list(res) + bands_mod.item_rows(bsp_, q, P.metrics)
         res += bands_mod.water_rows(bsp_, q, P.metrics, bands_mod.ITEM_STUDY.pop(str(bsp_), None))
+        res += bands_mod.piece_rows(bsp_, q, P.metrics)
     except Exception as e:  # noqa: BLE001 - a measure not taken is said, the bands stand
         said.append(f"  (items and water not measured: {type(e).__name__}: {e})")
     fails = [n for n, ok_, _ in res if not ok_]
@@ -122,7 +139,11 @@ def build_candidate(job: tuple) -> tuple:
     # the engine's dressing opens a sight line now and then (05.11: a styled duel at 3 for 2 asked came out at 4) -
     # among candidates failing as many checks, the one with fewer lines over the asked count first
     over = max(0, int(r.get("long_lines") or 0) - int(q.get("long_lines") or 0))
-    return k, said, (len(fails), over, k, P, r, pal)
+    # the PO 13.11: the scripted pieces asked and not built weigh three checks - a skeleton that holds every piece he
+    # asked comes first (3.68's test map mg_new_368_mach11 was taken with both pendulums missing, one check failed)
+    weight = len(fails) + (2 if any(n.startswith("scripted pieces: every one asked") for n in fails)
+                           and os.environ.get("MAPGEN_OLD_PIECE_WEIGHT") != "1" else 0)
+    return k, said, (weight, over, k, P, r, pal)
 
 
 def show_skeleton(params: dict, P, root: str, log=print) -> bool:
@@ -371,8 +392,8 @@ def skeleton_doors(path: Path) -> list:
             sx, sy = json.loads(line[8:]).get("world_shift") or (0, 0)
     for line in path.read_text(encoding="utf-8").splitlines():
         m_ = re.match(r"route (\d+) (\d+) (\w+) cells ([-\d, ]+) z (-?\d+)", line)
-        if not m_ or m_.group(3) == "swim":
-            continue
+        if not m_ or m_.group(3) == "swim" or line.rstrip().endswith(" rj"):
+            continue                # a tube under water; the dead-end stack's drop, left open as plan_doors leaves it
         cells = [tuple(int(v) for v in c.split(",")) for c in m_.group(4).split()]
         if not cells:
             continue
@@ -490,6 +511,25 @@ def write_record(out: Path, q: dict, m: dict, r: dict, pal: dict, res: list, fin
                         words_mod.water_made(m.get("pools") or [], m.get("water_tubes") or [], m.get("prize_tubes") or [])),
                        ("underwater", "Призов под водой", "Prizes under water", int(q.get("underwater") or 0),
                         words_mod.under_made(m.get("prize_kinds") or [], m.get("prize_tubes") or []))]
+    # the PO 13.11: the scripted pieces, asked → built (each kind in the form's words)
+    import mapgen_scratch_pieces as pieces_mod
+    qp = pieces_mod.defaults(dict(q))
+    if q.get("shape") not in ("space", "tower") and pieces_mod.any_asked(qp):
+        built = m.get("pieces_count") or {}
+        a_ru, a_en, g_ru, g_en = [], [], [], []
+        for k in pieces_mod.KINDS:
+            want = (1 if qp.get(k) else 0) if k == "pool_ladders" else int(qp.get(k) or 0)
+            if not want:
+                continue
+            ru_w, en_w = PIECE_WORDS.get(k, (k, k))
+            got = int(built.get(k, 0))
+            if k == "pool_ladders":
+                a_ru.append(f"{ru_w}: да"); a_en.append(f"{en_w}: yes")
+            else:
+                a_ru.append(f"{ru_w}: {want}"); a_en.append(f"{en_w}: {want}")
+            g_ru.append(f"{ru_w}: {got}"); g_en.append(f"{en_w}: {got}")
+        rows.append(("pieces", "Скриптовые конструкции", "Scripted pieces", ("; ".join(a_ru), "; ".join(a_en)),
+                     ("; ".join(g_ru), "; ".join(g_en))))
     look = r.get("look") or {}
     if look.get("coloured") is not None:
         rows += [

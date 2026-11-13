@@ -496,6 +496,22 @@ public sealed partial class MainWindow
                     // gate: a map from scratch has no donor to excuse it), and a spawn in a lift's column (mg_new_7775)
                     ("mg_new_7775_367", "pickups: none lost at spawn, no spawn in a mover's column", "1 lost, 0 blocked: weapon_railgun at (288, 1184, 16) the world", new[] { "288 1184 16" }),
                     ("mg_new_7775", "pickups: none lost at spawn, no spawn in a mover's column", "1 lost, 1 blocked: weapon_railgun at (288, 992, 16) the world; info_player_deathmatch at (672, 96, 24) func_plat *2", new[] { "288 992 16", "672 96 24" }),
+                    ("mg_pieces_t2 (3.68 test, a geyser's column read as standing liquid)", "liquids in hollows: no liquid face standing in the air", "16 faces, 102400 sq u", new[] { "16", "102400" }),
+                    // the PO 13.11 (Bugs/4): the turning pieces in words (check_mapgen_new_map, its format)
+                    ("check_mapgen_new_map turning pieces (its format)", "turning pieces: none turns through a wall or another piece", "func_door_rotating at 1632 1696 280: 94 of 155 corners; func_rotating at 2424 1136 144: 44 of 84 corners", new[] { "1632 1696 280", "94", "155", "44" }),
+                    ("check_mapgen_new_map turning pieces, none (its format)", "turning pieces: none turns through a wall or another piece", "none", new string[0]),
+                    // 3.68: a powerup with no room for its nook (his mg_new_33308)
+                    ("check_mapgen_new_map powerups, no nook (its format)", "powerups: each in a place of its own, marked, as hard to reach as asked", "health_mega hard; armor_body easy (no nook) (not had: armor_body: easy (no nook))", new string[0]),
+                    // 3.68: the buttons in words (check_mapgen_new_map, its format)
+                    ("check_mapgen_new_map buttons clear (its format)", "buttons clear: no wall piece over a powerup's button", "3 buttons, buried: button at 1016 240 296: 16 of 64 points in a wall piece", new[] { "3", "1016 240 296", "16" }),
+                    ("check_mapgen_new_map buttons clear, free (its format)", "buttons clear: no wall piece over a powerup's button", "2 buttons, all free", new[] { "2" }),
+                    // the PO 13.11: the dead ends in words (mapgen_map_survey dead_ends, its format)
+                    ("mapgen_map_survey dead_ends (its format)", "dead ends: no room with one way in", "door 19-22 (566 points); drop 18-25 (120 points)", new[] { "19", "566", "120" }),
+                    // the PO 13.11: the movers' overlap in words (mapgen_map_survey movers_overlap, its format)
+                    ("mapgen_map_survey movers_overlap (its format)", "movers apart: no lift or door overlaps another", "func_door_rotating at 1920 640 and func_plat at 1900 600", new[] { "1920 640", "1900 600" }),
+                    // the PO 13.11: the scripted pieces' rows (check_mapgen_new_map.piece_rows, its format)
+                    ("check_mapgen_new_map piece_rows (its format)", "scripted pieces: every one asked is built", "not built: trains 1 of 2, stones 0 of 1", new[] { "1", "2", "0" }),
+                    ("check_mapgen_new_map piece_rows (its format)", "scripted pieces: every trigger fires something", "2 names nothing answers: mgp3_doors, mgp7_wall", new[] { "2", "mgp3_doors" }),
                     // the PO 12.11 on mg_new_7775_367: «вот приплыл сюда, а там пусто» - its second pool held nothing
                     ("mg_new_7775_367", "water worth: every deep water leads to a valuable item", "1 of 2 with none: 1024 1472 56", new[] { "1024 1472 56" }),
                 };

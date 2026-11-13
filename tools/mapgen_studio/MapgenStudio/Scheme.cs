@@ -34,6 +34,8 @@ public sealed class SchemeModel
         public Vector3[] V = Array.Empty<Vector3>();
         public Vector3 N;
         public byte Kind;          // 0 floor, 1 wall, 2 ceiling, 3 water, 4 lava, 5 slime, 6 a mover (lift, door)
+        /// <summary>The PO 13.11: the brush entity that moves this face, as the game moves it (null: it stays).</summary>
+        public Mover? Move;
         /* row 411: the face's own light, the mean of its lightmap (0..1 a channel); null for a map not lit yet */
         public Vector3? Light;
         public float ZLo, ZHi;
@@ -53,6 +55,9 @@ public sealed class SchemeModel
         public float PlayTop;
         public string Source = "";
         public int Floors => Faces.Count(f => f.Kind == 0);
+        private bool? _hasMovers;
+        /// <summary>The PO 13.11: some of its faces move (the scheme draws at the moving pace then).</summary>
+        public bool HasMovers => _hasMovers ??= Faces.Any(f => f.Move != null);
 
         /* the PO, 11.10 - each stage drawn: the map's lights, the frame the donor stretches into, the light pass's
            portals in the order its visibility reaches them */
@@ -484,7 +489,9 @@ public sealed class SchemeModel
         for (var i = 0; i < verts.Length; i++)
             verts[i] = new Vector3(F(vo + 12 * i), F(vo + 12 * i + 4), F(vo + 12 * i + 8));
         // the entities first: a brush model with an origin is stored around it (row 410), and the marks
-        var origins = ReadEntities(d, L(0), s);
+        var ents = new List<IReadOnlyDictionary<string, string>>();
+        var modelEnt = new Dictionary<int, IReadOnlyDictionary<string, string>>();
+        var origins = ReadEntities(d, L(0), s, ents, modelEnt);
         s.Min = new Vector3(float.MaxValue);
         s.Max = new Vector3(float.MinValue);
         for (var m = 0; m < ml / 48; m++)
@@ -492,6 +499,15 @@ public sealed class SchemeModel
             var first = BitConverter.ToInt32(d, mo + 48 * m + 40);
             var count = BitConverter.ToInt32(d, mo + 48 * m + 44);
             var shift = origins.TryGetValue(m, out var o) ? o : Vector3.Zero;
+            // the PO 13.11: a brush entity that moves - a ride, a door a timer or a player fires, a drum - moved as the
+            // game moves it (its box as drawn: the model's, about its origin)
+            Mover? move = null;
+            if (m > 0 && modelEnt.TryGetValue(m, out var me))
+            {
+                var mins = new Vector3(F(mo + 48 * m), F(mo + 48 * m + 4), F(mo + 48 * m + 8)) + shift;
+                var maxs = new Vector3(F(mo + 48 * m + 12), F(mo + 48 * m + 16), F(mo + 48 * m + 20)) + shift;
+                move = Mover.Of(me, mins, maxs, ents);
+            }
             for (var fi = first; fi < first + count && fi < fl / 20; fi++)
             {
                 var f = fo + 20 * fi;
@@ -524,7 +540,7 @@ public sealed class SchemeModel
                 }
                 else
                     kind = (byte)(m > 0 ? 6 : n.Z > 0.7f ? 0 : n.Z < -0.7f ? 2 : 1);
-                var face = new Face { V = pts, N = n, Kind = kind, ZLo = pts.Min(p => p.Z), ZHi = pts.Max(p => p.Z) };
+                var face = new Face { V = pts, N = n, Kind = kind, ZLo = pts.Min(p => p.Z), ZHi = pts.Max(p => p.Z), Move = move };
                 // row 411: its light - the mean of its lightmap's first style, sized as the engine sizes it
                 var lightOfs = BitConverter.ToInt32(d, f + 16);
                 if (ll > 0 && lightOfs >= 0 && d[f + 12] != 255 && (flags & SurfWarp) == 0)
@@ -572,7 +588,9 @@ public sealed class SchemeModel
     }
 
     /// <summary>The marks (pickups, spawns, teleporters) into the snapshot; the brush models' origins, by model.</summary>
-    private static Dictionary<int, Vector3> ReadEntities(byte[] d, (int off, int len) lump, Snapshot s)
+    private static Dictionary<int, Vector3> ReadEntities(byte[] d, (int off, int len) lump, Snapshot s,
+                                                         List<IReadOnlyDictionary<string, string>>? ents = null,
+                                                         Dictionary<int, IReadOnlyDictionary<string, string>>? modelEnt = null)
     {
         var origins = new Dictionary<int, Vector3>();
         var named = new Dictionary<string, Vector3>(StringComparer.OrdinalIgnoreCase);
@@ -583,10 +601,13 @@ public sealed class SchemeModel
             var keys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (Match kv in Regex.Matches(e.Groups[1].Value, "\"([^\"]*)\"\\s+\"([^\"]*)\""))
                 keys[kv.Groups[1].Value] = kv.Groups[2].Value;
+            ents?.Add(keys);
             var cls = keys.GetValueOrDefault("classname", "");
             var at = keys.TryGetValue("origin", out var o) ? Parse3(o) : null;
             if (keys.TryGetValue("model", out var model) && model.StartsWith('*') && int.TryParse(model[1..], out var mi))
             {
+                if (modelEnt != null)
+                    modelEnt[mi] = keys;
                 if (at is { } shift)
                     origins[mi] = shift;
                 continue;
@@ -805,8 +826,20 @@ public sealed class SchemeView : Control, CopyText.IDrawnText
                 return new SKPoint(cx + focal * Vector3.Dot(q, right) / depth, cy - focal * Vector3.Dot(q, up) / depth);
             }
             var list = new List<(float depth, SKPoint[] pts, SKColor fill, SKColor edge)>(s.Faces.Count);
-            foreach (var f in s.Faces)
+            // the PO 13.11: a moving piece where the game has it now
+            var moverNow = Mover.Now;
+            var poses = new Dictionary<Mover, Matrix4x4>();
+            foreach (var f0 in s.Faces)
             {
+                var f = f0;
+                if (f0.Move is { } mv)
+                {
+                    if (!poses.TryGetValue(mv, out var pose))
+                        poses[mv] = pose = mv.Pose(moverNow);
+                    var vs = f0.V.Select(p => Vector3.Transform(p, pose)).ToArray();
+                    f = new SchemeModel.Face { V = vs, N = Vector3.TransformNormal(f0.N, pose), Kind = f0.Kind, Light = f0.Light,
+                                               ZLo = vs.Min(p => p.Z), ZHi = vs.Max(p => p.Z) };
+                }
                 // the roofs over where play happens are left out; a wall rising past the cut is kept
                 if (cut is { } c && f.ZLo > c + 1 && f.Kind != 1)
                     continue;

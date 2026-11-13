@@ -83,7 +83,10 @@ public sealed class SchemeGlView : OpenGlControlBase
     private readonly Func<Generation?> _run;
     public readonly SchemeCamera Camera;
     private SchemeModel.Snapshot? _loaded;
-    private int _program, _vao, _vbo, _boxVbo;
+    private int _program, _vao, _vbo, _boxVbo, _moverVbo;
+    /// <summary>The PO 13.11: the faces that move (the pieces, the lifts), drawn each frame where the game has them.</summary>
+    private readonly List<(SchemeModel.Face f, (float, float, float, float) fill, (float, float, float, float) edge, float flags)> _moving = new();
+    private int _movOpaque, _movEdges, _movLiquid;
     private int _faceCount, _liquidFirst, _liquidCount, _edgeFirst, _edgeCount;
     /* the PO, 11.10 - each stage drawn: the frame's part lines, the lamps' rays, the light pass's portals */
     private int _partFirst, _partCount, _rayFirst, _rayCount, _portalFirst, _portalCount, _portalLineFirst, _portalLineCount;
@@ -254,6 +257,7 @@ void main() {
             _vao = gl.GenVertexArray();
             _vbo = gl.GenBuffer();
             _boxVbo = gl.GenBuffer();
+            _moverVbo = gl.GenBuffer();
             var blend = gl.GetProcAddress("glBlendFunc");
             _blend = blend != IntPtr.Zero ? Marshal.GetDelegateForFunctionPointer<BlendFunc>(blend) : null;
             var offset = gl.GetProcAddress("glPolygonOffset");
@@ -286,11 +290,13 @@ void main() {
             gl.DeleteBuffer(_vbo);
         if (_boxVbo != 0)
             gl.DeleteBuffer(_boxVbo);
+        if (_moverVbo != 0)
+            gl.DeleteBuffer(_moverVbo);
         if (_vao != 0)
             gl.DeleteVertexArray(_vao);
         if (_program != 0)
             gl.DeleteProgram(_program);
-        _vbo = _boxVbo = _vao = _program = 0;
+        _vbo = _boxVbo = _moverVbo = _vao = _program = 0;
         _loaded = null;
     }
 
@@ -453,6 +459,7 @@ void main() {
         var liquid = new List<float>();
         var edges = new List<float>(s.Faces.Count * 8 * Stride);
         var warp = s.Warp is { } w0 && s.IsDonor ? w0 : null;
+        _moving.Clear();
         foreach (var f in s.Faces)
         {
             if (f.Kind == 2 || f.V.Length < 3)
@@ -472,6 +479,12 @@ void main() {
             };
             var isLiquid = f.Kind is 3 or 4 or 5;
             var flags = (f.Kind == 1 ? 1f : 0f) + (isLiquid ? 2f : 0f);
+            if (f.Move != null && warp == null)
+            {
+                // the PO 13.11: it moves - drawn each frame (DrawMoving), not in the map's still buffer
+                _moving.Add((f, c, (0f, 0f, 0f, f.Kind == 1 ? 0.30f : 0.18f), flags));
+                continue;
+            }
             var into = isLiquid ? liquid : opaque;
             Vector3 T(Vector3 v) => warp?.Apply(v) ?? v;
             if (warp != null && !isLiquid)
@@ -530,6 +543,54 @@ void main() {
         fixed (float* p = all)
             gl.BufferData(GL_ARRAY_BUFFER, new IntPtr(all.Length * 4), new IntPtr(p), GL_STATIC_DRAW);
         _loaded = s;
+    }
+
+    /// <summary>The moving faces at this moment into their own buffer (bound on return, with its attributes).</summary>
+    private unsafe bool PrepareMoving(GlInterface gl)
+    {
+        var t = Mover.Now;
+        var poses = new Dictionary<Mover, System.Numerics.Matrix4x4>();
+        var opaque = new List<float>();
+        var edges = new List<float>();
+        var liquid = new List<float>();
+        foreach (var (f, fill, edge, flags) in _moving)
+        {
+            var mv = f.Move!;
+            if (!poses.TryGetValue(mv, out var pose))
+                poses[mv] = pose = mv.Pose(t);
+            var v = new Vector3[f.V.Length];
+            for (var i = 0; i < v.Length; i++)
+                v[i] = Vector3.Transform(f.V[i], pose);
+            var n = Vector3.TransformNormal(f.N, pose);
+            var zlo = v.Min(p => p.Z);
+            var into = flags >= 2 ? liquid : opaque;
+            for (var i = 1; i + 1 < v.Length; i++)
+            {
+                Put(into, v[0], n, fill, zlo, flags);
+                Put(into, v[i], n, fill, zlo, flags);
+                Put(into, v[i + 1], n, fill, zlo, flags);
+            }
+            if (flags < 2)
+                for (var i = 0; i < v.Length; i++)
+                {
+                    Put(edges, v[i], n, edge, zlo, flags);
+                    Put(edges, v[(i + 1) % v.Length], n, edge, zlo, flags);
+                }
+        }
+        _movOpaque = opaque.Count / Stride;
+        _movEdges = edges.Count / Stride;
+        _movLiquid = liquid.Count / Stride;
+        var all = new float[opaque.Count + edges.Count + liquid.Count];
+        opaque.CopyTo(all, 0);
+        edges.CopyTo(all, opaque.Count);
+        liquid.CopyTo(all, opaque.Count + edges.Count);
+        if (all.Length == 0)
+            return false;
+        gl.BindBuffer(GL_ARRAY_BUFFER, _moverVbo);
+        fixed (float* p = all)
+            gl.BufferData(GL_ARRAY_BUFFER, new IntPtr(all.Length * 4), new IntPtr(p), GL_DYNAMIC_DRAW);
+        Attribs(gl);
+        return true;
     }
 
     private static (float, float, float, float) Shade(float g, float lit, float db, float dg) =>
@@ -745,7 +806,23 @@ void main() {
         gl.Uniform1f(_uBias, 0.0004f);
         gl.DrawArrays(GL_LINES, _edgeFirst, new IntPtr(_edgeCount));
         gl.Uniform1f(_uBias, 0);
+        // the PO 13.11: the moving pieces where the game has them now - their solid faces and edges before the
+        // liquids, their liquid faces (a trap's rising lava, a geyser) with the liquids
+        var moving = _moving.Count > 0 && PrepareMoving(gl);
+        if (moving)
+        {
+            gl.DrawArrays(GL_TRIANGLES, 0, new IntPtr(_movOpaque));
+            gl.Uniform1f(_uBias, 0.0004f);
+            gl.DrawArrays(GL_LINES, _movOpaque, new IntPtr(_movEdges));
+            gl.Uniform1f(_uBias, 0);
+        }
         gl.DepthMask(0);
+        if (moving)
+        {
+            gl.DrawArrays(GL_TRIANGLES, _movOpaque + _movEdges, new IntPtr(_movLiquid));
+            gl.BindBuffer(GL_ARRAY_BUFFER, _vbo);
+            Attribs(gl);
+        }
         gl.DrawArrays(GL_TRIANGLES, _liquidFirst, new IntPtr(_liquidCount));
         // the stage under way over the map: the frame's lines, the portals as the visibility reaches them, the rays
         if (_partCount > 0)

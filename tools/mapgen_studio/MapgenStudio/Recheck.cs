@@ -30,7 +30,10 @@ public static class Recheck
         if (File.Exists(outFile))
             File.Delete(outFile);
         var helpers = Path.Combine(Engine.Dir, "helpers");
-        var env = "import os;" + $"os.environ['MAPGEN_GAME']=r'{Path.Combine(s.ClientDir, "baseq2")}';" +
+        // 3.68 (his library after a recheck of mg_new_368_mach13: «mechanic �dead-end stack�»): the check writes UTF-8 whatever
+        // the console's code page - its «» came back as the replacement character and the row lost its words
+        var env = "import os;os.environ['PYTHONIOENCODING']='utf-8';os.environ['PYTHONUTF8']='1';" +
+                  $"os.environ['MAPGEN_GAME']=r'{Path.Combine(s.ClientDir, "baseq2")}';" +
                   $"os.environ['MAPGEN_DONORS']=r'{Engine.DonorsDir}';" +
                   (Directory.Exists(helpers) ? $"os.environ['MAPGEN_HELPERS']=r'{helpers}';" : "") +
                   $"os.environ['MAPGEN_Q2TOOL']=r'{Path.Combine(Engine.Dir, "q2tool.exe")}';" +

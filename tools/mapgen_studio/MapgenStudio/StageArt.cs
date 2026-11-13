@@ -207,9 +207,9 @@ public static class StageArt
 
     /// <summary>Whether the picture moves now - the scheme then draws thirty frames a second instead of ten.</summary>
     public static bool Moving(Generation? run, SchemeModel.Snapshot? s) =>
-        s != null && run is { Running: true } r && ((r.Stage == "warp" && s.Warp != null) || r.Stage == "light"
+        s != null && (s.HasMovers || run is { Running: true } r && ((r.Stage == "warp" && s.Warp != null) || r.Stage == "light"
                                                     || (r.Stage == "relight" && !OldRelight)
-                                                    || (r.Stage == "gates" && s.Walk != null && !SchemeModel.OldShows));
+                                                    || (r.Stage == "gates" && s.Walk != null && !SchemeModel.OldShows)));
 
     /// <summary>3.62's finished-map light stage (no lamps drawn), for the self-test's RED.</summary>
     internal static bool OldRelight;

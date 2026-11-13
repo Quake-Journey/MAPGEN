@@ -114,7 +114,9 @@ public sealed partial class MainWindow
                 }
                 Generation Redeal()
                 {
-                    var g = FreshRun("plan", deals: false);
+                    // a run that deals (the stairway annexes asked): its edits shown (the PO 13.11 hid them on one that
+                    // cannot deal)
+                    var g = FreshRun("plan", deals: true);
                     g.StageBegan["redeal"] = DateTime.Now.AddSeconds(-33);
                     g.SetStageForSelfTest("redeal");
                     return g;
@@ -143,17 +145,28 @@ public sealed partial class MainWindow
                     g.SetStageForSelfTest("judge");
                     return g;
                 }
+                // the PO 13.11 («зачем в окне генерации новой карты этап Правки и отдельная даже секция для него?»): no
+                // «Составление плана правок», no «Правки» - the plan's time is the base's build, ended when the checks
+                // began; 3.67 showed both, the edits «нет»
                 var (rc, _) = Look35(Judged());
-                RunProgress.OldStages = true;
+                Generation.OldScratchEdits = true;
                 var (rc0, _) = Look35(Judged());
-                RunProgress.OldStages = false;
+                Generation.OldScratchEdits = false;
                 string TimeOf(List<(string key, bool done, bool now, string time)> rows, string key) => rows.FirstOrDefault(r => r.key == key).time ?? "";
-                var planT = TimeOf(rc, "plan");
-                var editT = TimeOf(rc, "attempt");
-                Row(planT.Length > 0 && editT == Loc.T("run.stage.attempt.none.s") && rc.First(r => r.key == "attempt").done
-                    && TimeOf(rc0, "plan").Length == 0,
-                    $"after the checks began: «{Loc.T("stage.plan.s")}» {planT}; «{Loc.T("stage.attempt")}» {editT} (3.60: the plan's time empty)",
-                    $"after the checks began: plan «{planT}», edits «{editT}»; 3.60's plan «{TimeOf(rc0, "plan")}» (want empty)");
+                var baseT = TimeOf(rc, "baseline");
+                Row(!rc.Any(r => r.key is "plan" or "attempt") && rc.Any(r => r.key == "baseline" && r.done) && baseT.Length > 0
+                    && rc0.Any(r => r.key == "attempt") && TimeOf(rc0, "attempt") == Loc.T("run.stage.attempt.none.s"),
+                    $"a map from scratch with nothing to deal, after the checks began: no «{Loc.T("stage.plan.s")}», no «{Loc.T("stage.attempt")}»; «{Loc.T("stage.baseline")}» {baseT} (3.67 had both, the edits «{TimeOf(rc0, "attempt")}»)",
+                    $"a map from scratch with nothing to deal: rows {string.Join(", ", rc.Select(r => r.key))}, the base «{baseT}»; 3.67's rows {string.Join(", ", rc0.Select(r => r.key))}");
+                // and its page has no card «Правки» (the scheme's legend keeps its own word); a run with the stairway
+                // annexes asked has it
+                bool EditsCardShown(Generation g) =>
+                    RunPage(g).GetLogicalDescendants().OfType<Border>().FirstOrDefault(x => x.Tag as string == "run-edits") is { IsVisible: true };
+                var hShown = EditsCardShown(FreshRun("judge", deals: false));
+                var dShown = EditsCardShown(FreshRun("judge"));
+                Row(!hShown && dShown,
+                    $"the run page: no card «{Loc.T("run.edits.head")}» on a map from scratch with nothing to deal, its card on one with the stairway annexes asked",
+                    $"the run page: card «{Loc.T("run.edits.head")}» shown with nothing to deal {hShown}, with the annexes {dShown}");
                 // (d) a stage past its expectation: the left line says so and grows
                 Generation Long(int seconds)
                 {

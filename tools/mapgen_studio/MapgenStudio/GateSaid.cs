@@ -32,6 +32,16 @@ public static class GateSaid
         return shortName;
     }
 
+    /// <summary>«trains 0 of 2, traps 1 of 2» in the form's words (the rows' own names).</summary>
+    private static string PieceWords(string list) =>
+        string.Join(", ", list.Split(", ").Select(x =>
+        {
+            var m = Regex.Match(x, @"^([a-z_]+) (\d+) of (\d+)$");
+            return m.Success && Loc.Has($"scr.pc.{m.Groups[1].Value}")
+                ? $"{Loc.T($"scr.pc.{m.Groups[1].Value}").ToLowerInvariant()} {m.Groups[2].Value} {(Loc.Language == "ru" ? "из" : "of")} {m.Groups[3].Value}"
+                : x;
+        }));
+
     private static string Sec(string v) =>
         double.TryParse(v, NumberStyles.Float, Inv, out var d) ? StageArt.Seconds((float)d) : v;
 
@@ -114,8 +124,21 @@ public static class GateSaid
                         return null;
                     parts.Add($"{ItemWords(one[..sp])} — {Loc.T($"lib.gates.said.site.{one[(sp + 1)..]}")}");
                 }
-                return string.Join("; ", parts)
-                       + (notHad.Success ? Loc.F("lib.gates.said.site.nothad", notHad.Groups[1].Value) : "")
+                // 3.68 (his mg_new_33308: «armor_body: easy (no nook)» in English): the ones not had in words too
+                var had = "";
+                if (notHad.Success)
+                {
+                    var nh = new List<string>();
+                    foreach (var one in notHad.Groups[1].Value.Split(", "))
+                    {
+                        var c = one.IndexOf(": ", StringComparison.Ordinal);
+                        if (c <= 0 || !Loc.Has($"lib.gates.said.site.{one[(c + 2)..]}"))
+                            return null;
+                        nh.Add($"{ItemWords(one[..c])} — {Loc.T($"lib.gates.said.site.{one[(c + 2)..]}")}");
+                    }
+                    had = Loc.F("lib.gates.said.site.nothad", string.Join(", ", nh));
+                }
+                return string.Join("; ", parts) + had
                        + (unlit ? Loc.T("lib.gates.said.site.unlit") : "");
             }
             case "gate.mechanic «clock»":
@@ -148,6 +171,46 @@ public static class GateSaid
                         }
                     return Loc.F("lib.gates.said.lost", m.Groups[1].Value, m.Groups[2].Value) + (each.Count > 0 ? ": " + string.Join("; ", each) : "");
                 }
+                break;
+            case "gate.liquids in hollows":
+                if ((m = M(said, @"^(\d+) faces, (\d+) sq u$")).Success)
+                    return Loc.F("lib.gates.said.liquidfaces", m.Groups[1].Value, m.Groups[2].Value);
+                break;
+            // the PO 13.11 (the showcase map: «func_door_rotating at 108 0 and func_door_rotating at 0 0» in English):
+            // which movers run into which, where
+            case "gate.movers apart":
+            {
+                var pairs = Regex.Matches(said, @"(func_[a-z_]+) at (-?\d+ -?\d+) and (func_[a-z_]+) at (-?\d+ -?\d+)");
+                if (pairs.Count == 0 || pairs.Cast<Match>().Any(p => !Loc.Has($"lib.gates.said.mover.{p.Groups[1].Value}")
+                                                                    || !Loc.Has($"lib.gates.said.mover.{p.Groups[3].Value}")))
+                    break;
+                return string.Join("; ", pairs.Select(p => Loc.F("lib.gates.said.movers",
+                    Loc.T($"lib.gates.said.mover.{p.Groups[1].Value}"), p.Groups[2].Value,
+                    Loc.T($"lib.gates.said.mover.{p.Groups[3].Value}"), p.Groups[4].Value)));
+            }
+            // the PO 13.11 (the test maps' «drop 5-6 (176 points)» in English): which way leads into a dead end, how much
+            // floor is behind it; a part cut off
+            case "gate.dead ends":
+            {
+                var parts = said.Split("; ").Select(x =>
+                {
+                    var one = Regex.Match(x, @"^([a-z]+) (\d+)-(\d+) \((\d+) points\)$");
+                    if (one.Success && Loc.Has($"lib.gates.said.way.{one.Groups[1].Value}"))
+                        return Loc.F("lib.gates.said.deadend.one", Loc.T($"lib.gates.said.way.{one.Groups[1].Value}"),
+                                     one.Groups[2].Value, one.Groups[3].Value, one.Groups[4].Value);
+                    var cut = Regex.Match(x, @"^cut off from the rest \((\d+) points\)$");
+                    return cut.Success ? Loc.F("lib.gates.said.deadend.cut", cut.Groups[1].Value) : null;
+                }).ToList();
+                if (parts.Count == 0 || parts.Any(x => x == null))
+                    break;
+                return string.Join("; ", parts);
+            }
+            // the PO 13.11: the scripted pieces
+            case "gate.scripted pieces":
+                if ((m = M(said, @"^not built: (.*)$")).Success)
+                    return Loc.F("lib.gates.said.pieces.short", PieceWords(m.Groups[1].Value));
+                if ((m = M(said, @"^(\d+) names nothing answers: (.*)$")).Success)
+                    return Loc.F("lib.gates.said.pieces.dangling", m.Groups[1].Value, m.Groups[2].Value);
                 break;
             case "gate.water worth":
                 if ((m = M(said, @"^(\d+) of (\d+) with none: (.*)$")).Success)
@@ -278,6 +341,31 @@ public static class GateSaid
             case "gate.plain rooms":
                 if ((m = M(said, @"^(\d+) halls or rooms with nothing but walls and doorways")).Success)
                     return Loc.F("lib.gates.said.plain", m.Groups[1].Value);
+                break;
+            // 3.68 (the test map mg_new_368_mach4 on a Russian page: «buttons», «buried»): the powerups' and the traps'
+            // buttons - all free, or which are sunk and how deep
+            // the PO 13.11 (Bugs/4: a saw swinging through a trap room): which turning piece goes into what, where
+            case "gate.turning pieces":
+            {
+                if (said == "none")
+                    return Loc.T("lib.gates.said.turning.none");
+                var hits = Regex.Matches(said, @"(func_[a-z_]+) at (-?\d+ -?\d+ -?\d+): (\d+) of (\d+) corners");
+                if (hits.Count == 0 || hits.Cast<Match>().Any(h => !Loc.Has($"lib.gates.said.mover.{h.Groups[1].Value}")))
+                    break;
+                return string.Join("; ", hits.Cast<Match>().Select(h => Loc.F("lib.gates.said.turning.one",
+                    Loc.T($"lib.gates.said.mover.{h.Groups[1].Value}"), h.Groups[2].Value, h.Groups[3].Value, h.Groups[4].Value)));
+            }
+            case "gate.buttons clear":
+                if ((m = M(said, @"^(\d+) buttons, all free$")).Success)
+                    return Loc.F("lib.gates.said.buttons.free", m.Groups[1].Value);
+                if ((m = M(said, @"^(\d+) buttons, buried: (.+)$")).Success)
+                {
+                    var sunk = m.Groups[2].Value.Split("; ").Select(x =>
+                        Regex.Match(x, @"^button at (-?\d+ -?\d+ -?\d+): (\d+) of 64 points in a wall piece$")).ToList();
+                    if (sunk.All(x => x.Success))
+                        return Loc.F("lib.gates.said.buttons.buried", m.Groups[1].Value, string.Join("; ",
+                            sunk.Select(x => Loc.F("lib.gates.said.buttons.one", x.Groups[1].Value, x.Groups[2].Value))));
+                }
                 break;
             case "gate.digwalls":
                 if ((m = M(said, @"^(\d+) digs: (\d+) points open high(?: \([^)]*\))?; (\d+) points standing in the old air")).Success)

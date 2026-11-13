@@ -63,6 +63,51 @@ public sealed class ScratchParams
     public string Decor { get; set; } = "";           // "" default (none) | few | some | many
     /// <summary>The PO, 04.11: rooms flooded over their floor (water standing above its edge) only when he allows it.</summary>
     public bool WaterAboveFloor { get; set; }
+    /* the PO 13.11: the scripted pieces (tools/mapgen_scratch_pieces.py, _pieces2.py) - each a count (0 none) */
+    public int Trains { get; set; }
+    public int Stones { get; set; }
+    public int Traps { get; set; }
+    public int Rotators { get; set; }
+    public int Shutters { get; set; }
+    public int PickupWalls { get; set; }
+    public int BentBridges { get; set; }
+    public int WallSteps { get; set; }
+    public int Lasers { get; set; }
+    public int Pistons { get; set; }
+    public int Pendulums { get; set; }
+    public int Trapdoors { get; set; }
+    public int Geysers { get; set; }
+    public int TurnBridges { get; set; }
+    public int Currents { get; set; }
+    public int Waves { get; set; }
+    public string TrainPath { get; set; } = "";
+    public static readonly string[] TrainPaths = { "", "across", "loop", "island" };
+    public string StoneShape { get; set; } = "";
+    public static readonly string[] StoneShapes = { "", "row", "gaps", "zigzag" };
+    public string TrapTrigger { get; set; } = "";
+    public static readonly string[] TrapTriggers = { "", "buttons", "plate", "item" };
+    public string TrapHazard { get; set; } = "";
+    public static readonly string[] TrapHazards = { "", "lava", "slime", "crusher" };
+    public string RotatorKind { get; set; } = "";
+    public static readonly string[] RotatorKinds = { "", "drum", "flap", "fan" };
+    public bool PoolLadders { get; set; }
+    /// <summary>The PO 13.11 after the first try: drilling rigs, cogs on walls, blaster turrets, conveyors with crates;
+    /// the hammer's head; the straight movers' motion; the hammer's shock wave.</summary>
+    public int Drills { get; set; }
+    public int Cogs { get; set; }
+    public int Turrets { get; set; }
+    public int Conveyors { get; set; }
+    public string PendulumKind { get; set; } = "";
+    public static readonly string[] PendulumKinds = { "", "hammer", "sledge", "spiked", "axe", "labrys", "sickle", "mace", "saw", "anchor" };
+    public string PieceMotion { get; set; } = "";
+    public static readonly string[] PieceMotions = { "", "even" };
+    public bool HammerBlast { get; set; }
+    /// <summary>The pieces' speeds and pauses, % of people's (0: 100).</summary>
+    public int PieceSpeed { get; set; }
+    public int PieceWait { get; set; }
+    public static readonly int[] PieceSpeeds = { 50, 75, 125, 150, 200 };
+    public static readonly int[] PieceWaits = { 50, 75, 150, 200, 300 };
+
     public string Sun { get; set; } = "";             // "" by the style | yes | no
     public string Tone { get; set; } = "";            // "" by the style | warm | cold
     /// <summary>The PO, 05.11: how hard the powerups are to get - "" default (mixed) | easy | medium | hard | mixed.</summary>
@@ -280,6 +325,42 @@ public sealed class ScratchParams
         if (PrizeAccess.Length > 0 && Shape is not ("space" or "tower")) o["prize_access"] = PrizeAccess;
         if (Underwater > 0 && Shape is not ("space" or "tower")) o["underwater"] = Underwater;
         if (WaterBody.Length > 0 && Shape is not ("space" or "tower")) o["water_body"] = WaterBody;
+        // the PO 13.11: the scripted pieces - built in rooms and halls only (an island or a storey holds none)
+        if (Shape is not ("space" or "tower"))
+        {
+            if (Trains > 0) o["trains"] = Trains;
+            if (Stones > 0) o["stones"] = Stones;
+            if (Traps > 0) o["traps"] = Traps;
+            if (Rotators > 0) o["rotators"] = Rotators;
+            if (Shutters > 0) o["shutters"] = Shutters;
+            if (PickupWalls > 0) o["pickup_walls"] = PickupWalls;
+            if (BentBridges > 0) o["bent_bridges"] = BentBridges;
+            if (WallSteps > 0) o["wall_steps"] = WallSteps;
+            if (Lasers > 0) o["lasers"] = Lasers;
+            if (Pistons > 0) o["pistons"] = Pistons;
+            if (Pendulums > 0) o["pendulums"] = Pendulums;
+            if (Trapdoors > 0) o["trapdoors"] = Trapdoors;
+            if (Geysers > 0) o["geysers"] = Geysers;
+            if (TurnBridges > 0) o["turn_bridges"] = TurnBridges;
+            if (Currents > 0) o["currents"] = Currents;
+            if (Waves > 0) o["waves"] = Waves;
+            if (TrainPath.Length > 0) o["train_path"] = TrainPath;
+            if (StoneShape.Length > 0) o["stone_shape"] = StoneShape;
+            if (TrapTrigger.Length > 0) o["trap_trigger"] = TrapTrigger;
+            if (TrapHazard.Length > 0) o["trap_hazard"] = TrapHazard;
+            if (RotatorKind.Length > 0) o["rotator_kind"] = RotatorKind;
+            if (PoolLadders) o["pool_ladders"] = true;
+            if (Drills > 0) o["drills"] = Drills;
+            if (Cogs > 0) o["cogs"] = Cogs;
+            if (Turrets > 0) o["turrets"] = Turrets;
+            if (Conveyors > 0) o["conveyors"] = Conveyors;
+            if (PendulumKind.Length > 0) o["pendulum_kind"] = PendulumKind;
+            if (PieceMotion.Length > 0) o["piece_motion"] = PieceMotion;
+            if (HammerBlast) o["hammer_blast"] = true;
+            if (PieceSpeed > 0) o["piece_speed"] = PieceSpeed;
+            if (PieceWait > 0) o["piece_wait"] = PieceWait;
+        }
+
         if (ItemSpacing.Length > 0) o["item_spacing"] = ItemSpacing;
         if (ItemPractice.Length > 0) o["item_practice"] = ItemPractice;
         if (Shape == "space")
@@ -473,6 +554,38 @@ public sealed class ScratchParams
         p.PrizeAccess = S(o["prize_access"]);
         p.Underwater = Math.Clamp(I("underwater", 0), 0, 3);
         p.WaterBody = S(o["water_body"]);
+        p.Trains = Math.Clamp(I("trains", 0), 0, 3);
+        p.Stones = Math.Clamp(I("stones", 0), 0, 3);
+        p.Traps = Math.Clamp(I("traps", 0), 0, 2);
+        p.Rotators = Math.Clamp(I("rotators", 0), 0, 3);
+        p.Shutters = Math.Clamp(I("shutters", 0), 0, 2);
+        p.PickupWalls = Math.Clamp(I("pickup_walls", 0), 0, 2);
+        p.BentBridges = Math.Clamp(I("bent_bridges", 0), 0, 2);
+        p.WallSteps = Math.Clamp(I("wall_steps", 0), 0, 3);
+        p.Lasers = Math.Clamp(I("lasers", 0), 0, 2);
+        p.Pistons = Math.Clamp(I("pistons", 0), 0, 2);
+        p.Pendulums = Math.Clamp(I("pendulums", 0), 0, 2);
+        p.Trapdoors = Math.Clamp(I("trapdoors", 0), 0, 2);
+        p.Geysers = Math.Clamp(I("geysers", 0), 0, 3);
+        p.TurnBridges = Math.Clamp(I("turn_bridges", 0), 0, 2);
+        p.Currents = Math.Clamp(I("currents", 0), 0, 2);
+        p.Waves = Math.Clamp(I("waves", 0), 0, 2);
+        p.TrainPath = S(o["train_path"]);
+        p.StoneShape = S(o["stone_shape"]);
+        p.TrapTrigger = S(o["trap_trigger"]);
+        p.TrapHazard = S(o["trap_hazard"]);
+        p.RotatorKind = S(o["rotator_kind"]);
+        p.PoolLadders = o["pool_ladders"] is JsonValue pl && pl.TryGetValue<bool>(out var plb) && plb;
+        p.Drills = Math.Clamp(I("drills", 0), 0, 3);
+        p.Cogs = Math.Clamp(I("cogs", 0), 0, 3);
+        p.Turrets = Math.Clamp(I("turrets", 0), 0, 2);
+        p.Conveyors = Math.Clamp(I("conveyors", 0), 0, 2);
+        p.PendulumKind = S(o["pendulum_kind"]);
+        p.PieceMotion = S(o["piece_motion"]) == "even" ? "even" : "";
+        p.HammerBlast = o["hammer_blast"] is JsonValue hb && hb.TryGetValue<bool>(out var hbb) && hbb;
+        p.PieceSpeed = I("piece_speed", 0);
+        p.PieceWait = I("piece_wait", 0);
+
         p.ItemSpacing = S(o["item_spacing"]);
         p.ItemPractice = S(o["item_practice"]);
         p.Round = S(o["round"]);

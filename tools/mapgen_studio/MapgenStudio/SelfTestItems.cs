@@ -67,7 +67,7 @@ public sealed partial class MainWindow
                 ["duel_open"] = ("exposed", 0), ["ffa4_open"] = ("exposed", 0),
             };
             var oldBad = new List<string>();
-            foreach (var x in all.Where(x => !fresh.Contains(x)))
+            foreach (var x in all.Where(x => !fresh.Contains(x) && !Presets.FactoryKey(x).StartsWith("pc_")))
             {
                 var k = Presets.FactoryKey(x);
                 var p = Presets.ScratchOf(x.Body);

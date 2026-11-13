@@ -27,6 +27,7 @@ TOOLS = Path(__file__).resolve().parent
 ORACLE = TOOLS / "fable_oracles" / "mapgen_2026-11-06_presets_x10.py"
 SPACE = TOOLS / "mapgen_scratch_presets_space.py"         # brief 25 A4: «Открытый космос», checked by its own gate
 TOWER = TOOLS / "mapgen_scratch_presets_tower.py"         # brief 25 B: «Башня», checked by its own gate
+PIECES = TOOLS / "mapgen_scratch_presets_pieces.py"       # the PO 13.11: a hundred presets of the scripted pieces
 ITEMS = TOOLS / "mapgen_scratch_presets_items.py"         # the PO 12.11: «Приёмы известных карт», «Призы и вода», and the old
                                                           # presets the new rows change (its UPDATES)
 STUDIO = TOOLS / "mapgen_studio" / "MapgenStudio"
@@ -200,7 +201,7 @@ def read_oracle() -> list[tuple[str, str, int, dict, dict]]:
     """Every table's rows: Fable's 160, then the space's (brief 25 A4), the tower's (brief 25 B) and the items' (the PO
     12.11) - the old ones the items' table updates with the new rows' values («обновить существующие пресеты на новые
     параметры … на дефолты или нужные значения»: the rest keep «По умолчанию», a factory preset is a fresh form)."""
-    rows = read_table(ORACLE) + read_table(SPACE) + read_table(TOWER) + read_table(ITEMS)
+    rows = read_table(ORACLE) + read_table(SPACE) + read_table(TOWER) + read_table(ITEMS) + read_table(PIECES)
     upd = _items_module().UPDATES
     out = []
     for cat, key, players, lit, q in rows:
@@ -240,6 +241,38 @@ def read_table(path: Path) -> list[tuple[str, str, int, dict, dict]]:
     order = [k for _, k, _ in mod.PRESETS]
     rows = {r[1]: r for r in out + loop}
     return [rows[k] for k in order]
+
+
+PIECE_WORDS = {  # the PO 13.11: the scripted pieces in the presets' tips
+    "trains": ("ездящих платформ", "riding platforms"), "stones": ("рядов тонущих плит", "rows of sinking stones"),
+    "traps": ("комнат-ловушек", "trap rooms"), "rotators": ("вращающихся", "rotating pieces"),
+    "shutters": ("створок по таймеру", "timed shutters"), "pickup_walls": ("стен от предмета", "walls opened by an item"),
+    "bent_bridges": ("изогнутых мостов", "bent bridges"), "wall_steps": ("ступеней по стене", "wall steps"),
+    "lasers": ("лазерных заслонов", "laser gates"), "pistons": ("поршней в проходе", "piston passages"),
+    "pendulums": ("маятников", "pendulums"), "trapdoors": ("проваливающихся полов", "trapdoors"),
+    "geysers": ("лавовых гейзеров", "lava geysers"), "turn_bridges": ("поворотных мостов", "turning bridges"),
+    "currents": ("мостов-течений", "current bridges"), "waves": ("волн столбов", "pillar waves"),
+    "train_path": ("путь платформ", "the platforms' way"), "stone_shape": ("плиты", "the stones"),
+    "trap_trigger": ("ловушку закрывает", "the trap shut by"), "trap_hazard": ("в ловушке", "in the trap"),
+    "rotator_kind": ("вращается", "rotating"), "pool_ladders": ("лесенки из бассейнов", "ladders out of pools"),
+    "piece_speed": ("скорость конструкций", "the pieces' speed"), "piece_wait": ("паузы конструкций", "the pieces' pauses"),
+    # the PO 13.11 after the first try
+    "drills": ("буровых установок", "drilling rigs"), "cogs": ("шестерён на стенах", "cogs on walls"),
+    "turrets": ("турелей в проходах", "turret passages"), "conveyors": ("конвейеров с грузами", "conveyors with crates"),
+    "pendulum_kind": ("маятник", "the pendulum"), "piece_motion": ("движение", "the motion"),
+    "hammer_blast": ("удар маятника с ударной волной", "the pendulum's blow with a shock wave"),
+}
+PIECE_VALUES = {
+    "across": ("поперёк ямы", "across a pit"), "loop": ("по кругу", "round it"), "island": ("к островку", "to an island"),
+    "row": ("вплотную", "side by side"), "gaps": ("через одну", "every other one"), "zigzag": ("зигзагом", "zigzag"),
+    "buttons": ("кнопки", "buttons"), "plate": ("плита в полу", "a plate"), "item": ("взятый предмет", "the item taken"),
+    "lava": ("лава", "lava"), "slime": ("кислота", "slime"), "crusher": ("давящий потолок", "a crushing ceiling"),
+    "drum": ("барабан над ямой", "a drum over a pit"), "flap": ("заслонка", "a flap"), "fan": ("вентилятор", "a fan"),
+    "hammer": ("молот", "a hammer"), "sledge": ("двуглавая кувалда", "a two-headed sledge"),
+    "spiked": ("молот с шипами", "a spiked hammer"), "axe": ("топор", "an axe"), "labrys": ("двойной топор", "a double axe"),
+    "sickle": ("серп", "a sickle"), "mace": ("булава", "a mace"), "saw": ("дисковая пила", "a saw"), "anchor": ("якорь", "an anchor"),
+    "even": ("ровное", "even"),
+}
 
 
 def cs_value(v) -> str:
@@ -296,7 +329,8 @@ def setters(players: int, lit: dict, q: dict) -> list[str]:
                     "pad_only": "PadOnly", "edges": "Edges", "height_spread": "HeightSpread", "pad_reach": "PadReach",
                     "bridges": "Bridges", "storeys": "Storeys", "storey_height": "StoreyHeight", "shafts": "Shafts",
                     "perches": "Perches", "ships": "Ships", "prize_access": "PrizeAccess", "underwater": "Underwater",
-                    "item_spacing": "ItemSpacing", "item_practice": "ItemPractice", "water_body": "WaterBody"}[k]
+                    "item_spacing": "ItemSpacing", "item_practice": "ItemPractice", "water_body": "WaterBody",
+                    "trains": "Trains", "stones": "Stones", "traps": "Traps", "rotators": "Rotators", "shutters": "Shutters", "pickup_walls": "PickupWalls", "bent_bridges": "BentBridges", "wall_steps": "WallSteps", "lasers": "Lasers", "pistons": "Pistons", "pendulums": "Pendulums", "trapdoors": "Trapdoors", "geysers": "Geysers", "turn_bridges": "TurnBridges", "currents": "Currents", "waves": "Waves", "train_path": "TrainPath", "stone_shape": "StoneShape", "trap_trigger": "TrapTrigger", "trap_hazard": "TrapHazard", "rotator_kind": "RotatorKind", "pool_ladders": "PoolLadders", "piece_speed": "PieceSpeed", "piece_wait": "PieceWait", "drills": "Drills", "cogs": "Cogs", "turrets": "Turrets", "conveyors": "Conveyors", "pendulum_kind": "PendulumKind", "piece_motion": "PieceMotion", "hammer_blast": "HammerBlast"}[k]
             s.append(f"p.{prop} = {cs_value(v)};")
     return s
 
@@ -413,6 +447,18 @@ def tip(players: int, lit: dict, q: dict, lang: int) -> str:
         elif k == "underwater":
             parts.append(plural(v, "приз под водой", "приза под водой", "призов под водой") if ru
                          else f"{v} prize{'s' if v > 1 else ''} under water")
+        elif k in PIECE_WORDS:
+            n_ = v
+            ru_, en_ = PIECE_WORDS[k]
+            if isinstance(v, bool):
+                parts.append(ru_ if ru else en_)
+            elif k in ("piece_speed", "piece_wait"):
+                parts.append((f"{ru_} {v} %" if ru else f"{en_} {v} %"))
+            elif isinstance(v, str):
+                parts.append((ru_ if ru else en_) + " — " + PIECE_VALUES.get(v, (v, v))[0 if ru else 1] if ru
+                             else en_ + " - " + PIECE_VALUES.get(v, (v, v))[1])
+            else:
+                parts.append(f"{ru_}: {n_}" if ru else f"{en_}: {n_}")
         elif k == "water_body":
             parts.append({"people": ("глубокие бассейны, как на известных картах", "deep pools, as on well-known maps"),
                           "levels": ("бассейны на разных уровнях с подводными трубами", "pools on several levels with tubes under water"),
@@ -469,8 +515,12 @@ def replace_between(text: str, begin: str, end: str, body: str) -> str:
 
 def write() -> int:
     rows = read_oracle()
-    assert len(rows) == 287, len(rows)       # brief 34: three of the tower; the PO 12.11: a hundred of the items
+    assert len(rows) == 412, len(rows)       # brief 34: three of the tower; the PO 12.11: a hundred of the items; 13.11: a hundred of the pieces
     NAMES.update(_items_module().NAMES)
+    spec = importlib.util.spec_from_file_location(PIECES.stem, PIECES)
+    pmod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pmod)
+    NAMES.update(pmod.NAMES)
     missing = [k for _, k, *_ in rows if k not in KEEP and k not in NAMES]
     if missing:
         raise SystemExit(f"no names for {missing}")

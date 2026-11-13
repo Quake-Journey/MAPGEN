@@ -26,6 +26,7 @@ public sealed class GenerationView : DockPanel
     /// when it is to change.</summary>
     internal static string[] StagesOf(Generation g) =>
         AllStages.Where(s => (s != "scratch" || g.Request.FromScratch)
+                          && (s is not ("plan" or "attempt") || !g.EditsHidden)
                           && (s != "destruction" || (g.Request.Options?.Destruction ?? 0) > 0)
                           && (s != "relight" || g.Relights)
                           && (s != "warp" || (g.Request.Options is { } o && (o.WarpSize != 100 || o.WarpShape > 0))))
@@ -93,6 +94,7 @@ public sealed class GenerationView : DockPanel
     private readonly Grid _planRows = new() { ColumnDefinitions = new ColumnDefinitions("*,90,Auto"), RowSpacing = 6, ColumnSpacing = 10 };
     private readonly Border _planCard;
     private readonly Border _diffCard;
+    private readonly Border _editsCard;
     private readonly TextBlock _ruin = new() { FontSize = 13, Opacity = 0.8, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
     private string _planShown = "";
 
@@ -153,14 +155,15 @@ public sealed class GenerationView : DockPanel
 
     private static TextBlock Caption(string key) => new() { Text = Loc.T(key), FontSize = 12, Opacity = 0.65 };
 
-    private static Border Card(string titleKey, Control body, string? tipKey = null)
+    private static Border Card(string titleKey, Control body, string? tipKey = null, string? tag = null)
     {
         var p = new StackPanel { Spacing = 2 };
         p.Children.Add(new TextBlock { Text = Loc.T(titleKey), FontSize = 15, FontWeight = FontWeight.SemiBold,
                                        Margin = new Thickness(0, 0, 0, 6) });
         p.Children.Add(body);
         var b = new Border { Background = CardBack, BorderBrush = CardEdge, BorderThickness = new Thickness(1),
-                             CornerRadius = new CornerRadius(10), Padding = new Thickness(16, 12, 16, 14), Child = p };
+                             CornerRadius = new CornerRadius(10), Padding = new Thickness(16, 12, 16, 14), Child = p,
+                             Tag = tag };
         return tipKey != null ? b.Tip(tipKey) : b;
     }
 
@@ -287,7 +290,7 @@ public sealed class GenerationView : DockPanel
             {
                 _progCard,
                 (_diffCard = Card("run.diff.head", diff)),
-                Card("run.edits.head", edits),
+                (_editsCard = Card("run.edits.head", edits, tag: "run-edits")),
                 _planCard,
                 _stagesBox,
                 _loadBox,
@@ -472,6 +475,8 @@ public sealed class GenerationView : DockPanel
             ? Loc.F("run.tail", Math.Min(g.FinishingSeen, fin) + Math.Min(g.GraftSeen, graft), fin + graft) : "";
         _tail.IsVisible = _tail.Text.Length > 0;
         // brief 35: nothing to deal - one line, no numbers, no time bar
+        // the PO 13.11: no card of edits when they are hidden
+        _editsCard.IsVisible = !g.EditsHidden;
         var none = g.NothingToDeal && !RunProgress.OldStages;
         _editsNone.Text = none ? Loc.T("run.edits.none.s") : "";
         _editsNone.IsVisible = none;
@@ -525,7 +530,7 @@ public sealed class GenerationView : DockPanel
 
         // folded: the stages, their header saying the one under way
         var old = RunProgress.OldStages;
-        _stagesHead.Text = Loc.F("run.stages.head", Loc.Ts(g.Running ? $"stage.{(old ? (g.Stage == "resume" ? "attempt" : g.Stage) : RunProgress.Canonical(g.Stage))}"
+        _stagesHead.Text = Loc.F("run.stages.head", Loc.Ts(g.Running ? $"stage.{(old ? (g.Stage == "resume" ? "attempt" : g.Stage) : RunProgress.Canonical(g, g.Stage))}"
                                                                         : failed ? "run.now.failed" : "run.now.done", sc));
         _stages.Children.Clear();
         StageRows.Clear();
@@ -535,7 +540,7 @@ public sealed class GenerationView : DockPanel
         var Stages = StagesOf(g);
         var at = g.Stage is "failed" or "stopped" ? Array.IndexOf(Stages, "done")
                : old ? Array.IndexOf(Stages, g.Stage == "resume" ? "attempt" : g.Stage)
-               : Array.IndexOf(Stages, RunProgress.Canonical(g.Stage)) is var cAt && cAt >= 0 ? cAt
+               : Array.IndexOf(Stages, RunProgress.Canonical(g, g.Stage)) is var cAt && cAt >= 0 ? cAt
                : g.Running ? RunProgress.AtOf(g, Stages) : -1;
         // a run that failed: done is what it passed, the stage it stopped in is crossed out, the rest not reached
         // (the PO's koldduel1, 05.10: refused at its base map's rebuild, every stage showed a tick)
@@ -723,8 +728,9 @@ public sealed class GenerationView : DockPanel
             return g.Error.Length > 0 ? Loc.T("run.now.failed") : Loc.T("run.now.done");
         if (g.Paused)
             return Loc.T("run.now.paused");
-        var key = RunProgress.OldStages ? (g.Stage == "resume" ? "attempt" : g.Stage) : RunProgress.Canonical(g.Stage);
-        var head = Loc.Ts($"stage.{g.Stage}.now", g.Request.FromScratch);
+        var key = RunProgress.OldStages ? (g.Stage == "resume" ? "attempt" : g.Stage) : RunProgress.Canonical(g, g.Stage);
+        // the PO 13.11: the edits hidden - their plan's time is said as the base's build
+        var head = Loc.Ts($"stage.{(g.EditsHidden && !RunProgress.OldStages ? key : g.Stage)}.now", g.Request.FromScratch);
         var began = RunProgress.OldStages ? (g.StageBegan.TryGetValue(key, out var t0) ? t0 : (DateTime?)null) : RunProgress.BeganOf(g, key);
         return began is { } since ? $"{head} — {StageNow(g, key, since, EditsLeft(g))}" : head;
     }

@@ -29,6 +29,7 @@ import heapq
 import json
 import math
 import os
+import itertools
 import random
 import sys
 from dataclasses import dataclass, field
@@ -66,6 +67,13 @@ def phys(c):
 ARMOURS = ("item_armor_body", "item_armor_combat", "item_armor_jacket")
 POWER_ITEMS = ("item_quad", "item_invulnerability", "item_power_shield", "item_power_screen", "item_health_mega",
                "item_adrenaline")
+# the RED: 3.67's dead-end stack (no rocket launcher in the room one drops into); MAPGEN_OLD_DEAD_END=1 for a process
+OLD_DEAD_END = __import__("os").environ.get("MAPGEN_OLD_DEAD_END") == "1"
+# the RED: the dead-end stack's powerup with no pedestal and no light of its own (his mg_new_33555 and the test map
+# mg_new_368_mach2: «powerups ... one unlit»); MAPGEN_OLD_KEPT_UNLIT=1 for a process
+OLD_KEPT_UNLIT = __import__("os").environ.get("MAPGEN_OLD_KEPT_UNLIT") == "1"
+# the RED: a nook carved under (or over) a room of the other layer (the test map mg_new_368_mach9); MAPGEN_OLD_NOOK_UNDER=1
+OLD_NOOK_UNDER = __import__("os").environ.get("MAPGEN_OLD_NOOK_UNDER") == "1"
 MAJORS_APART_SAME = (2.5, 512.0)     # two of one class (armours, guns, powerups): seconds on foot, units straight
 MAJORS_APART_CROSS = (1.5, 384.0)    # a gun and an armour, a powerup and either
 MAJORS_PLAN_SLACK = 1.2              # the compiled map walks quicker than the plan's cells (a duel of 12.11: 1.47 s
@@ -260,12 +268,14 @@ def majors_near(P: Plan, edges) -> list:
         if c not in cache:
             cache[c] = dijkstra(edges, c)
         return cache[c]
-    its = [(cls, c, z) for cls, c, z, _n in P.items if major_kind(cls)]
+    its = [(cls, c, z, _n) for cls, c, z, _n in P.items if major_kind(cls)]
     out = []
-    for i, (a, ca, za) in enumerate(its):
-        for b, cb, zb in its[i + 1:]:
+    for i, (a, ca, za, na) in enumerate(its):
+        for b, cb, zb, nb in its[i + 1:]:
             if ca == cb:
                 continue            # an item team taking turns on one spot (the powerups' cycle, q2dm8's)
+            if "dead-end stack" in na and "dead-end stack" in nb:
+                continue            # the PO 13.11: the prize and its rocket launcher in one room, on purpose
             t_need, d_need = majors_need(a, b, P.params)
             d = math.dist(_item_at(ca, za), _item_at(cb, zb))
             t = min(tim(ca).get(cb, 99.0), tim(cb).get(ca, 99.0))
@@ -417,6 +427,14 @@ def defaults(p: dict) -> dict:
     # under water (levels: q2dm4, q2dm5), or 3.66's pits 48 deep (shallow)
     if q.get("water_body") not in WATER_BODIES:
         q["water_body"] = "people"
+    # the PO 13.11: the scripted pieces (trains, stones, traps, rotators...); a piece over a liquid asks a pit of lava
+    # when no lava, slime or chasm is asked
+    import mapgen_scratch_pieces as pieces_mod
+    pieces_mod.defaults(q)
+    if pieces_mod.wants_pits(q) and q.get("shape") not in ("space", "tower") and not float(q.get("lava") or 0) \
+            and not float(q.get("slime") or 0) and not int(q.get("pits") or 0):
+        q["lava"] = 0.06
+        q["piece_lava"] = True
     q["powerup_cycle"] = bool(q.get("powerup_cycle"))
     # 3.46: medusa_b1's round shapes - none unless asked
     if q.get("round") not in ("few", "some", "many"):
@@ -568,6 +586,10 @@ class Plan:
     pad_why: dict = field(default_factory=dict)
     # the PO 12.11: the deep pools of water ({space, cells, bottom, surface}) and the tubes under water between them
     pools: list = field(default_factory=list)
+    # the PO 13.11: the scripted pieces (mapgen_scratch_pieces) - their records, the plan's walk on them
+    pieces: list = field(default_factory=list)
+    piece_nodes: dict = field(default_factory=dict)
+    piece_edges: list = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------------------------- 1. the floor plan
@@ -1071,6 +1093,8 @@ def heights(P: Plan, rnd: random.Random) -> None:
         n_kinds += 1
     if deep_w and wants_w and q.get("water_body") == "levels":
         n_kinds += 2
+    import mapgen_scratch_pieces as pieces_mod
+    n_kinds += max(0, pieces_mod.wants_pits(q) - 1)
     order_ = sorted(live, key=lambda s: -s.area())
     if deep_w and wants_w and q.get("water_body") == "levels":
         # a hall of each floor first: a pool a floor
@@ -1100,7 +1124,14 @@ def heights(P: Plan, rnd: random.Random) -> None:
         if s.id in wet_halls:
             s.wet = True
             # a deep pool whole (a bridge would cut it in two)
-            s.pattern = rnd.choice(["pit", "bridge"]) if min(s.rect.w, s.rect.h) >= 7 and not deep_pools_only(q) else "pit"
+            pat_ = rnd.choice(["pit", "bridge"]) if min(s.rect.w, s.rect.h) >= 7 and not deep_pools_only(q) else "pit"
+            # the PO 13.11: a bent bridge or a turning one is laid in a whole pit (a straight bridge would cut it); the
+            # turning one asks a square pit (it turns a quarter rim to rim)
+            if q.get("bent_bridges") or q.get("turn_bridges") or q.get("pendulums"):
+                pat_ = "pit"
+            if q.get("turn_bridges") and sum(1 for o in live if getattr(o, "square_pit", False)) < int(q["turn_bridges"]):
+                s.square_pit = True
+            s.pattern = pat_
             terrace(s, rnd, q)
             continue
         if s.atrium:
@@ -1256,6 +1287,8 @@ def terrace(s: Space, rnd: random.Random, q: dict) -> None:
         # the sunken middle; a bridge crosses it at the floor's level, or steps lead down into it
         rim = s.rim if s.wet else 2
         pw, ph = max(2, w - 2 * rim), max(2, h - 2 * rim)
+        if getattr(s, "square_pit", False):
+            pw = ph = min(pw, ph)
         px, py = r.x0 + rim, r.y0 + rim
         if s.wet:
             # brief 20 D4: a pool takes a third of its hall at most (the 3.40 FFA-8's rocket hall: two pools, half
@@ -1903,6 +1936,21 @@ def liquids(P: Plan, rnd: random.Random) -> None:
     pits = [s for s in live if s.pit]
     rnd.shuffle(pits)
     deep = water_deep(q)
+    # the PO 13.11 (the scripted pieces' showcase: slime 1 % of the 5 % asked, and so on most plans asking both): lava
+    # went first, and its want is over any one pit, so «the pit closest to the want» was the biggest - slime got what
+    # lava left, 4 to 12 cells. The pits slime takes are chosen first now: one or two, both liquids' shares as near
+    # their want as the pits allow (each in its band of half to twice the want first).
+    slime_first = set()
+    wl, ws = float(q.get("lava") or 0) * total, float(q.get("slime") or 0) * total
+    if wl > 0 and ws > 0 and len(pits) >= 2:
+        def split_cost(S):
+            ids = {s.id for s in S}
+            sg = sum(len(s.pit) for s in S)
+            lg = min(wl, sum(len(s.pit) for s in pits if s.id not in ids))
+            band = max(0.0, 0.5 - sg / ws) + max(0.0, sg / ws - 2.0) + max(0.0, 0.5 - lg / wl)
+            return 10 * band + abs(sg / ws - 1) + abs(lg / wl - 1)
+        options = [c for r in (1, 2) for c in itertools.combinations(pits, r) if len(c) < len(pits)]
+        slime_first = {s.id for s in min(options, key=split_cost)}
     for kind in ("lava", "slime", "water"):
         want = float(q.get(kind) or 0) * total
         if kind == "water" and want <= 0 and deep and int(q.get("underwater") or 0) > 0:
@@ -1911,6 +1959,8 @@ def liquids(P: Plan, rnd: random.Random) -> None:
             continue
         got = 0
         pits.sort(key=lambda s: abs(len(s.pit) - want))
+        if kind == "slime" and slime_first:
+            pits.sort(key=lambda s: s.id not in slime_first)
         levels = kind == "water" and deep and q.get("water_body") == "levels"
         if levels:
             # pools on three floors at least: a hall of each floor first, the biggest pits first
@@ -1923,6 +1973,8 @@ def liquids(P: Plan, rnd: random.Random) -> None:
         later = [k for k in ("lava", "slime", "water")[("lava", "slime", "water").index(kind) + 1:]
                  if float(q.get(k) or 0) > 0]
         for s in list(pits):
+            if kind == "lava" and s.id in slime_first:
+                continue
             if got >= want * 0.85 and not (levels and made_ < 3):
                 break
             if got > 0 and len(pits) <= len(later):
@@ -2793,7 +2845,12 @@ def plan_graph(P: Plan):
     # nobody walks through a column (brief 21: close_lines puts them on rooms' floors too)
     for (c, _z0, _z1) in P.pillars:
         nodes.pop(c, None)
+    # the PO 13.11: the pieces' floors over a liquid (a stone, a drum's top, an island, steps)
+    for c, f in getattr(P, "piece_nodes", {}).items():
+        nodes[c] = f
     for i, d in enumerate(P.doors):
+        if d.kind == "secret":
+            continue                # a wall a taken item opens (mapgen_scratch_pieces): no way at the start
         for c in d.cells:
             if d.stair:
                 nodes[c] = (d.z, "stair", d.stair[0], d.stair[1])
@@ -2940,6 +2997,12 @@ def plan_graph(P: Plan):
             edges[a].append((db, 0.1))
         if b in edges and da in edges:
             edges[b].append((da, 0.1))
+    # the PO 13.11: the pieces' ways (a ride, a jump stone to stone, steps up a wall)
+    for (a, b, t_, both) in getattr(P, "piece_edges", []):
+        if a in edges and b in edges:
+            edges[a].append((b, t_))
+            if both:
+                edges[b].append((a, t_))
     return nodes, edges
 
 
@@ -3331,7 +3394,9 @@ def places(P: Plan, rnd: random.Random) -> None:
     if len(comp) < len(nodes) * 0.6:
         # try from the largest space
         big = max((s for s in P.spaces if not s.solid), key=lambda s: s.rect.w * s.rect.h)
-        start = next(iter(big.floor))
+        # a cell one stands on (the PO 13.11, preset «Дуэль: барабан над лавой», mg_new_99575: the hall's first cell
+        # was lava - no node - and the whole run stopped on it)
+        start = next((c for c in big.floor if c in nodes), start)
         comp = dijkstra(edges, start)
     # back-reachability: every place one can stand must lead back (no trap)
     rev = {}
@@ -3452,12 +3517,31 @@ def places(P: Plan, rnd: random.Random) -> None:
     if spots.get("dead_end"):
         pinned["item_health_mega" if stack.get("item_health_mega") else first] = (spots["dead_end"][0],
                                                                                  "dead-end stack: drop in, RJ out")
+        # the PO 13.11 on his mg_new_33555 («оттуда вообще не выбраться ... Рокетджампом разве что ... но у меня их не
+        # было»; «такие случаи интересны и допустимы, но рядом должен тогда рокет лаунчер валяться в той же комнате»; «взял
+        # мегу - ок, сам себе штраф теперь выписывай выпрыгивая из нее рокетджампом»): the rocket launcher in the same
+        # room, two cells off the prize at least
+        it = spots["dead_end"][0]
+        rl = next((c for c in spots["dead_end"][1:] if max(abs(c[0] - it[0]), abs(c[1] - it[1])) >= 2), None) \
+            or next((c for c in spots["dead_end"][1:]), None)
+        if rl is not None and not OLD_DEAD_END:
+            pinned["weapon_rocketlauncher"] = (rl, "dead-end stack: the rocket launcher to jump out with")
+        elif not OLD_DEAD_END:
+            # «если ракетницу нельзя положить то тогда нужен выход - лестница либо лифт либо телепорт» (the PO 13.11):
+            # no room for it - the drop becomes a ladder up, the room no dead end any more
+            d_ = next((d for d in P.doors if d.rj), None)
+            if d_ is not None:
+                d_.kind, d_.rj = "ladder", False
+                P.metrics.pop("dead_end_box", None)
+                P.reasons.append(("ladder", say("тупик со стеком: под ракетницу нет места - из него ведёт лестница",
+                                                "the dead-end stack: no room for a rocket launcher - a ladder leads out")))
     if spots.get("ladder"):
         cls_ = "item_armor_body" if stack.get("item_armor_body") and "item_armor_body" not in pinned else "item_armor_combat"
         pinned[cls_] = (spots["ladder"][0], "ladder under a held item")
     if spots.get("lift") and key0:
-        cls_ = key0 if key0 not in pinned else "weapon_rocketlauncher"
-        pinned[cls_] = (spots["lift"][0], "lift as exposure: the only way up")
+        cls_ = key0 if key0 not in pinned else next((g for g in MAJOR_W if g not in pinned and weapons0.get(g)), None)
+        if cls_:
+            pinned[cls_] = (spots["lift"][0], "lift as exposure: the only way up")
     best = None
     a_list = [pinned[first][0]] if first in pinned else hi_c[:80]
     b_list = [pinned[second][0]] if second in pinned else hi_c
@@ -4049,6 +4133,12 @@ def nook_spot(P: Plan, s: Space, near, width: int, depth: int, taken: set, min_z
             # not over or under anything of the upper layer, and inside the map
             if any(x[0] < 1 or x[1] < 1 or x[0] >= P.W - 1 or x[1] >= P.H - 1 for x in cells + opening):
                 continue
+            # the PO 13.11 (the test map mg_new_368_mach9): the comment above was never a check - a railgun's nook was
+            # carved under a room of the floor above, its ceiling (312) over that room's floor (288): the room's skirting,
+            # a doorway's jamb and a wall lamp hung over the hole. The cells' twins on the other layer are nobody's
+            if not OLD_NOOK_UNDER and any(P.owner.get((x[0], x[1] + UP) if not is_up(x) else (x[0], x[1] - UP))
+                                          is not None for x in cells + opening):
+                continue
             # brief 22 D3: `rank` of the front cell first (the clock's band for its pair), then the nearest
             d = (rank(c) if rank else 0, abs(c[0] - near[0]) + abs(c[1] - near[1]))
             if best is None or d < best[0]:
@@ -4074,6 +4164,10 @@ def inner_nook(P: Plan, s: Space, near, taken: set, min_z=None, rank=None):
                 continue
             if any(P.owner.get((x[0] + dx, x[1] + dy)) is not None for x in X):
                 continue                                   # rock behind both
+            # the PO 13.11 (mg_new_368_mach9): a nook stands taller than a room with a room over it - not in such a room
+            if not OLD_NOOK_UNDER and any(P.owner.get((x[0], x[1] + UP) if not is_up(x) else (x[0], x[1] - UP))
+                                          is not None for x in X):
+                continue
             F = [(x[0] - dx, x[1] - dy) for x in X]
             caps = [(X[0][0] - px, X[0][1] - py), (X[1][0] + px, X[1][1] + py),
                     (F[0][0] - px, F[0][1] - py), (F[1][0] + px, F[1][1] + py)]
@@ -4261,6 +4355,13 @@ def powerup_sites(P: Plan, rnd: random.Random) -> None:
                                                       max(x[0] for x in cells) + 1, max(x[1] for x in cells) + 1), base=zf_in)
                 N.floor = {x: (zf_in, "flat", 0, 0) for x in cells}
                 N.ceil = zf_in + DOOR_H + 16
+                if not OLD_NOOK_UNDER:
+                    # never into the floor of a room over it (a slab under that floor)
+                    over_ = [P.spaces[P.owner[(x[0], x[1] + UP)]].floor.get((x[0], x[1] + UP), (None,))[0]
+                             for x in cells if not is_up(x) and P.owner.get((x[0], x[1] + UP)) is not None]
+                    over_ = [v for v in over_ if v is not None]
+                    if over_:
+                        N.ceil = min(N.ceil, min(over_) - SLAB)
                 N.pattern = "flat"
                 P.spaces.append(N)
                 for x in cells:
@@ -4300,6 +4401,14 @@ def powerup_sites(P: Plan, rnd: random.Random) -> None:
             if cycle and cls == "item_health_mega":
                 team_cells.append((c, z))
         sites.append((cls, made))
+    # the PO 13.11 (his mg_new_33555, the test map mg_new_368_mach2: «one unlit»): the dead-end stack's powerup is
+    # earned by its drop and the way out - no nook, but marked as every powerup: a pedestal under its own light
+    if not OLD_KEPT_UNLIT:
+        for k, (cls, c, z, note) in enumerate(P.items):
+            if cls in order and kinds.get(k) == "kept" and all(pc != c for (pc, *_r) in P.pedestals):
+                s = P.spaces[P.owner[c]] if c in P.owner else None
+                if s is not None and s.floor.get(c, (None, "x"))[1] == "flat":
+                    P.pedestals.append((c, z, cls))
     P.metrics["powerup_sites"] = sites
     P.metrics["powerup_access"] = access
     P.metrics["powerup_cycle"] = cycle
@@ -5521,6 +5630,14 @@ def score(P: Plan) -> float:
     # one in every water is taken first
     if m.get("pools_empty"):
         fails.append("empty water")
+    # the PO 13.11 (Bugs/4): a turning piece that goes into a wall or another piece counts against the skeleton
+    if m.get("turning_blocked"):
+        fails.append("turning")
+        pen += 6 * len(m["turning_blocked"])
+    # the PO 13.11: a skeleton with room for every scripted piece asked is taken first
+    if m.get("pieces_missing"):
+        fails.append("pieces")
+        pen += 6 * int(m["pieces_missing"])
     # and water asked (or a prize under it) with no deep pool at all, or a prize under water fallen back to a nook
     if water_deep(q) and (float(q.get("water") or 0) > 0 or int(q.get("underwater") or 0) > 0) and not P.pools:
         fails.append("no pool")
@@ -5898,7 +6015,38 @@ def show_state(P: Plan) -> dict:
         "teleports": [[*P2(a), *P2(b)] for (a, b, _da, _db) in P.teleports],
         "items": [[cls, *P2(c), int(z)] for (cls, c, z, _n) in P.items],
         "spawns": [[*P2(c), int(z)] for (c, z, _a) in P.spawns],
+        # the PO 13.11 («движущиеся конструкции ... видны в превью карты генерации на всех этапах где они уже
+        # построены», «пусть они там движутся тоже так как на карте»): the scripted pieces built so far
+        "pieces": pieces_show(P),
     }
+
+
+def pieces_show(P: Plan) -> dict:
+    """The scripted pieces as the Studio draws and moves them: their fixed brushes (a box, a hull's eight corners, a
+    drum's octagon) with their role, and their entities - each with its keys (the game's own: classname, target,
+    targetname, speed, wait, angle, lip, distance, spawnflags, origin, delay) and brushes; an item a piece fires when
+    taken as an entity «item» with its target."""
+    def shape(b: dict):
+        if "lo" in b:
+            return {"box": [*b["lo"], *b["hi"]], "role": b.get("role", "trim")}
+        if "hull" in b:
+            return {"hull": b["hull"], "role": b.get("role", "trim")}
+        if "octagon" in b:
+            return {"octagon": b["octagon"], "role": b.get("role", "drum")}
+        if "prism" in b:
+            return {"prism": b["prism"], "role": b.get("role", "trim")}
+        return None
+    brushes, ents = [], []
+    for r in getattr(P, "pieces", None) or []:
+        for b in r.get("brushes", []):
+            sh = shape(b)
+            if sh:
+                brushes.append(sh)
+        for e in r.get("ents", []):
+            ents.append({"keys": dict(e.get("keys") or {}), "brushes": [x for x in map(shape, e.get("brushes") or []) if x]})
+        if r.get("item_target"):
+            ents.append({"keys": {"classname": "item", "target": r["item_target"][1]}, "brushes": []})
+    return {"brushes": brushes, "ents": ents}
 
 
 def make_plan(params: dict, seed: int) -> Plan:
@@ -5926,6 +6074,8 @@ def make_plan(params: dict, seed: int) -> Plan:
     heights(P, rnd)
     realise(P, rnd)
     rec("heights", P)
+    import mapgen_scratch_pieces as pieces_mod
+    pieces_mod.before_liquids(P, rnd)       # the PO 13.11: the bent bridges (a pit's shape)
     deadly_pits(P, rnd)
     liquids(P, rnd)
     rec("liquids", P)
@@ -5947,6 +6097,7 @@ def make_plan(params: dict, seed: int) -> Plan:
     powerup_sites(P, rnd)
     majors_repair(P)            # the PO 12.11: what the nooks brought near moved apart
     pool_purpose(P)             # the PO 12.11: no deep water without a valuable item in it
+    pieces_mod.after_items(P, rnd)          # the PO 13.11: the scripted pieces, each guarding a valuable item
     rec("items", P)
     # brief 22 D3: the clock's pair measured again where the powerups' places left them
     if P.metrics.get("stack_apart_s") is not None:
@@ -5966,10 +6117,25 @@ def make_plan(params: dict, seed: int) -> Plan:
 
 
 def _plan_of(args: tuple) -> tuple | None:
-    """One seed's plan and its score, or None when it failed - a worker of `best_plan`'s pool."""
+    """One seed's plan and its score, or None when it failed - a worker of `best_plan`'s pool. A plan that breaks is
+    a failed plan, its error said (the PO 13.11: «одного из 100?? почему тогда остальные 99 не проверялись?» - one
+    variant's error stopped the whole run); the run goes on with the others."""
     params, s = args
-    P = make_plan(params, s)
+    try:
+        P = make_plan(params, s)
+    except Exception as e:  # noqa: BLE001 - one variant never stops the run
+        import traceback
+        return ("error", f"variant {s}: {type(e).__name__}: {e} at "
+                         + " < ".join(f"{fr.name}:{fr.lineno}" for fr in reversed(traceback.extract_tb(e.__traceback__)[-3:])))
     return None if P.failed else (score(P), P)
+
+
+def _kept(r, errors: list):
+    """A worker's result: a variant that broke goes to `errors` and counts as failed."""
+    if isinstance(r, tuple) and len(r) == 2 and r[0] == "error":
+        errors.append(r[1])
+        return None
+    return r
 
 
 def best_plan(params: dict, seed: int, tries: int = 60, workers: int = 1, progress=None, seen=None) -> list:
@@ -5984,6 +6150,7 @@ def best_plan(params: dict, seed: int, tries: int = 60, workers: int = 1, progre
     or None - and changes nothing of the list."""
     seeds = [seed * 1000 + k for k in range(tries)]
     out = []
+    errors: list = []
 
     def step(k: int, r=None) -> None:
         if seen:
@@ -5998,15 +6165,19 @@ def best_plan(params: dict, seed: int, tries: int = 60, workers: int = 1, progre
         import multiprocessing
         with multiprocessing.Pool(min(workers, tries)) as pool:
             for k, r in enumerate(pool.imap(_plan_of, [(params, s) for s in seeds], chunksize=1)):
+                r = _kept(r, errors)
                 if r is not None:
                     out.append(r)
                 step(k, r)
     else:
         for k, s in enumerate(seeds):
-            r = _plan_of((params, s))
+            r = _kept(_plan_of((params, s)), errors)
             if r is not None:
                 out.append(r)
             step(k, r)
+    if errors:
+        # said in the tool's log - a variant that broke is a bug to fix, not a thing to hide
+        print(f"variants that broke: {len(errors)} of {tries} - {errors[0]}", flush=True)
     out.sort(key=lambda t: t[0])
     return [p for _, p in out]
 
@@ -6027,8 +6198,10 @@ def skeleton_text(P: Plan) -> str:
                      f"pattern {s.pattern} sky {int(s.sky)}" + (f" over {over}" if over is not None else "")
                      + (f" turn {s.turned}" if getattr(s, "turned", None) else ""))
     for d in P.doors:
+        # «rj»: the dead-end stack's drop - the finished map's check leaves it open (the PO 13.11: its «dead ends» row
+        # named the asked dead end on mg_new_33555 and the test maps)
         lines.append(f"route {d.a} {d.b} {d.kind} cells {' '.join(f'{phys(c)[0]},{phys(c)[1]}' for c in d.cells)} "
-                     f"z {d.z} sides {d.za} {d.zb}")
+                     f"z {d.z} sides {d.za} {d.zb}" + (" rj" if d.rj else ""))
     for cls, c, z, note in P.items:
         lines.append(f"place {cls} {phys(c)[0]} {phys(c)[1]} z {z}{(' # ' + note) if note else ''}")
     for c, z, a in P.spawns:
@@ -6067,6 +6240,39 @@ ITEM_MARK = {  # what the picture writes on an item: letters, the circle's colou
 }
 
 
+PIECE_GOLD = (255, 205, 40)
+# a scripted piece's code on the plan picture and its name (ru code, ru name, en code, en name)
+PIECE_MARK = {
+    "trains": ("ПЛ", "ездящая платформа", "RD", "riding platform"),
+    "stones": ("ТП", "тонущие плиты", "SK", "sinking stones"),
+    "traps": ("ЛВ", "комната-ловушка", "TR", "trap room"),
+    "rotators/drum": ("БР", "вращающийся барабан", "DR", "rotating drum"),
+    "rotators/flap": ("ЗС", "вращающаяся заслонка", "FL", "rotating flap"),
+    "rotators/fan": ("ВН", "вентилятор", "FN", "fan"),
+    "shutters": ("СТ", "створки по таймеру", "SH", "timed shutters"),
+    "pickup_walls": ("СП", "стена от взятого предмета", "PW", "wall opened by an item"),
+    "bent_bridges": ("ИМ", "изогнутый мост", "BB", "bent bridge"),
+    "pool_ladders": ("ЛС", "лесенка из бассейна", "LD", "ladder out of a pool"),
+    "wall_steps": ("СС", "ступени по стене", "WS", "wall steps"),
+    "lasers": ("ЛЗ", "лазерный заслон", "LS", "laser gate"),
+    "pistons": ("ПР", "поршни", "PS", "pistons"),
+    "pendulums": ("МТ", "маятник", "PD", "pendulum"),
+    "trapdoors": ("ПП", "проваливающийся пол", "TD", "trapdoor"),
+    "geysers": ("ГЗ", "лавовый гейзер", "GY", "lava geyser"),
+    "turn_bridges": ("ПМ", "поворотный мост", "TB", "turning bridge"),
+    "currents": ("ТЧ", "мост-течение", "CR", "current bridge"),
+    "waves": ("ВЛ", "волна столбов", "WV", "pillar wave"),
+    "drills": ("БУ", "буровая установка", "DL", "drilling rig"),
+    "cogs": ("ШС", "шестерни на стене", "CG", "cogs on a wall"),
+    "turrets": ("ТР", "турели в проходе", "TU", "turrets in a passage"),
+    "conveyors": ("КВ", "конвейер с грузами", "CV", "conveyor with crates"),
+}
+
+
+def piece_key(r: dict) -> str:
+    return r["kind"] + (f"/{r.get('variant')}" if r["kind"] == "rotators" else "")
+
+
 def draw(P: Plan, path: Path, scale: int = 22) -> None:
     """The skeleton as a picture for people (brief 19 §7: Fable reviews it; the Studio shows it before the first
     brush): floor height light-on-dark, steps and ramps, doorways, drops, ladders, lifts, pads, teleporters, liquids
@@ -6095,7 +6301,15 @@ def draw(P: Plan, path: Path, scale: int = 22) -> None:
     big = face(17)
     legend_w = 300
     W, H = P.W * scale, P.H * scale
-    img = Image.new("RGB", (W + legend_w, max(H, 620)), (22, 22, 26))
+    # the PO 13.11: the scripted pieces on the picture - each outlined in gold with its code, the codes in the legend
+    pieces_ = list(getattr(P, "pieces", None) or [])
+    piece_codes = []
+    for r_ in pieces_:
+        k_ = piece_key(r_)
+        if k_ in PIECE_MARK and k_ not in piece_codes:
+            piece_codes.append(k_)
+    extra = (34 + 18 * len(piece_codes)) if piece_codes else 0
+    img = Image.new("RGB", (W + legend_w, max(H, 620 + extra)), (22, 22, 26))
     dr = ImageDraw.Draw(img)
     floors = [floor_top(f) for s in P.spaces if not s.solid for f in s.floor.values()]
     pit_cells = {c for (cells, _b, _s) in P.pits for c in cells}
@@ -6230,6 +6444,24 @@ def draw(P: Plan, path: Path, scale: int = 22) -> None:
             cs, cd = centre(src), centre(dst)
             dr.ellipse([cs[0] - 8, cs[1] - 8, cs[0] + 8, cs[1] + 8], outline=(190, 90, 255), width=3)
             dr.ellipse([cd[0] - 3, cd[1] - 3, cd[0] + 3, cd[1] + 3], fill=(190, 90, 255))
+    # the scripted pieces: their cells outlined in gold, the code on the middle one (items and spawns drawn over)
+    ru_ = P.params.get("lang") == "ru"
+    for r_ in pieces_:
+        k_ = piece_key(r_)
+        cells_ = [tuple(c) for c in (r_.get("cells") or [])] + ([tuple(r_["island"])] if r_.get("island") else [])
+        if k_ not in PIECE_MARK or not cells_:
+            continue
+        for c in cells_:
+            dr.rectangle(box(c, 1), outline=PIECE_GOLD, width=2)
+        code = PIECE_MARK[k_][0 if ru_ else 2]
+        mid_ = sorted(cells_)[len(cells_) // 2]
+        mx, my = centre(mid_)
+        if any(tuple(c2) == mid_ for (_cls, c2, _z, _n) in P.items):
+            my -= scale * 0.75            # the item it guards drawn on that cell: the code over it
+        tw = dr.textlength(code, font=font)
+        dr.rectangle([mx - tw / 2 - 3, my - scale * 0.32, mx + tw / 2 + 3, my + scale * 0.32], fill=(20, 20, 24),
+                     outline=PIECE_GOLD)
+        dr.text((mx - tw / 2, my - scale * 0.3), code, fill=PIECE_GOLD, font=font)
     # items and spawns
     for cls, c, z, n in P.items:
         cx, cy = centre(c)
@@ -6321,6 +6553,15 @@ def draw(P: Plan, path: Path, scale: int = 22) -> None:
     y += 20
     dr.text((x0, y), "RA YA GA MH Q A  " + ("броня, мега, квад, адрен." if ru else "armour, mega, quad, adren."),
             fill=(200, 200, 120), font=small)
+    if piece_codes:
+        y += 28
+        dr.rectangle([x0, y, x0 + 24, y + 20], outline=PIECE_GOLD, width=2)
+        dr.text((x0 + 34, y + 2), "скриптовые конструкции:" if ru else "scripted pieces:", fill=(220, 220, 220), font=small)
+        y += 26
+        for k_ in piece_codes:
+            m_ = PIECE_MARK[k_]
+            dr.text((x0, y), f"{m_[0]}  {m_[1]}" if ru else f"{m_[2]}  {m_[3]}", fill=PIECE_GOLD, font=small)
+            y += 18
     img.save(path)
 
 

@@ -580,6 +580,11 @@ def _build_plan(P, pal: dict, title: str = "") -> tuple:
     for (cells, z0, z1, *_w) in P.windows:
         for c in cells:
             air[c].append([z0, z1, ("door", -1), ("door", -1)])
+    # the PO 13.11 (Bugs/4): the slots cut in the rock for a pendulum's swing (mapgen_scratch_pieces.sweep), the room's
+    # own air - its walls dressed as the room's
+    for (c0, z0, z1, sid) in getattr(P, "slots", []):
+        if sid in spaces:
+            air[ph(c0)].append([z0, min(z1, spaces[sid].ceil), ("space", sid), ("space", sid)])
     zmin = min(a[0] for v in air.values() for a in v) - 32
     zmax = max(a[1] for v in air.values() for a in v) + 32
     spans = {}
@@ -756,6 +761,9 @@ def _build_plan(P, pal: dict, title: str = "") -> tuple:
             continue
         ents.append(Entity({"classname": "func_door", "angle": "-1", "speed": "200", "wait": "2", "lip": "8"},
                            [box(lo, hi, {"default": pal["trim"][0]})]))
+    # the PO 13.11: the scripted pieces (trains, stones, traps, rotators...)
+    import mapgen_scratch_pieces as pieces_mod
+    pieces_mod.world(P, pal, brushes, ents)
     return finish_entities(P, pal, spaces, brushes, ents, lintels, spans, title)
 
 
@@ -947,6 +955,8 @@ def finish_entities(P, pal: dict, spaces: dict, brushes: list, ents: list, linte
         ents.append(Entity({"classname": "light", "light": "160",
                             "origin": f"{ph(pc)[0] * CELL + CELL // 2} {ph(pc)[1] * CELL + CELL // 2} {pz + 96}",
                             "_color": " ".join(f"{v:.2f}" for v in col)}))
+    import mapgen_scratch_pieces as pieces_mod
+    item_targets = pieces_mod.items_targets(P)
     teams = {}
     for (cls, c, z, note) in P.items:
         if cls in plan_mod.POWERUPS:
@@ -960,6 +970,10 @@ def finish_entities(P, pal: dict, spaces: dict, brushes: list, ents: list, linte
         # high - its box in the pedestal, the game freed it at spawn (the PO 12.11 on mg_new_7775_367: «приплыл сюда,
         # а там пусто»; his mg_new_7775 of 3.66: «внутри ничего нет»)
         lift = 8 if c in ped else 0
+        # the PO 13.11: an item a piece fires when taken (a trap room, a wall opening)
+        tgt = item_targets.get(tuple(c))
+        if tgt:
+            keys["target"] = tgt
         c = ph(c)
         keys["origin"] = f"{c[0] * CELL + CELL // 2} {c[1] * CELL + CELL // 2} {z + 16 + lift}"
         ents.append(Entity(keys))
